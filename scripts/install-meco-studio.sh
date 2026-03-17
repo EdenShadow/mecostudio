@@ -7,7 +7,6 @@ MECO_INSTALL_DIR="${MECO_INSTALL_DIR:-$HOME/meco-studio}"
 MECO_START_AFTER_INSTALL="${MECO_START_AFTER_INSTALL:-1}"
 MECO_RESET_RUNTIME_STATE="${MECO_RESET_RUNTIME_STATE:-1}"
 MECO_UPGRADE_OPENCLAW="${MECO_UPGRADE_OPENCLAW:-0}"
-MECO_KIMI_API_KEY="${MECO_KIMI_API_KEY:-}"
 MECO_KIMI_CODING_API_KEY="${MECO_KIMI_CODING_API_KEY:-}"
 MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-openai/kimi-k2.5}"
 MECO_OPENCLAW_MODEL_API_KEY="${MECO_OPENCLAW_MODEL_API_KEY:-}"
@@ -543,7 +542,7 @@ main() {
   require_cmd git
   ensure_node_and_npm
   ensure_openclaw
-  local effective_kimi_key="${MECO_KIMI_API_KEY:-$MECO_KIMI_CODING_API_KEY}"
+  local effective_kimi_key="${MECO_KIMI_CODING_API_KEY:-}"
   local effective_model_key="${MECO_OPENCLAW_MODEL_API_KEY:-$MECO_KIMI_CODING_API_KEY}"
   configure_openclaw_defaults "$MECO_OPENCLAW_MODEL" "$effective_model_key"
   ensure_kimi_cli
