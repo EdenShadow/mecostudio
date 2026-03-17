@@ -5984,14 +5984,14 @@ app.post('/api/agent-channels', (req, res) => {
     if (!name) {
         return res.status(400).json({ error: 'channel name is required' });
     }
-    if (uniqIds.length < 2) {
-        return res.status(400).json({ error: 'at least 2 agents are required' });
+    if (uniqIds.length < 1) {
+        return res.status(400).json({ error: 'at least 1 agent is required' });
     }
 
     const scanned = scanOpenClawAgents();
     const knownAgents = new Set([...Object.keys(AGENTS), ...Object.keys(scanned || {})]);
     const validAgentIds = uniqIds.filter((id) => knownAgents.has(id));
-    if (validAgentIds.length < 2) {
+    if (validAgentIds.length < 1) {
         return res.status(400).json({ error: 'selected agents are invalid or unavailable' });
     }
 
