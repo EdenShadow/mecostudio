@@ -1943,6 +1943,110 @@ app.post('/api/settings', async (req, res) => {
   }
 });
 
+// 打开系统原生文件夹选择器（用于知识规则）
+app.post('/api/system/pick-folder', (req, res) => {
+  if (process.platform !== 'darwin') {
+    return res.status(501).json({ error: 'folder picker is only supported on macOS now' });
+  }
+
+  const { execFile } = require('child_process');
+  const requestedPath = String(req.body?.currentPath || '').trim();
+  let defaultPath = '';
+  try {
+    if (requestedPath) {
+      const expanded = expandHomePath(requestedPath);
+      if (expanded && fs.existsSync(expanded) && fs.statSync(expanded).isDirectory()) {
+        defaultPath = expanded;
+      }
+    }
+  } catch (_) {
+    defaultPath = '';
+  }
+
+  const baseScript = [
+    '-e', 'on run argv',
+    '-e', 'set pickPrompt to "请选择知识库文件夹"',
+    '-e', 'if (count of argv) > 0 and (item 1 of argv) is not "" then',
+    '-e', 'set defaultFolder to POSIX file (item 1 of argv)',
+    '-e', 'set selectedFolder to choose folder with prompt pickPrompt default location defaultFolder',
+    '-e', 'else',
+    '-e', 'set selectedFolder to choose folder with prompt pickPrompt',
+    '-e', 'end if',
+    '-e', 'return POSIX path of selectedFolder',
+    '-e', 'end run'
+  ];
+  const args = defaultPath ? [...baseScript, defaultPath] : baseScript;
+
+  execFile('osascript', args, (err, stdout, stderr) => {
+    if (err) {
+      const errText = `${err.message || ''} ${stderr || ''}`.trim();
+      if (/User canceled|-\s*128|execution error: User canceled/i.test(errText)) {
+        return res.json({ success: true, cancelled: true });
+      }
+      return res.status(500).json({ error: `failed to pick folder: ${errText}` });
+    }
+
+    const pickedPath = String(stdout || '').trim();
+    if (!pickedPath) {
+      return res.json({ success: true, cancelled: true });
+    }
+
+    return res.json({
+      success: true,
+      path: pickedPath,
+      displayPath: toTildePath(pickedPath)
+    });
+  });
+});
+
+// 解析前端系统模式附件（文件/文件夹）为本地绝对路径
+app.post('/api/system/resolve-local-paths', (req, res) => {
+  try {
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    const items = rawItems
+      .map((item) => ({
+        id: String(item?.id || '').trim(),
+        kind: item?.kind === 'folder' ? 'folder' : 'file',
+        name: String(item?.name || '').trim(),
+        relativePath: String(item?.relativePath || '').replace(/\\/g, '/').replace(/^\/+/, ''),
+        size: Number(item?.size) || 0,
+        lastModified: Number(item?.lastModified) || 0
+      }))
+      .filter((item) => item.name);
+
+    if (items.length === 0) {
+      return res.json({ resolved: [], unresolved: [] });
+    }
+
+    const resolved = [];
+    const unresolved = [];
+    items.forEach((item) => {
+      const found = resolveSingleLocalPath(item);
+      if (!found) {
+        unresolved.push({
+          id: item.id || '',
+          kind: item.kind,
+          name: item.name,
+          relativePath: item.relativePath
+        });
+        return;
+      }
+      resolved.push({
+        id: item.id || '',
+        kind: item.kind,
+        name: found.name,
+        path: found.path,
+        displayPath: found.displayPath,
+        pathType: found.pathType
+      });
+    });
+
+    return res.json({ resolved, unresolved });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'resolve local paths failed' });
+  }
+});
+
 // File Viewer/Editor API
 app.get('/api/agents/:agentId/file', (req, res) => {
     const { agentId } = req.params;
@@ -5000,6 +5104,463 @@ app.get('/api/agents/:agentId/workspace', (req, res) => {
   res.json(files);
 });
 
+function normalizeRulePathInput(input) {
+    return String(input || '').replace(/\\/g, '/').trim();
+}
+
+function expandHomePath(inputPath) {
+    const homeDir = os.homedir();
+    if (!inputPath) return '';
+    if (inputPath === '~') return homeDir;
+    if (inputPath.startsWith('~/')) {
+        return path.join(homeDir, inputPath.slice(2));
+    }
+    return inputPath;
+}
+
+function toTildePath(absPath) {
+    const homeDir = os.homedir();
+    const normalized = path.resolve(absPath);
+    const homeWithSep = homeDir.endsWith(path.sep) ? homeDir : `${homeDir}${path.sep}`;
+    if (normalized === homeDir) return '~';
+    if (normalized.startsWith(homeWithSep)) {
+        return `~/${path.relative(homeDir, normalized).replace(/\\/g, '/')}`;
+    }
+    return normalized;
+}
+
+function getLocalPathResolveRoots() {
+    const home = os.homedir();
+    const roots = [
+        process.cwd(),
+        home,
+        path.join(home, 'Desktop'),
+        path.join(home, 'Documents'),
+        path.join(home, 'Downloads')
+    ];
+    const uniq = [];
+    roots.forEach((root) => {
+        try {
+            const resolved = path.resolve(root);
+            if (uniq.includes(resolved)) return;
+            if (!fs.existsSync(resolved)) return;
+            if (!fs.statSync(resolved).isDirectory()) return;
+            uniq.push(resolved);
+        } catch (_) {}
+    });
+    return uniq;
+}
+
+function shouldSkipResolveDir(dirName) {
+    const n = String(dirName || '').toLowerCase();
+    if (!n) return true;
+    if (n === '.git' || n === 'node_modules' || n === '.next' || n === 'dist' || n === 'build') return true;
+    if (n === 'library' || n === 'applications' || n === 'system' || n === 'private') return true;
+    return false;
+}
+
+function collectLocalPathCandidatesByName(targetName, kind = 'file', options = {}) {
+    const name = String(targetName || '').trim();
+    if (!name) return [];
+    const targetLower = name.toLowerCase();
+
+    const roots = Array.isArray(options.roots) && options.roots.length > 0
+        ? options.roots
+        : getLocalPathResolveRoots();
+    const maxDepth = Number.isFinite(options.maxDepth) ? options.maxDepth : 7;
+    const maxScannedDirs = Number.isFinite(options.maxScannedDirs) ? options.maxScannedDirs : 20000;
+    const maxResults = Number.isFinite(options.maxResults) ? options.maxResults : 60;
+    let scannedDirs = 0;
+    const out = [];
+
+    const walk = (dirPath, depth) => {
+        if (out.length >= maxResults) return;
+        if (depth > maxDepth) return;
+        if (scannedDirs >= maxScannedDirs) return;
+        scannedDirs += 1;
+
+        let entries = [];
+        try {
+            entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        } catch (_) {
+            return;
+        }
+
+        for (const entry of entries) {
+            if (out.length >= maxResults) break;
+            const fullPath = path.join(dirPath, entry.name);
+            const isDir = entry.isDirectory();
+            const isFile = entry.isFile();
+            const matchedKind = kind === 'folder' ? isDir : isFile;
+            if (matchedKind && String(entry.name || '').toLowerCase() === targetLower) {
+                out.push(fullPath);
+                if (out.length >= maxResults) break;
+            }
+            if (isDir && depth < maxDepth && !shouldSkipResolveDir(entry.name)) {
+                walk(fullPath, depth + 1);
+            }
+        }
+    };
+
+    roots.forEach((root) => walk(root, 0));
+    return out;
+}
+
+function scoreLocalPathCandidate(item, candidatePath) {
+    let score = 0;
+    const rel = String(item.relativePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    const normalizedCandidate = String(candidatePath || '').replace(/\\/g, '/');
+    if (rel && normalizedCandidate.endsWith(rel)) score += 120;
+    if (String(item.name || '') && path.basename(candidatePath) === item.name) score += 30;
+
+    try {
+        const st = fs.statSync(candidatePath);
+        if (item.kind === 'file') {
+            const size = Number(item.size) || 0;
+            if (size > 0 && st.size === size) score += 40;
+            const lm = Number(item.lastModified) || 0;
+            if (lm > 0) {
+                const mDiff = Math.abs(st.mtimeMs - lm);
+                if (mDiff <= 5000) score += 20;
+                else if (mDiff <= 120000) score += 10;
+            }
+        }
+    } catch (_) {}
+
+    if (normalizedCandidate.includes('/Desktop/')) score += 3;
+    if (normalizedCandidate.includes('/Documents/')) score += 3;
+    if (normalizedCandidate.includes('/Downloads/')) score += 2;
+    return score;
+}
+
+function resolveSingleLocalPath(item) {
+    const kind = item.kind === 'folder' ? 'folder' : 'file';
+    const name = String(item.name || '').trim();
+    if (!name) return null;
+    const rel = String(item.relativePath || '').trim();
+    if (rel && path.isAbsolute(rel)) {
+        try {
+            const st = fs.statSync(rel);
+            if ((kind === 'folder' && st.isDirectory()) || (kind === 'file' && st.isFile())) {
+                return {
+                    path: rel,
+                    displayPath: toTildePath(rel),
+                    pathType: kind,
+                    name
+                };
+            }
+        } catch (_) {}
+    }
+
+    const candidates = collectLocalPathCandidatesByName(name, kind, {
+        maxDepth: kind === 'folder' ? 6 : 7,
+        maxResults: 80
+    });
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+    let bestPath = '';
+    let bestScore = -Infinity;
+    candidates.forEach((candidatePath) => {
+        const score = scoreLocalPathCandidate(item, candidatePath);
+        if (score > bestScore) {
+            bestScore = score;
+            bestPath = candidatePath;
+        }
+    });
+    if (!bestPath) return null;
+    return {
+        path: bestPath,
+        displayPath: toTildePath(bestPath),
+        pathType: kind,
+        name
+    };
+}
+
+function resolveKnowledgeRuleFolder(folderInput) {
+    const raw = normalizeRulePathInput(folderInput);
+    if (!raw) {
+        throw new Error('folder path is required');
+    }
+
+    const candidates = [];
+    const addCandidate = (candidatePath) => {
+        const normalized = path.resolve(candidatePath);
+        if (!candidates.includes(normalized)) {
+            candidates.push(normalized);
+        }
+    };
+
+    const expanded = expandHomePath(raw);
+    if (path.isAbsolute(expanded)) {
+        addCandidate(expanded);
+    } else {
+        addCandidate(path.resolve(KNOWLEDGE_BASE_PATH, expanded));
+        addCandidate(path.resolve(os.homedir(), expanded));
+        addCandidate(path.resolve(path.join(os.homedir(), 'Documents'), expanded));
+        addCandidate(path.resolve(path.join(os.homedir(), 'Desktop'), expanded));
+        addCandidate(path.resolve(process.cwd(), expanded));
+    }
+
+    for (const candidate of candidates) {
+        try {
+            if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+                return {
+                    absolutePath: candidate,
+                    displayPath: toTildePath(candidate)
+                };
+            }
+        } catch (_) {}
+    }
+
+    throw new Error(`folder not found from path: ${raw}`);
+}
+
+function parseKnowledgeRuleLine(line) {
+    if (typeof line !== 'string') return null;
+    let text = line.trim();
+    if (!text) return null;
+    text = text.replace(/^-+\s*/, '').trim();
+
+    const readToken = '先读取 ';
+    const filesToken = ' 下所有 .md/.txt 文件';
+    const executeToken = '然后执行任务';
+
+    const readIdx = text.indexOf(readToken);
+    if (readIdx <= 0) return null;
+
+    const ruleText = text.slice(0, readIdx).trim().replace(/[，,。.\s]+$/g, '');
+    const rest = text.slice(readIdx + readToken.length);
+    const filesIdx = rest.indexOf(filesToken);
+    if (filesIdx <= 0) return null;
+
+    const folderDisplayPath = rest.slice(0, filesIdx).trim();
+    const tail = rest.slice(filesIdx + filesToken.length).trim();
+    if (!tail.includes(executeToken)) return null;
+    if (!ruleText || !folderDisplayPath) return null;
+
+    return { ruleText, folderDisplayPath };
+}
+
+function getAgentRulesFilePath(agentId) {
+    const agent = getAgentById(agentId);
+    if (!agent || !agent.workspace) {
+        return null;
+    }
+    return path.join(agent.workspace, 'AGENTS.md');
+}
+
+function getAgentKnowledgeRules(agentId) {
+    const filePath = getAgentRulesFilePath(agentId);
+    if (!filePath) {
+        return { filePath: null, rules: [], lines: [] };
+    }
+
+    if (!fs.existsSync(filePath)) {
+        return { filePath, rules: [], lines: [] };
+    }
+
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const lines = raw.split(/\r?\n/);
+    const rules = [];
+
+    lines.forEach((line, idx) => {
+        const parsed = parseKnowledgeRuleLine(line);
+        if (!parsed) return;
+        const expandedFolderPath = expandHomePath(parsed.folderDisplayPath);
+        const absoluteFolderPath = path.isAbsolute(expandedFolderPath)
+            ? path.normalize(expandedFolderPath)
+            : path.resolve(os.homedir(), expandedFolderPath);
+        let folderExists = false;
+        try {
+            folderExists = fs.existsSync(absoluteFolderPath) && fs.statSync(absoluteFolderPath).isDirectory();
+        } catch (_) {}
+        rules.push({
+            id: String(idx + 1),
+            lineNumber: idx + 1,
+            line: line,
+            ruleText: parsed.ruleText,
+            folderDisplayPath: parsed.folderDisplayPath,
+            absoluteFolderPath,
+            folderExists
+        });
+    });
+
+    return { filePath, rules, lines };
+}
+
+app.get('/api/agents/:agentId/knowledge-rules', (req, res) => {
+    const { agentId } = req.params;
+    const agent = getAgentById(agentId);
+    if (!agent) {
+        return res.status(404).json({ error: 'agent not found' });
+    }
+    const { rules } = getAgentKnowledgeRules(agentId);
+    res.json({ rules });
+});
+
+app.post('/api/agents/:agentId/knowledge-rules', (req, res) => {
+    const { agentId } = req.params;
+    const agent = getAgentById(agentId);
+    if (!agent) {
+        return res.status(404).json({ error: 'agent not found' });
+    }
+
+    const ruleText = String(req.body?.ruleText || '').replace(/\s+/g, ' ').trim();
+    const folderPathInput = String(req.body?.folderPath || '').trim();
+    if (!ruleText) {
+        return res.status(400).json({ error: 'rule text is required' });
+    }
+    if (!folderPathInput) {
+        return res.status(400).json({ error: 'folder path is required' });
+    }
+
+    try {
+        const { filePath, lines } = getAgentKnowledgeRules(agentId);
+        if (!filePath) {
+            return res.status(500).json({ error: 'cannot resolve AGENTS.md path' });
+        }
+
+        const resolved = resolveKnowledgeRuleFolder(folderPathInput);
+        const newLine = `- ${ruleText} 先读取 ${resolved.displayPath} 下所有 .md/.txt 文件，然后执行任务`;
+
+        const existingLineIndex = lines.findIndex((line) => line.trim() === newLine.trim());
+        if (existingLineIndex >= 0) {
+            const { rules } = getAgentKnowledgeRules(agentId);
+            const existingRule = rules.find((r) => r.lineNumber === existingLineIndex + 1) || null;
+            return res.json({
+                success: true,
+                duplicated: true,
+                rule: existingRule
+            });
+        }
+
+        const baseContent = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+        const nextContent = baseContent.trimEnd().length > 0
+            ? `${baseContent.trimEnd()}\n${newLine}\n`
+            : `${newLine}\n`;
+        fs.writeFileSync(filePath, nextContent, 'utf-8');
+        refreshPersona(agentId);
+
+        const { rules } = getAgentKnowledgeRules(agentId);
+        const addedRule = rules[rules.length - 1] || null;
+        res.json({
+            success: true,
+            rule: addedRule,
+            resolvedAbsolutePath: resolved.absolutePath
+        });
+    } catch (e) {
+        res.status(400).json({ error: e.message || 'failed to add knowledge rule' });
+    }
+});
+
+app.delete('/api/agents/:agentId/knowledge-rules/:lineNumber', (req, res) => {
+    const { agentId, lineNumber } = req.params;
+    const agent = getAgentById(agentId);
+    if (!agent) {
+        return res.status(404).json({ error: 'agent not found' });
+    }
+
+    const lineNo = Number(lineNumber);
+    if (!Number.isFinite(lineNo) || lineNo <= 0) {
+        return res.status(400).json({ error: 'invalid line number' });
+    }
+
+    const { filePath, lines } = getAgentKnowledgeRules(agentId);
+    if (!filePath || !fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'AGENTS.md not found' });
+    }
+
+    const idx = lineNo - 1;
+    if (idx < 0 || idx >= lines.length) {
+        return res.status(404).json({ error: 'rule not found' });
+    }
+    const parsed = parseKnowledgeRuleLine(lines[idx]);
+    if (!parsed) {
+        return res.status(404).json({ error: 'rule not found' });
+    }
+
+    lines.splice(idx, 1);
+    const updatedContent = `${lines.join('\n').trimEnd()}\n`;
+    fs.writeFileSync(filePath, updatedContent, 'utf-8');
+    refreshPersona(agentId);
+
+    res.json({ success: true });
+});
+
+app.post('/api/agents/:agentId/knowledge-rules/open', (req, res) => {
+    const { agentId } = req.params;
+    const lineNo = Number(req.body?.lineNumber);
+    const agent = getAgentById(agentId);
+    if (!agent) {
+        return res.status(404).json({ error: 'agent not found' });
+    }
+    if (!Number.isFinite(lineNo) || lineNo <= 0) {
+        return res.status(400).json({ error: 'invalid line number' });
+    }
+
+    const { rules } = getAgentKnowledgeRules(agentId);
+    const target = rules.find((rule) => rule.lineNumber === lineNo);
+    if (!target) {
+        return res.status(404).json({ error: 'rule not found' });
+    }
+
+    const folderPath = target.absoluteFolderPath;
+    let folderOk = false;
+    try {
+        folderOk = !!folderPath && fs.existsSync(folderPath) && fs.statSync(folderPath).isDirectory();
+    } catch (_) {
+        folderOk = false;
+    }
+    if (!folderOk) {
+        return res.status(404).json({ error: 'folder does not exist' });
+    }
+
+    const { execFile } = require('child_process');
+    const openCommand = process.platform === 'darwin'
+        ? 'open'
+        : (process.platform === 'win32' ? 'explorer' : 'xdg-open');
+
+    execFile(openCommand, [folderPath], (err) => {
+        if (err) {
+            return res.status(500).json({ error: `failed to open folder: ${err.message}` });
+        }
+        res.json({ success: true });
+    });
+});
+
+app.get('/api/knowledge/folders', (req, res) => {
+    if (!fs.existsSync(KNOWLEDGE_BASE_PATH)) {
+        return res.json({ items: [] });
+    }
+
+    const items = [];
+    const walk = (dirPath, depth = 0) => {
+        if (depth > 3) return;
+        let children = [];
+        try {
+            children = fs.readdirSync(dirPath, { withFileTypes: true });
+        } catch (_) {
+            return;
+        }
+        for (const child of children) {
+            if (!child.isDirectory()) continue;
+            if (child.name.startsWith('.')) continue;
+            const absPath = path.join(dirPath, child.name);
+            const relativePath = path.relative(KNOWLEDGE_BASE_PATH, absPath).replace(/\\/g, '/');
+            if (!relativePath) continue;
+            items.push({
+                relativePath,
+                displayPath: `Documents/知识库/热门话题/${relativePath}`
+            });
+            walk(absPath, depth + 1);
+        }
+    };
+
+    walk(KNOWLEDGE_BASE_PATH, 0);
+    items.sort((a, b) => String(a.displayPath).localeCompare(String(b.displayPath)));
+    res.json({ items });
+});
+
 // 获取指定 Agent 的知识库内容
 app.get('/api/agents/:agentId/knowledge', (req, res) => {
   const { agentId } = req.params;
@@ -6418,8 +6979,22 @@ app.post('/api/agents/:id/history/reset', async (req, res) => {
     const command = (req.body && typeof req.body.command === 'string')
         ? req.body.command.trim()
         : '';
+    const reloadPersona = req.body && Object.prototype.hasOwnProperty.call(req.body, 'reloadPersona')
+        ? !!req.body.reloadPersona
+        : true;
+    const skipRemoteReset = req.body && Object.prototype.hasOwnProperty.call(req.body, 'skipRemoteReset')
+        ? !!req.body.skipRemoteReset
+        : false;
     if (!agentId) {
         return res.status(400).json({ error: 'agent id is required' });
+    }
+
+    if (reloadPersona) {
+        try {
+            refreshPersona(agentId);
+        } catch (e) {
+            console.warn(`[AgentTools] refreshPersona failed for ${agentId}: ${e.message || e}`);
+        }
     }
 
     abortAgentToolsStreams(agentId);
@@ -6430,14 +7005,16 @@ app.post('/api/agents/:id/history/reset', async (req, res) => {
 
     let remoteResetOk = true;
     let remoteResetError = '';
-    try {
-        if (openclaw && typeof openclaw.resetConversation === 'function') {
-            await openclaw.resetConversation(agentId);
+    if (!skipRemoteReset) {
+        try {
+            if (openclaw && typeof openclaw.resetConversation === 'function') {
+                await openclaw.resetConversation(agentId);
+            }
+        } catch (e) {
+            remoteResetOk = false;
+            remoteResetError = e.message || String(e);
+            console.warn(`[AgentTools] resetConversation failed for ${agentId}: ${remoteResetError}`);
         }
-    } catch (e) {
-        remoteResetOk = false;
-        remoteResetError = e.message || String(e);
-        console.warn(`[AgentTools] resetConversation failed for ${agentId}: ${remoteResetError}`);
     }
 
     broadcastAgentToolsReset(agentId, {
@@ -6451,7 +7028,10 @@ app.post('/api/agents/:id/history/reset', async (req, res) => {
         cleared: true,
         remoteResetOk,
         remoteResetError,
-        command
+        remoteResetSkipped: skipRemoteReset,
+        command,
+        reloadPersona,
+        skipRemoteReset
     });
 });
 
@@ -6581,22 +7161,37 @@ wss.on('connection', (ws, req) => {
 
           const userText = typeof data.content === 'string' ? data.content : '';
           const uploads = Array.isArray(data.files) ? data.files : [];
-          if (!userText.trim() && uploads.length === 0) return;
+          const systemPaths = Array.isArray(data.systemPaths) ? data.systemPaths : [];
+          if (!userText.trim() && uploads.length === 0 && systemPaths.length === 0) return;
 
-          const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(uploads);
+          const binaryUploads = uploads.filter((f) => f && typeof f.data === 'string' && /^data:/i.test(f.data));
+          const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(binaryUploads);
           let finalText = userText;
           if (savedFiles.length > 0) {
               finalText += `\n\n[System Notification: User uploaded ${savedFiles.length} files. The files are saved locally at the following absolute paths. Please use these paths if you need to process or view the images/files.]\n`;
               savedFiles.forEach((p) => {
                   finalText += `- ${p}\n`;
               });
-          } else if (uploads.length > 0) {
+          } else if (binaryUploads.length > 0) {
               finalText += `\n[User attached ${uploads.length} files${fileNames ? `: ${fileNames}` : ''}]`;
+          }
+          if (systemPaths.length > 0) {
+              finalText += `\n\n[System Notification: User attached ${systemPaths.length} local paths. Respect path type and use these absolute paths directly if needed.]\n`;
+              systemPaths.forEach((item, idx) => {
+                  const pathType = item && item.pathType === 'folder' ? '本地路径文件夹' : '本地路径文件';
+                  const absPath = item && typeof item.path === 'string' ? item.path : '';
+                  if (!absPath) return;
+                  finalText += `[${idx + 1}] ${pathType}: ${absPath}\n`;
+              });
           }
 
           let historyUserText = userText.trim();
-          if (!historyUserText && uploads.length > 0) {
-              historyUserText = `[Uploaded ${uploads.length} file(s)${fileNames ? `: ${fileNames}` : ''}]`;
+          if (!historyUserText && (uploads.length > 0 || systemPaths.length > 0)) {
+              if (systemPaths.length > 0) {
+                  historyUserText = `[Attached ${systemPaths.length} local path(s)]`;
+              } else {
+                  historyUserText = `[Uploaded ${uploads.length} file(s)${fileNames ? `: ${fileNames}` : ''}]`;
+              }
           }
           appendAgentChannelHistory(activeChannel.id, {
               role: 'user',
@@ -6775,47 +7370,38 @@ wss.on('connection', (ws, req) => {
                   
                   // Handle files if present
                   let finalText = userText;
-                  if (data.files && data.files.length > 0) {
-                      const fileNames = data.files.map(f => f.name).join(', ');
-                      
-                      // Save files to public/uploads
-                      const uploadsDir = path.join(__dirname, 'public', 'uploads');
-                      if (!fs.existsSync(uploadsDir)) {
-                          fs.mkdirSync(uploadsDir, { recursive: true });
-                      }
-                      
-                      const savedFiles = [];
-                      data.files.forEach(f => {
-                          try {
-                              // Data is "data:image/png;base64,..."
-                              const matches = f.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-                              if (matches && matches.length === 3) {
-                                  const buffer = Buffer.from(matches[2], 'base64');
-                                  const safeName = f.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-                                  const filePath = path.join(uploadsDir, safeName);
-                                  fs.writeFileSync(filePath, buffer);
-                                  savedFiles.push(filePath);
-                                  console.log(`[AgentTools] Saved file to ${filePath}`);
-                              }
-                          } catch(e) {
-                              console.error(`[AgentTools] Failed to save file ${f.name}`, e);
-                          }
-                      });
-                      
+                  const uploads = Array.isArray(data.files) ? data.files : [];
+                  const systemPaths = Array.isArray(data.systemPaths) ? data.systemPaths : [];
+                  if (uploads.length > 0) {
+                      const binaryUploads = uploads.filter((f) => f && typeof f.data === 'string' && /^data:/i.test(f.data));
+                      const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(binaryUploads);
                       if (savedFiles.length > 0) {
                           finalText += `\n\n[System Notification: User uploaded ${savedFiles.length} files. The files are saved locally at the following absolute paths. Please use these paths if you need to process or view the images/files.]\n`;
-                          savedFiles.forEach(p => {
+                          savedFiles.forEach((p) => {
                               finalText += `- ${p}\n`;
                           });
-                      } else {
-                          finalText += `\n[User attached ${data.files.length} files: ${fileNames}]`;
+                      } else if (binaryUploads.length > 0) {
+                          finalText += `\n[User attached ${binaryUploads.length} files${fileNames ? `: ${fileNames}` : ''}]`;
                       }
+                  }
+                  if (systemPaths.length > 0) {
+                      finalText += `\n\n[System Notification: User attached ${systemPaths.length} local paths. Respect path type and use these absolute paths directly if needed.]\n`;
+                      systemPaths.forEach((item, idx) => {
+                          const pathType = item && item.pathType === 'folder' ? '本地路径文件夹' : '本地路径文件';
+                          const absPath = item && typeof item.path === 'string' ? item.path : '';
+                          if (!absPath) return;
+                          finalText += `[${idx + 1}] ${pathType}: ${absPath}\n`;
+                      });
                   }
 
                   let historyUserText = typeof userText === 'string' ? userText.trim() : '';
-                  if (!historyUserText && data.files && data.files.length > 0) {
-                      const fileNames = data.files.map(f => f.name).join(', ');
-                      historyUserText = `[Uploaded ${data.files.length} file(s): ${fileNames}]`;
+                  if (!historyUserText && (uploads.length > 0 || systemPaths.length > 0)) {
+                      if (systemPaths.length > 0) {
+                          historyUserText = `[Attached ${systemPaths.length} local path(s)]`;
+                      } else {
+                          const fileNames = uploads.map((f) => f && f.name ? f.name : '').filter(Boolean).join(', ');
+                          historyUserText = `[Uploaded ${uploads.length} file(s)${fileNames ? `: ${fileNames}` : ''}]`;
+                      }
                   }
                   appendAgentToolsHistory(agentId, 'user', historyUserText);
 

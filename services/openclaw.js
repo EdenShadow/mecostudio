@@ -895,7 +895,11 @@ const resetConversation = async (agentId) => {
         throw new Error('agentId is required');
     }
 
-    return new Promise((resolve, reject) => {
+    const MAX_RETRY = 3;
+    const RETRY_DELAY_MS = 1200;
+    const TIMEOUT_MS = 30000;
+
+    const runOnce = () => new Promise((resolve, reject) => {
         const child = spawn(
             OPENCLAW_CMD,
             ['agent', '--agent', normalizedAgentId, '--message', '/new', '--local'],
@@ -914,7 +918,7 @@ const resetConversation = async (agentId) => {
                 } catch (_) {}
             }, 800);
             reject(new Error('reset conversation timeout'));
-        }, 15000);
+        }, TIMEOUT_MS);
 
         child.stderr.on('data', (chunk) => {
             stderr += chunk.toString();
@@ -939,6 +943,37 @@ const resetConversation = async (agentId) => {
             reject(new Error(details || `reset conversation failed with code ${code}`));
         });
     });
+
+    const isRetryable = (err) => {
+        const msg = String(err && err.message ? err.message : err || '').toLowerCase();
+        return msg.includes('timeout')
+            || msg.includes('eperm')
+            || msg.includes('ebusy')
+            || msg.includes('lock')
+            || msg.includes('resource busy');
+    };
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
+        let shouldRetry = false;
+        await openclawMutex.lock();
+        try {
+            return await runOnce();
+        } catch (err) {
+            lastError = err;
+            shouldRetry = attempt < MAX_RETRY && isRetryable(err);
+            if (!shouldRetry) {
+                throw err;
+            }
+        } finally {
+            openclawMutex.release();
+        }
+        if (shouldRetry) {
+            await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+        }
+    }
+
+    throw lastError || new Error('reset conversation failed');
 };
 
 module.exports = {
