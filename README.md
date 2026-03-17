@@ -1,12 +1,12 @@
 # Meco Studio 🚀
 
-> **OpenClaw 多智能体控制中枢**  
-> 更快的推理、更稳的音频推流、更可控的本地化协作工作流。  
-> 从单体聊天到多人圆桌，从技能调用到知识库沉淀，一套系统打通。 ⚡
+## ⚡ 一行安装 / 升级
 
-![Meco Studio Hero](assets/readme/hero-1.png)
+```bash
+curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
+```
 
-![Meco Studio Roundtable](assets/readme/hero-2.png)
+同一条命令既可首次安装，也可后续升级（重跑即更新）。
 
 ## 🌟 项目亮点
 
@@ -17,6 +17,14 @@
 - 🔒 **本地优先控制**：关键数据与运行状态尽量保持在本地可控边界
 - ⚙️ **安装与升级幂等**：一条命令重复执行即可升级，不破坏已有目录
 
+> **OpenClaw 多智能体控制中枢**  
+> 更快的推理、更稳的音频推流、更可控的本地化协作工作流。  
+> 从单体聊天到多人圆桌，从技能调用到知识库沉淀，一套系统打通。 ⚡
+
+![Meco Studio Hero](assets/readme/hero-1.png)
+
+![Meco Studio Roundtable](assets/readme/hero-2.png)
+
 ## 🖼️ 产品界面预览
 
 | 控制台 | 多智能体协作 |
@@ -26,14 +34,6 @@
 | 圆桌舞台 | 话题与推流 |
 |---|---|
 | ![Feature 3](assets/readme/feature-3.png) | ![Feature 4](assets/readme/feature-4.png) |
-
-## ⚡ 一行安装 / 升级
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
-```
-
-同一条命令既可首次安装，也可后续升级（重跑即更新）。
 
 ## 📌 安装后自动完成
 
