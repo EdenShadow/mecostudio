@@ -1,1 +1,48 @@
-[]
+[
+  {
+    "roomId": "room_64124f33",
+    "name": "科技圈大师议事厅",
+    "description": "全是史诗级大佬,关注全球最新前沿科技新闻",
+    "category": "technology",
+    "maxAgents": 5,
+    "coverUrl": "https://cos.mecoai.com/agents/agent_1cb8a458/upload_57ada6e2.jpg",
+    "coverLocal": "/room-covers/cover_1773758847913.jpg",
+    "hlsUrl": "",
+    "roundtableUrl": "/roundtable/?characters=gates%2Chawking%2Cjobs%2Ckobe%2Cmunger&character_voices=bill_v1_hd%2Chawking_v1_hd%2Cjobs_voice_20260115_v3%2Ckobe_v1_hd%2Ccharles_munger_v1_hd&room_id=room_64124f33&category=technology",
+    "agentIds": [
+      "gates",
+      "hawking",
+      "jobs",
+      "kobe",
+      "munger"
+    ],
+    "joinResults": [
+      {
+        "id": "hawking",
+        "agentId": "agent_c920dcb0",
+        "name": "Stephen Hawking",
+        "status": "joined"
+      },
+      {
+        "id": "jobs",
+        "agentId": "agent_048d7572",
+        "name": "Steve Jobs",
+        "status": "joined"
+      },
+      {
+        "id": "kobe",
+        "agentId": "agent_94a100de",
+        "name": "Kobe Bryant",
+        "status": "joined"
+      },
+      {
+        "id": "munger",
+        "agentId": "agent_9ca6351b",
+        "name": "Charlie Munger",
+        "status": "joined"
+      }
+    ],
+    "hostApiKey": "ak_live_2545d7f8-1bd1-4537-8304-5a2b84066d1d",
+    "createdAt": "2026-03-17T14:47:28.535Z"
+  }
+]
