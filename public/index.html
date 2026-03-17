@@ -88,6 +88,99 @@
         .animate-scale-in {
             animation: scaleIn 0.2s ease-out forwards;
         }
+        #at-chat-messages,
+        #at-chat-messages * {
+            user-select: text !important;
+            -webkit-user-select: text !important;
+        }
+        #at-chat-messages ::selection {
+            background: rgba(192, 132, 252, 0.45);
+            color: #ffffff;
+        }
+        #at-chat-messages ::-moz-selection {
+            background: rgba(192, 132, 252, 0.45);
+            color: #ffffff;
+        }
+        #at-chat-messages [data-role="user"] .message-content::selection {
+            background: rgba(0, 0, 0, 0.28);
+            color: #ffffff;
+        }
+        #at-chat-messages [data-role="user"] .message-content::-moz-selection {
+            background: rgba(0, 0, 0, 0.28);
+            color: #ffffff;
+        }
+        #at-chat-messages img {
+            user-select: none !important;
+            -webkit-user-select: none !important;
+            -webkit-user-drag: none;
+        }
+        .mention-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            height: 24px;
+            padding: 0 10px;
+            margin: 0 2px;
+            border-radius: 999px;
+            border: 1px solid rgba(59, 130, 246, 0.45);
+            background: rgba(59, 130, 246, 0.18);
+            color: #bfdbfe;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .channel-mention-input:empty::before {
+            content: attr(data-placeholder);
+            color: #6b7280;
+        }
+        .channel-mention-input {
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 24px;
+            box-sizing: border-box;
+            padding-top: 16px;
+            padding-bottom: 16px;
+            min-height: 56px;
+            max-height: 104px;
+            overflow-y: auto;
+            outline: none;
+        }
+        .mention-popup {
+            position: absolute;
+            left: 14px;
+            right: 14px;
+            bottom: calc(100% + 8px);
+            max-height: 180px;
+            overflow-y: auto;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(6, 8, 12, 0.96);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+            z-index: 40;
+        }
+        .channel-shortcut-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.06);
+            color: #d1d5db;
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 140ms ease;
+        }
+        .channel-shortcut-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.24);
+        }
     </style>
     <script>
         console.log("Meco Studio script initializing...");
@@ -236,19 +329,1098 @@
 
         // Global Variables
         let allAgents = []; 
+        let atChannels = [];
         let agentToDeleteId = null;
         let currentAgentToolId = null;
+        let currentChannelId = null;
         let atSocket = null;
+        const atSockets = new Map();
+        const atChannelSockets = new Map();
+        const atAgentChatState = new Map();
+        const atChannelChatState = new Map();
+        const atTtsSessions = new Map();
+        let atSoundEnabled = false;
+        let atMiniMaxConfigured = false;
+        let atCurrentAudioSource = null;
         let atAudioContext = null;
         let atAudioQueue = [];
         let atIsPlaying = false;
+        let atNextPlayTime = 0;
+        let atDecodeChain = Promise.resolve();
+        let atAudioGeneration = 0;
+        const atActiveAudioSources = new Set();
+        let atIncomingAudioHexQueue = [];
+        let atAudioBatchTimer = null;
+        let atAudioHasStarted = false;
+        let atAudioIdleTimer = null;
+        const AT_AUDIO_INITIAL_BUFFER_CHUNKS = 4;
+        const AT_AUDIO_INITIAL_BUFFER_TIMEOUT_MS = 220;
+        const AT_AUDIO_BATCH_DELAY_MS = 80;
+        const AT_AUDIO_START_LEAD_SEC = 0.26;
+        const AT_AUDIO_RECOVERY_LEAD_SEC = 0.2;
+        const AT_AUDIO_IDLE_RESET_MS = 900;
         let currentMessageDiv = null;
         let currentAgentAvatarUrl = null;
         let appRuntimeSettings = null;
+        let sidebarActiveAgentId = null;
+        let sidebarActiveChannelId = null;
+        let atChannelComposing = false;
+        let atAltPressed = false;
+        let atMentionPopupVisible = false;
+        let atMentionCandidates = [];
+        let atMentionSelectedIndex = 0;
+        let atMentionMode = 'mention';
+
+        function setSidebarSelectedAgent(agentId) {
+            sidebarActiveAgentId = agentId || null;
+            if (sidebarActiveAgentId) {
+                sidebarActiveChannelId = null;
+            }
+            const list = document.getElementById('sidebar-agent-list');
+            if (!list) return;
+            const items = list.querySelectorAll('[data-agent-id]');
+            items.forEach((item) => {
+                const isActive = item.dataset.agentId === sidebarActiveAgentId;
+                item.classList.toggle('bg-primary/20', isActive);
+                item.classList.toggle('text-white', isActive);
+                item.classList.toggle('border-primary/30', isActive);
+                item.classList.toggle('text-gray-400', !isActive);
+                item.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            });
+            const channelItems = document.querySelectorAll('[data-channel-id]');
+            channelItems.forEach((item) => {
+                item.classList.remove('bg-primary/20', 'text-white', 'border-primary/30');
+                item.classList.add('text-gray-400');
+                item.setAttribute('aria-selected', 'false');
+            });
+        }
+
+        function setSidebarSelectedChannel(channelId) {
+            sidebarActiveChannelId = channelId || null;
+            if (sidebarActiveChannelId) {
+                sidebarActiveAgentId = null;
+            }
+            const list = document.getElementById('sidebar-channel-list');
+            if (list) {
+                const items = list.querySelectorAll('[data-channel-id]');
+                items.forEach((item) => {
+                    const isActive = item.dataset.channelId === sidebarActiveChannelId;
+                    item.classList.toggle('bg-primary/20', isActive);
+                    item.classList.toggle('text-white', isActive);
+                    item.classList.toggle('border-primary/30', isActive);
+                    item.classList.toggle('text-gray-400', !isActive);
+                    item.setAttribute('aria-selected', isActive ? 'true' : 'false');
+                });
+            }
+            const agentItems = document.querySelectorAll('[data-agent-id]');
+            agentItems.forEach((item) => {
+                item.classList.remove('bg-primary/20', 'text-white', 'border-primary/30');
+                item.classList.add('text-gray-400');
+                item.setAttribute('aria-selected', 'false');
+            });
+        }
+
+        function getAgentChatState(agentId) {
+            const key = typeof agentId === 'string' ? agentId : '';
+            if (!key) {
+                return {
+                    messages: [],
+                    loading: false,
+                    inFlight: false,
+                    ttsStreamingActive: false,
+                    streamMessageIndex: null,
+                    historyLoaded: false,
+                    pendingQueue: []
+                };
+            }
+            if (!atAgentChatState.has(key)) {
+                atAgentChatState.set(key, {
+                    messages: [],
+                    loading: false,
+                    inFlight: false,
+                    ttsStreamingActive: false,
+                    streamMessageIndex: null,
+                    historyLoaded: false,
+                    pendingQueue: []
+                });
+            }
+            const state = atAgentChatState.get(key);
+            if (!Array.isArray(state.messages)) state.messages = [];
+            if (typeof state.loading !== 'boolean') state.loading = false;
+            if (typeof state.inFlight !== 'boolean') state.inFlight = false;
+            if (typeof state.ttsStreamingActive !== 'boolean') state.ttsStreamingActive = false;
+            if (!Array.isArray(state.pendingQueue)) state.pendingQueue = [];
+            if (typeof state.historyLoaded !== 'boolean') state.historyLoaded = false;
+            if (!Number.isInteger(state.streamMessageIndex)) state.streamMessageIndex = null;
+            return state;
+        }
+
+        function getChannelChatState(channelId) {
+            const key = typeof channelId === 'string' ? channelId : '';
+            if (!key) {
+                return {
+                    messages: [],
+                    loading: false,
+                    inFlight: false,
+                    historyLoaded: false,
+                    pendingQueue: [],
+                    streamMessageIndexByAgent: {}
+                };
+            }
+            if (!atChannelChatState.has(key)) {
+                atChannelChatState.set(key, {
+                    messages: [],
+                    loading: false,
+                    inFlight: false,
+                    historyLoaded: false,
+                    pendingQueue: [],
+                    streamMessageIndexByAgent: {}
+                });
+            }
+            const state = atChannelChatState.get(key);
+            if (!Array.isArray(state.messages)) state.messages = [];
+            if (typeof state.loading !== 'boolean') state.loading = false;
+            if (typeof state.inFlight !== 'boolean') state.inFlight = false;
+            if (typeof state.historyLoaded !== 'boolean') state.historyLoaded = false;
+            if (!Array.isArray(state.pendingQueue)) state.pendingQueue = [];
+            if (!state.streamMessageIndexByAgent || typeof state.streamMessageIndexByAgent !== 'object') {
+                state.streamMessageIndexByAgent = {};
+            }
+            return state;
+        }
+
+        function shouldPlayForegroundAudio(agentId) {
+            return atSoundEnabled && currentAgentToolId === agentId;
+        }
+
+        function stopAgentToolsAudioPlayback() {
+            atAudioGeneration += 1;
+            atAudioQueue = [];
+            atIsPlaying = false;
+            atNextPlayTime = 0;
+            atDecodeChain = Promise.resolve();
+            atIncomingAudioHexQueue = [];
+            atAudioHasStarted = false;
+            if (atAudioBatchTimer) {
+                clearTimeout(atAudioBatchTimer);
+                atAudioBatchTimer = null;
+            }
+            if (atAudioIdleTimer) {
+                clearTimeout(atAudioIdleTimer);
+                atAudioIdleTimer = null;
+            }
+            if (atCurrentAudioSource) {
+                try {
+                    atCurrentAudioSource.onended = null;
+                    atCurrentAudioSource.stop(0);
+                } catch (_) {}
+                atCurrentAudioSource = null;
+            }
+            atActiveAudioSources.forEach((source) => {
+                try {
+                    source.onended = null;
+                    source.stop(0);
+                } catch (_) {}
+            });
+            atActiveAudioSources.clear();
+        }
+
+        function updateAgentToolsSoundToggleUi() {
+            const wrap = document.getElementById('at-sound-toggle-wrap');
+            const icon = document.getElementById('at-sound-toggle-icon');
+            const text = document.getElementById('at-sound-toggle-text');
+            const btn = document.getElementById('at-sound-toggle-btn');
+            if (!wrap || !icon || !text || !btn) return;
+
+            if (currentChannelId) {
+                wrap.classList.add('hidden');
+                return;
+            }
+
+            if (!atMiniMaxConfigured) {
+                wrap.classList.add('hidden');
+                return;
+            }
+
+            wrap.classList.remove('hidden');
+            if (atSoundEnabled) {
+                icon.textContent = 'volume_up';
+                text.textContent = 'Sound On';
+                btn.classList.remove('bg-white/5', 'text-gray-300', 'border-white/10');
+                btn.classList.add('bg-primary/20', 'text-primary', 'border-primary/40');
+            } else {
+                icon.textContent = 'volume_off';
+                text.textContent = 'Enable Sound';
+                btn.classList.remove('bg-primary/20', 'text-primary', 'border-primary/40');
+                btn.classList.add('bg-white/5', 'text-gray-300', 'border-white/10');
+            }
+        }
+
+        async function refreshAgentToolsSoundAvailability() {
+            try {
+                const res = await fetch('/api/settings');
+                const data = await res.json();
+                const settings = (data && data.settings) ? data.settings : {};
+                appRuntimeSettings = settings;
+                atMiniMaxConfigured = !!(typeof settings.minimaxApiKey === 'string' && settings.minimaxApiKey.trim());
+                if (!atMiniMaxConfigured) {
+                    atSoundEnabled = false;
+                    stopAgentToolsAudioPlayback();
+                }
+                updateAgentToolsSoundToggleUi();
+            } catch (e) {
+                console.error('Failed to refresh sound availability', e);
+            }
+        }
+
+        window.toggleAgentToolsSound = function() {
+            if (currentChannelId) return;
+            if (!atMiniMaxConfigured) return;
+            atSoundEnabled = !atSoundEnabled;
+            if (!atSoundEnabled) {
+                const activeId = currentAgentToolId;
+                if (activeId) {
+                    finalizeAgentTtsStream(activeId);
+                }
+                stopAgentToolsAudioPlayback();
+            }
+            updateAgentToolsSoundToggleUi();
+        };
+
+        function getAgentById(agentId) {
+            return allAgents.find((a) => a && a.id === agentId) || null;
+        }
+
+        function getChannelById(channelId) {
+            return atChannels.find((c) => c && c.id === channelId) || null;
+        }
+
+        function getChannelInputElement() {
+            return document.getElementById('at-channel-input');
+        }
+
+        function getAgentTextInputElement() {
+            return document.getElementById('at-chat-input');
+        }
+
+        function placeCaretAtEnd(editor) {
+            if (!editor) return;
+            const selection = window.getSelection();
+            if (!selection) return;
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        }
+
+        function ensureChannelCaretInEditor(editor) {
+            if (!editor) return false;
+            const selection = window.getSelection();
+            if (selection && selection.rangeCount > 0) {
+                const activeRange = selection.getRangeAt(0);
+                if (editor.contains(activeRange.startContainer)) {
+                    return true;
+                }
+            }
+            placeCaretAtEnd(editor);
+            return true;
+        }
+
+        function autosizeAgentToolsTextarea() {
+            const input = getAgentTextInputElement();
+            if (!input) return;
+            const minHeight = 56;
+            const computed = window.getComputedStyle(input);
+            const lineHeight = parseFloat(computed.lineHeight) || 24;
+            const paddingY = (parseFloat(computed.paddingTop) || 0) + (parseFloat(computed.paddingBottom) || 0);
+            const maxHeight = Math.round(lineHeight * 3 + paddingY);
+
+            input.style.height = `${minHeight}px`;
+            const nextHeight = Math.max(minHeight, Math.min(input.scrollHeight, maxHeight));
+            input.style.height = `${nextHeight}px`;
+            input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+        }
+
+        function getMentionPopupElement() {
+            return document.getElementById('at-mention-popup');
+        }
+
+        function hideMentionPopup() {
+            const popup = getMentionPopupElement();
+            if (!popup) return;
+            popup.classList.add('hidden');
+            popup.innerHTML = '';
+            atMentionPopupVisible = false;
+            atMentionCandidates = [];
+            atMentionSelectedIndex = 0;
+            atMentionMode = 'mention';
+        }
+
+        function getCaretTextBeforeChannelInput() {
+            const editor = getChannelInputElement();
+            if (!editor) return '';
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0) return '';
+            const range = selection.getRangeAt(0);
+            if (!editor.contains(range.endContainer)) return '';
+            const preRange = range.cloneRange();
+            preRange.selectNodeContents(editor);
+            preRange.setEnd(range.endContainer, range.endOffset);
+            return preRange.toString();
+        }
+
+        function getChannelMentionMembers(channelId = currentChannelId) {
+            const channel = getChannelById(channelId);
+            if (!channel) return [];
+            return getChannelMemberProfiles(channel);
+        }
+
+        function matchMentionTrigger(text) {
+            if (typeof text !== 'string') return null;
+            // Trigger on '@' unless it's part of an ASCII word/email token.
+            return text.match(/(^|[^A-Za-z0-9_])@([^\s@]{0,32})$/);
+        }
+
+        function matchNextTrigger(text) {
+            if (typeof text !== 'string') return null;
+            // Trigger on '>' unless it's part of an ASCII token.
+            return text.match(/(^|[^A-Za-z0-9_])>([^\s>@]{0,32})$/);
+        }
+
+        function parseComposerTrigger(text) {
+            const mention = matchMentionTrigger(text);
+            if (mention) return { mode: 'mention', query: mention[2] || '' };
+            const next = matchNextTrigger(text);
+            if (next) return { mode: 'next', query: next[2] || '' };
+            return null;
+        }
+
+        async function openMentionPopupByMode(mode = 'mention') {
+            const activeChannelId = currentChannelId || sidebarActiveChannelId || '';
+            if (!activeChannelId) return;
+            if (!currentChannelId) {
+                currentChannelId = activeChannelId;
+            }
+            const editor = getChannelInputElement();
+            if (!editor) return;
+            if (!editor.isContentEditable) {
+                editor.setAttribute('contenteditable', 'true');
+            }
+            editor.focus();
+            ensureChannelCaretInEditor(editor);
+            atMentionMode = mode === 'next' ? 'next' : 'mention';
+            atMentionSelectedIndex = 0;
+            let members = getChannelMentionMembers(activeChannelId);
+            if (!Array.isArray(members) || members.length === 0) {
+                try {
+                    await fetchAgentChannels();
+                } catch (_) {}
+                members = getChannelMentionMembers(activeChannelId);
+            }
+            if (!Array.isArray(members) || members.length === 0) {
+                hideMentionPopup();
+                return;
+            }
+            renderMentionPopup(members);
+        }
+
+        window.openChannelMentionPicker = function(mode, event) {
+            const evt = event || window.event || null;
+            if (evt) {
+                if (typeof evt.preventDefault === 'function') evt.preventDefault();
+                if (typeof evt.stopPropagation === 'function') evt.stopPropagation();
+            }
+            openMentionPopupByMode(mode);
+        };
+
+        function renderMentionPopup(candidates) {
+            const popup = getMentionPopupElement();
+            if (!popup) return;
+            popup.innerHTML = '';
+            if (!Array.isArray(candidates) || candidates.length === 0) {
+                hideMentionPopup();
+                return;
+            }
+            atMentionCandidates = candidates;
+            if (atMentionSelectedIndex >= atMentionCandidates.length) {
+                atMentionSelectedIndex = 0;
+            }
+            let selectedRow = null;
+
+            candidates.forEach((candidate, index) => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = `w-full flex items-center gap-2 px-3 py-2 text-left transition-colors ${index === atMentionSelectedIndex ? 'bg-primary/20 text-white' : 'text-gray-200 hover:bg-white/10'}`;
+                row.innerHTML = '';
+                row.appendChild(createAvatarNode(candidate, 'w-6 h-6'));
+                const text = document.createElement('div');
+                text.className = 'min-w-0';
+                text.innerHTML = `<div class="text-sm truncate">${candidate.name}</div>`;
+                row.appendChild(text);
+                row.onmousedown = (event) => {
+                    event.preventDefault();
+                    insertCandidatePill(candidate, atMentionMode);
+                };
+                popup.appendChild(row);
+                if (index === atMentionSelectedIndex) {
+                    selectedRow = row;
+                }
+            });
+            popup.classList.remove('hidden');
+            atMentionPopupVisible = true;
+            if (selectedRow) {
+                selectedRow.scrollIntoView({ block: 'nearest' });
+            }
+        }
+
+        function updateMentionPopupFromCaret() {
+            if (!currentChannelId) {
+                hideMentionPopup();
+                return;
+            }
+            const editor = getChannelInputElement();
+            if (!editor || document.activeElement !== editor) {
+                hideMentionPopup();
+                return;
+            }
+
+            const before = getCaretTextBeforeChannelInput();
+            const trigger = parseComposerTrigger(before);
+            if (!trigger) {
+                hideMentionPopup();
+                return;
+            }
+            const query = (trigger.query || '').toLowerCase();
+            atMentionMode = trigger.mode;
+            const members = getChannelMentionMembers();
+            const candidates = members.filter((m) => {
+                const name = (m.name || '').toLowerCase();
+                const id = (m.id || '').toLowerCase();
+                if (!query) return true;
+                return name.includes(query) || id.includes(query);
+            });
+            if (candidates.length === 0) {
+                hideMentionPopup();
+                return;
+            }
+            renderMentionPopup(candidates);
+        }
+
+        function insertCandidatePill(candidate, mode = 'mention') {
+            const editor = getChannelInputElement();
+            if (!editor || !candidate) return;
+            editor.focus();
+            ensureChannelCaretInEditor(editor);
+
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0) return;
+            const range = selection.getRangeAt(0);
+            if (!editor.contains(range.startContainer)) return;
+            const triggerMatcher = mode === 'next' ? matchNextTrigger : matchMentionTrigger;
+
+            // Remove typed trigger like "@bi"
+            const removeTypedTrigger = () => {
+                let node = null;
+                let offset = 0;
+                if (range.startContainer.nodeType === Node.TEXT_NODE) {
+                    node = range.startContainer;
+                    offset = range.startOffset;
+                } else if (range.startContainer.nodeType === Node.ELEMENT_NODE) {
+                    const children = range.startContainer.childNodes || [];
+                    const prev = (range.startOffset > 0) ? children[range.startOffset - 1] : null;
+                    if (prev && prev.nodeType === Node.TEXT_NODE) {
+                        node = prev;
+                        offset = (prev.textContent || '').length;
+                    }
+                }
+                if (!node) return false;
+                const text = node.textContent || '';
+                const left = text.slice(0, offset);
+                const triggerMatch = triggerMatcher(left);
+                if (!triggerMatch) return false;
+                const start = left.length - (triggerMatch[2].length + 1);
+                node.textContent = text.slice(0, start) + text.slice(offset);
+                range.setStart(node, start);
+                range.collapse(true);
+                return true;
+            };
+            removeTypedTrigger();
+
+            const mention = document.createElement('span');
+            mention.className = 'mention-pill';
+            mention.setAttribute('contenteditable', 'false');
+            mention.dataset.pillType = mode === 'next' ? 'next' : 'mention';
+            mention.dataset.mentionId = candidate.id || '';
+            mention.dataset.mentionName = candidate.name || candidate.id || 'Agent';
+            if (mode === 'next') {
+                mention.textContent = `{next: "${candidate.name || candidate.id || 'Agent'}"}`;
+            } else {
+                mention.textContent = `@${candidate.name || candidate.id || 'Agent'}`;
+            }
+            const separator = document.createTextNode('\u200B');
+
+            range.insertNode(mention);
+            range.setStartAfter(mention);
+            range.collapse(true);
+            range.insertNode(separator);
+
+            const sepLen = (separator.textContent || '').length;
+            range.setStart(separator, sepLen);
+            range.collapse(true);
+            selection.removeAllRanges();
+            selection.addRange(range);
+
+            hideMentionPopup();
+        }
+
+        function moveMentionSelection(step) {
+            if (!atMentionPopupVisible || atMentionCandidates.length === 0) return;
+            const total = atMentionCandidates.length;
+            atMentionSelectedIndex = (atMentionSelectedIndex + step + total) % total;
+            renderMentionPopup(atMentionCandidates);
+        }
+
+        function commitSelectedMention() {
+            if (!atMentionPopupVisible || atMentionCandidates.length === 0) return false;
+            const candidate = atMentionCandidates[atMentionSelectedIndex];
+            if (!candidate) return false;
+            insertCandidatePill(candidate, atMentionMode);
+            return true;
+        }
+
+        function removeMentionNearCaret(direction) {
+            const editor = getChannelInputElement();
+            if (!editor) return false;
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return false;
+            const range = selection.getRangeAt(0);
+            if (!editor.contains(range.startContainer)) return false;
+
+            let container = range.startContainer;
+            let offset = range.startOffset;
+
+            const tryRemove = (node) => {
+                if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+                if (!node.classList || !node.classList.contains('mention-pill')) return false;
+                const parent = node.parentNode;
+                if (!parent) return false;
+                const prev = node.previousSibling;
+                const next = node.nextSibling;
+                node.remove();
+                if (prev && prev.nodeType === Node.TEXT_NODE && /\s$/.test(prev.textContent || '')) {
+                    prev.textContent = (prev.textContent || '').replace(/\s+$/, '');
+                } else if (next && next.nodeType === Node.TEXT_NODE) {
+                    next.textContent = (next.textContent || '').replace(/^\s+/, '');
+                }
+                const newRange = document.createRange();
+                if (direction === 'backward' && prev && prev.nodeType === Node.TEXT_NODE) {
+                    newRange.setStart(prev, prev.textContent.length);
+                } else if (next && next.nodeType === Node.TEXT_NODE) {
+                    newRange.setStart(next, 0);
+                } else {
+                    newRange.setStart(parent, Math.min(offset, parent.childNodes.length));
+                }
+                newRange.collapse(true);
+                selection.removeAllRanges();
+                selection.addRange(newRange);
+                return true;
+            };
+
+            const tryRemoveUsingSeparatorTextNode = (textNode) => {
+                if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return false;
+                const textValue = textNode.textContent || '';
+                if (!textValue || !textValue.includes('\u200B')) return false;
+                const siblingMention = textNode.previousSibling;
+                if (!tryRemove(siblingMention)) return false;
+                textNode.textContent = textValue.replace(/\u200B/g, '');
+                return true;
+            };
+
+            if (container.nodeType === Node.TEXT_NODE) {
+                const textValue = container.textContent || '';
+                if (direction === 'backward' && offset > 0 && textValue[offset - 1] === '\u200B' && tryRemove(container.previousSibling)) {
+                    container.textContent = textValue.slice(0, offset - 1) + textValue.slice(offset);
+                    return true;
+                }
+                if (direction === 'backward' && offset === 0) {
+                    return tryRemove(container.previousSibling);
+                }
+                if (direction === 'forward' && offset === textValue.length) {
+                    return tryRemove(container.nextSibling);
+                }
+                return false;
+            }
+
+            const children = container.childNodes || [];
+            if (direction === 'backward' && offset > 0) {
+                const prevNode = children[offset - 1];
+                if (prevNode && prevNode.nodeType === Node.TEXT_NODE && tryRemoveUsingSeparatorTextNode(prevNode)) {
+                    return true;
+                }
+                return tryRemove(children[offset - 1]);
+            }
+            if (direction === 'forward' && offset < children.length) {
+                return tryRemove(children[offset]);
+            }
+            return false;
+        }
+
+        function getChannelComposerText() {
+            const editor = getChannelInputElement();
+            if (!editor) return '';
+            const clone = editor.cloneNode(true);
+            clone.querySelectorAll('.mention-pill').forEach((node) => {
+                const pillType = node.dataset.pillType || 'mention';
+                const mentionName = node.dataset.mentionName
+                    || node.textContent.replace(/^@/, '').replace(/^\{next:\s*"/, '').replace(/"\}$/, '');
+                const encoded = pillType === 'next'
+                    ? `{next: "${mentionName}"}`
+                    : `@${mentionName}`;
+                node.replaceWith(document.createTextNode(encoded));
+            });
+            const text = (clone.innerText || clone.textContent || '')
+                .replace(/\u00A0/g, ' ')
+                .replace(/\u200B/g, '')
+                .replace(/\r/g, '');
+            return text.trim();
+        }
+
+        function clearChannelComposer() {
+            const editor = getChannelInputElement();
+            if (!editor) return;
+            editor.innerHTML = '';
+            hideMentionPopup();
+        }
+
+        function getChannelMemberProfiles(channel) {
+            const rawMembers = Array.isArray(channel && channel.members) && channel.members.length > 0
+                ? channel.members
+                : (Array.isArray(channel && channel.agentIds)
+                    ? channel.agentIds.map((id) => ({ id, name: id }))
+                    : []);
+            return rawMembers.map((member) => {
+                const memberId = member && typeof member.id === 'string' ? member.id : '';
+                const agent = getAgentById(memberId);
+                const displayName = (agent && (agent.displayName || agent.name))
+                    || (member && (member.name || member.id))
+                    || memberId
+                    || 'Agent';
+                const avatarUrl = (agent && typeof agent.avatarUrl === 'string' && agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com'))
+                    ? agent.avatarUrl
+                    : '';
+                return {
+                    id: memberId || '',
+                    name: displayName,
+                    avatarUrl
+                };
+            });
+        }
+
+        function createAvatarNode(profile, sizeClass = 'w-8 h-8', roundedClass = 'rounded-full', textClass = 'text-xs') {
+            const name = (profile && profile.name) ? profile.name : 'A';
+            const avatarUrl = (profile && profile.avatarUrl) ? profile.avatarUrl : '';
+            const holder = document.createElement('div');
+            holder.className = `${sizeClass} ${roundedClass} overflow-hidden shrink-0 border border-white/10 bg-black/30`;
+            if (avatarUrl) {
+                const img = document.createElement('img');
+                img.src = avatarUrl;
+                img.alt = name;
+                img.className = 'w-full h-full object-cover';
+                img.onerror = () => {
+                    img.remove();
+                    holder.className = `${sizeClass} ${roundedClass} overflow-hidden shrink-0 border border-white/10 ${getRandomColor(name)} text-white font-semibold ${textClass} flex items-center justify-center`;
+                    holder.textContent = name.charAt(0).toUpperCase();
+                };
+                holder.appendChild(img);
+                return holder;
+            }
+            holder.className = `${sizeClass} ${roundedClass} overflow-hidden shrink-0 border border-white/10 ${getRandomColor(name)} text-white font-semibold ${textClass} flex items-center justify-center`;
+            holder.textContent = name.charAt(0).toUpperCase();
+            return holder;
+        }
+
+        function buildChannelCompositeAvatarNode(channel) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'w-9 h-9 rounded-xl overflow-hidden shrink-0 border border-white/10 bg-black/35';
+
+            const grid = document.createElement('div');
+            grid.className = 'w-full h-full grid grid-cols-2 grid-rows-2 gap-[1px] bg-black/40';
+
+            const members = getChannelMemberProfiles(channel).slice(0, 4);
+            while (members.length < 4) members.push(null);
+
+            members.forEach((profile) => {
+                const cell = document.createElement('div');
+                cell.className = 'w-full h-full bg-white/5 flex items-center justify-center overflow-hidden';
+                if (!profile) {
+                    const dot = document.createElement('div');
+                    dot.className = 'w-1.5 h-1.5 rounded-full bg-white/20';
+                    cell.appendChild(dot);
+                } else {
+                    const avatar = createAvatarNode(profile, 'w-full h-full', 'rounded-none', 'text-[10px]');
+                    cell.appendChild(avatar);
+                }
+                grid.appendChild(cell);
+            });
+
+            wrapper.appendChild(grid);
+            return wrapper;
+        }
+
+        function renderChannelMemberStrip(channel) {
+            const strip = document.getElementById('at-channel-member-strip');
+            if (!strip) return;
+            strip.innerHTML = '';
+            if (!channel) return;
+
+            const members = getChannelMemberProfiles(channel);
+            const list = document.createElement('div');
+            list.className = 'h-full overflow-y-auto p-2 space-y-1.5';
+
+            members.forEach((member) => {
+                const row = document.createElement('div');
+                row.className = 'flex items-center gap-2 px-2 py-2 rounded-lg bg-white/5 border border-transparent hover:border-white/10';
+                row.appendChild(createAvatarNode(member, 'w-8 h-8'));
+
+                const textWrap = document.createElement('div');
+                textWrap.className = 'min-w-0 flex-1';
+                const nameEl = document.createElement('div');
+                nameEl.className = 'text-sm text-white truncate';
+                nameEl.textContent = member.name;
+                textWrap.appendChild(nameEl);
+                row.appendChild(textWrap);
+                list.appendChild(row);
+            });
+
+            strip.appendChild(list);
+        }
+
+        function applyAgentToolsLayoutMode() {
+            const isChannelMode = !!currentChannelId;
+            const colBrain = document.getElementById('at-col-brain');
+            const colChat = document.getElementById('at-col-chat');
+            const colConnectivity = document.getElementById('at-col-connectivity');
+            const stage = document.getElementById('at-chat-stage');
+            const container = document.getElementById('at-avatar-container');
+            const avatarImg = document.getElementById('at-avatar-img');
+            const avatarPlaceholder = document.getElementById('at-avatar-placeholder');
+            const avatarOverlay = document.getElementById('at-avatar-overlay');
+            const channelBanner = document.getElementById('at-channel-banner');
+            const bannerTitle = document.getElementById('at-channel-banner-title');
+            const bannerMembers = document.getElementById('at-channel-banner-members');
+            const chatMessages = document.getElementById('at-chat-messages');
+            const promptEl = document.getElementById('at-system-prompt');
+            const skillsList = document.getElementById('at-skills-list');
+            const select = document.getElementById('at-agent-select');
+            const soundWrap = document.getElementById('at-sound-toggle-wrap');
+            const chatInput = document.getElementById('at-chat-input');
+            const channelInputWrap = document.getElementById('at-channel-input-wrap');
+            const channelInput = getChannelInputElement();
+            const memberStrip = document.getElementById('at-channel-member-strip');
+
+            if (isChannelMode) {
+                const channel = getChannelById(currentChannelId);
+                const showMemberStrip = window.innerWidth >= 1024;
+                if (colBrain) colBrain.style.display = 'none';
+                if (colConnectivity) colConnectivity.style.display = 'none';
+                if (colChat) {
+                    colChat.style.width = '100%';
+                    colChat.style.borderRight = 'none';
+                }
+                if (stage) {
+                    stage.style.padding = '14px';
+                    stage.style.alignItems = 'stretch';
+                    stage.style.justifyContent = 'stretch';
+                }
+                if (container) {
+                    container.style.maxWidth = 'none';
+                    container.style.maxHeight = 'none';
+                    container.style.borderRadius = '14px';
+                }
+                if (avatarImg) {
+                    avatarImg.style.display = 'none';
+                    avatarImg.removeAttribute('src');
+                }
+                if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                if (avatarOverlay) avatarOverlay.style.display = 'none';
+                if (channelBanner) channelBanner.classList.remove('hidden');
+                if (bannerTitle) bannerTitle.textContent = channel ? channel.name : 'Channel';
+                if (bannerMembers) {
+                    const members = channel && Array.isArray(channel.members)
+                        ? channel.members.map((m) => m.name || m.id).join(', ')
+                        : '';
+                    bannerMembers.textContent = members || 'No members';
+                }
+                if (memberStrip) {
+                    renderChannelMemberStrip(channel);
+                    memberStrip.classList.toggle('hidden', !showMemberStrip);
+                    memberStrip.style.paddingTop = showMemberStrip ? '88px' : '';
+                }
+                if (chatMessages) {
+                    chatMessages.style.paddingTop = '124px';
+                    chatMessages.style.paddingLeft = '24px';
+                    chatMessages.style.paddingRight = showMemberStrip ? '280px' : '24px';
+                }
+                if (promptEl) {
+                    promptEl.value = channel
+                        ? `Channel: ${channel.name}\nMembers: ${(channel.members || []).map((m) => m.name || m.id).join(', ')}`
+                        : 'Channel mode';
+                }
+                if (skillsList) {
+                    skillsList.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">Channel mode: skills panel is hidden.</div>';
+                }
+                if (select) select.disabled = true;
+                if (chatInput) chatInput.placeholder = 'Message channel...';
+                if (chatInput) chatInput.classList.add('hidden');
+                if (channelInputWrap) channelInputWrap.classList.remove('hidden');
+                if (channelInput) channelInput.setAttribute('contenteditable', 'true');
+                if (soundWrap) soundWrap.classList.add('hidden');
+                currentAgentAvatarUrl = null;
+                return;
+            }
+
+            if (colBrain) colBrain.style.display = 'flex';
+            if (colConnectivity) colConnectivity.style.display = 'flex';
+            if (colChat) {
+                colChat.style.width = '';
+                colChat.style.borderRight = '';
+            }
+            if (stage) {
+                stage.style.padding = '';
+                stage.style.alignItems = '';
+                stage.style.justifyContent = '';
+            }
+            if (container) {
+                container.style.maxWidth = '';
+                container.style.maxHeight = '';
+                container.style.borderRadius = '';
+            }
+            if (avatarOverlay) avatarOverlay.style.display = '';
+            if (channelBanner) channelBanner.classList.add('hidden');
+            if (memberStrip) {
+                memberStrip.classList.add('hidden');
+                memberStrip.innerHTML = '';
+                memberStrip.style.paddingTop = '';
+            }
+            if (chatMessages) {
+                chatMessages.style.paddingTop = '';
+                chatMessages.style.paddingLeft = '';
+                chatMessages.style.paddingRight = '';
+            }
+            if (select) select.disabled = false;
+            if (chatInput) chatInput.placeholder = 'Message agent...';
+            if (chatInput) chatInput.classList.remove('hidden');
+            autosizeAgentToolsTextarea();
+            if (channelInputWrap) channelInputWrap.classList.add('hidden');
+            if (channelInput) channelInput.setAttribute('contenteditable', 'false');
+            hideMentionPopup();
+            updateAgentToolsSoundToggleUi();
+        }
+
+        function renderSidebarChannels() {
+            const list = document.getElementById('sidebar-channel-list');
+            if (!list) return;
+            list.innerHTML = '';
+            if (!Array.isArray(atChannels) || atChannels.length === 0) {
+                list.innerHTML = '<div class="px-3 py-2 text-xs text-gray-600">No channels yet</div>';
+                return;
+            }
+
+            atChannels.forEach((channel) => {
+                const item = document.createElement('div');
+                item.className = 'group flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent cursor-pointer';
+                item.dataset.channelId = channel.id;
+                const memberCount = Array.isArray(channel.agentIds) ? channel.agentIds.length : 0;
+                item.appendChild(buildChannelCompositeAvatarNode(channel));
+
+                const textWrap = document.createElement('div');
+                textWrap.className = 'min-w-0 flex-1';
+                const nameEl = document.createElement('div');
+                nameEl.className = 'text-sm truncate font-medium';
+                nameEl.textContent = channel.name;
+                const metaEl = document.createElement('div');
+                metaEl.className = 'text-[10px] text-gray-500 truncate';
+                metaEl.textContent = `${memberCount} agents`;
+                textWrap.appendChild(nameEl);
+                textWrap.appendChild(metaEl);
+                item.appendChild(textWrap);
+
+                const delBtn = document.createElement('button');
+                delBtn.className = 'opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-colors';
+                delBtn.title = 'Delete channel';
+                delBtn.innerHTML = '<span class="material-icons-round text-sm">close</span>';
+                delBtn.onclick = (event) => {
+                    event.stopPropagation();
+                    deleteAgentChannel(channel.id);
+                };
+                item.appendChild(delBtn);
+                item.onclick = () => {
+                    if (window.location.hash !== '#agenttools') {
+                        switchView('agenttools');
+                    }
+                    loadAgentToolsChannel(channel.id);
+                };
+                list.appendChild(item);
+            });
+
+            if (sidebarActiveChannelId) {
+                setSidebarSelectedChannel(sidebarActiveChannelId);
+            }
+        }
+
+        async function fetchAgentChannels() {
+            try {
+                const res = await fetch('/api/agent-channels');
+                const data = await readJsonResponse(res, 'Failed to fetch channels');
+                atChannels = Array.isArray(data.channels) ? data.channels : [];
+                if (currentChannelId && !atChannels.some((c) => c.id === currentChannelId)) {
+                    currentChannelId = null;
+                    if (window.location.hash === '#agenttools' && allAgents.length > 0) {
+                        loadAgentTools(allAgents[0].id);
+                    }
+                }
+                renderSidebarChannels();
+            } catch (e) {
+                console.error('Failed to fetch channels', e);
+                atChannels = [];
+                renderSidebarChannels();
+            }
+        }
+
+        function openChannelCreateModal() {
+            const modal = document.getElementById('channel-create-modal');
+            const list = document.getElementById('channel-agent-pick-list');
+            const nameInput = document.getElementById('channel-name-input');
+            const errorEl = document.getElementById('channel-create-error');
+            if (!modal || !list || !nameInput) return;
+            errorEl.classList.add('hidden');
+            nameInput.value = '';
+            list.innerHTML = '';
+
+            if (!allAgents.length) {
+                list.innerHTML = '<div class="text-xs text-gray-500">No agents available.</div>';
+            } else {
+                allAgents.forEach((agent) => {
+                    const row = document.createElement('label');
+                    row.className = 'flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer';
+                    row.innerHTML = `
+                        <input type="checkbox" class="channel-agent-cb rounded border-gray-600 text-primary focus:ring-primary bg-gray-800" value="${agent.id}">
+                        <span class="text-sm text-gray-200">${agent.displayName || agent.name || agent.id}</span>
+                    `;
+                    list.appendChild(row);
+                });
+            }
+            modal.classList.remove('hidden');
+        }
+
+        function closeChannelCreateModal() {
+            const modal = document.getElementById('channel-create-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        async function confirmCreateChannel() {
+            const nameInput = document.getElementById('channel-name-input');
+            const errorEl = document.getElementById('channel-create-error');
+            const btn = document.getElementById('channel-create-btn');
+            if (!nameInput || !errorEl || !btn) return;
+
+            const name = nameInput.value.trim();
+            const agentIds = Array.from(document.querySelectorAll('.channel-agent-cb:checked')).map((el) => el.value);
+            if (!name) {
+                errorEl.textContent = 'Please enter channel name';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            if (agentIds.length < 2) {
+                errorEl.textContent = 'Please select at least 2 agents';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+            errorEl.classList.add('hidden');
+            const oldText = btn.innerText;
+            btn.disabled = true;
+            btn.innerText = 'Creating...';
+            try {
+                const res = await fetch('/api/agent-channels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, agentIds })
+                });
+                const data = await readJsonResponse(res, 'create channel failed');
+                if (!res.ok || !data.success || !data.channel) {
+                    throw new Error(data.error || 'create channel failed');
+                }
+                await fetchAgentChannels();
+                closeChannelCreateModal();
+                if (window.location.hash !== '#agenttools') {
+                    switchView('agenttools');
+                }
+                loadAgentToolsChannel(data.channel.id);
+            } catch (e) {
+                errorEl.textContent = e.message;
+                errorEl.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = oldText;
+            }
+        }
+
+        window.deleteAgentChannel = async function(channelId) {
+            if (!channelId) return;
+            if (!confirm('Delete this channel?')) return;
+            try {
+                const socket = atChannelSockets.get(channelId);
+                if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                    try { socket.close(); } catch (_) {}
+                }
+                atChannelSockets.delete(channelId);
+                const res = await fetch(`/api/agent-channels/${channelId}`, { method: 'DELETE' });
+                const data = await readJsonResponse(res, 'delete channel failed');
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || 'delete channel failed');
+                }
+                if (currentChannelId === channelId) {
+                    currentChannelId = null;
+                    if (allAgents.length > 0) {
+                        loadAgentTools(allAgents[0].id);
+                    } else {
+                        applyAgentToolsLayoutMode();
+                    }
+                }
+                await fetchAgentChannels();
+            } catch (e) {
+                alert(`Delete channel failed: ${e.message}`);
+            }
+        };
 
         function closeProfileMenu() {
             const menu = document.getElementById('profile-dropdown');
             if (menu) menu.classList.add('hidden');
+        }
+
+        async function readJsonResponse(res, fallbackMessage = 'request failed') {
+            const contentType = (res.headers && res.headers.get('content-type') || '').toLowerCase();
+            const rawText = await res.text();
+            let data = {};
+
+            if (rawText && rawText.trim()) {
+                try {
+                    data = JSON.parse(rawText);
+                } catch (_) {
+                    const snippet = rawText.slice(0, 120);
+                    const looksLikeHtml = contentType.includes('text/html') || /^\s*</.test(rawText);
+                    if (looksLikeHtml) {
+                        throw new Error('频道接口返回了 HTML（不是 JSON）。请重启 Meco Studio 服务后重试。');
+                    }
+                    throw new Error(`服务返回非 JSON: ${snippet}`);
+                }
+            }
+
+            if (!res.ok) {
+                throw new Error((data && data.error) || fallbackMessage);
+            }
+            return data;
         }
 
         function toggleProfileMenu() {
@@ -323,6 +1495,7 @@
                     : '已保存';
                 alert('配置已保存并自动安装/激活完成:\n' + logs);
                 closeApiSettingsModal();
+                refreshAgentToolsSoundAvailability();
             } catch (e) {
                 console.error('Save settings failed', e);
                 alert('保存失败: ' + e.message);
@@ -447,6 +1620,8 @@
                 } else {
                     renderAgents(allAgents);
                 }
+
+                await fetchAgentChannels();
                 
                 // Check hash for view
                 if (window.location.hash === '#playgen') {
@@ -642,7 +1817,8 @@
                 }
 
                 const sidebarItem = document.createElement('div');
-                sidebarItem.className = 'flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors group cursor-pointer';
+                sidebarItem.className = 'flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent group cursor-pointer';
+                sidebarItem.dataset.agentId = agent.id;
                 const emoji = agent.emoji || displayName.charAt(0).toUpperCase();
 
                 sidebarItem.onclick = () => {
@@ -658,8 +1834,9 @@
                         const select = document.getElementById('at-agent-select');
                         if (select) {
                             select.value = agent.id;
-                            loadAgentTools(agent.id);
                         }
+                        setSidebarSelectedAgent(agent.id);
+                        loadAgentTools(agent.id);
                         return;
                     }
 
@@ -682,6 +1859,11 @@
                 `;
                 sidebarList.appendChild(sidebarItem);
             });
+
+            if (sidebarActiveAgentId) {
+                setSidebarSelectedAgent(sidebarActiveAgentId);
+            }
+            renderSidebarChannels();
         }
 
         function renderContextSelection() {
@@ -972,57 +2154,97 @@
                 return;
             }
 
-            allAgents.forEach((agent, index) => {
+            allAgents.forEach((agent) => {
                 const option = document.createElement('option');
                 option.value = agent.id;
                 option.text = agent.displayName || agent.name;
-                if (index === 0) option.selected = true;
                 select.appendChild(option);
             });
 
+            if (currentChannelId && getChannelById(currentChannelId)) {
+                setSidebarSelectedChannel(currentChannelId);
+                loadAgentToolsChannel(currentChannelId);
+                return;
+            }
+
             if (allAgents.length > 0) {
-                loadAgentTools(allAgents[0].id);
+                const hasCurrent = currentAgentToolId && allAgents.some(a => a.id === currentAgentToolId);
+                const targetId = hasCurrent ? currentAgentToolId : allAgents[0].id;
+                select.value = targetId;
+                setSidebarSelectedAgent(targetId);
+                loadAgentTools(targetId);
             }
         }
 
         async function loadAgentTools(agentId) {
             if (!agentId) return;
+            if (currentChannelId) {
+                const oldSocket = atChannelSockets.get(currentChannelId);
+                if (oldSocket && (oldSocket.readyState === WebSocket.OPEN || oldSocket.readyState === WebSocket.CONNECTING)) {
+                    try { oldSocket.close(); } catch (_) {}
+                }
+                atChannelSockets.delete(currentChannelId);
+            }
+            currentChannelId = null;
+            const previousAgentId = currentAgentToolId;
             currentAgentToolId = agentId;
+            if (previousAgentId && previousAgentId !== agentId) {
+                stopAgentToolsAudioPlayback();
+            }
+            setSidebarSelectedAgent(agentId);
+            applyAgentToolsLayoutMode();
+            atSocket = atSockets.get(agentId) || null;
+            refreshAgentToolsSoundAvailability();
             
             const avatarImg = document.getElementById('at-avatar-img');
             const avatarPlaceholder = document.getElementById('at-avatar-placeholder');
+            const state = getAgentChatState(agentId);
+            const applyAgentToolsLetterAvatar = (displayName) => {
+                const name = (displayName && String(displayName).trim()) ? String(displayName).trim() : 'Agent';
+                if (avatarImg) {
+                    avatarImg.style.display = 'none';
+                    avatarImg.removeAttribute('src');
+                    avatarImg.onerror = null;
+                }
+                if (avatarPlaceholder) {
+                    const colorClass = getRandomColor(name);
+                    const initial = name.charAt(0).toUpperCase();
+                    avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                    avatarPlaceholder.innerText = initial;
+                    avatarPlaceholder.style.display = 'flex';
+                }
+                currentAgentAvatarUrl = null;
+            };
+
+            const applyAgentToolsAvatar = (avatarUrl, displayName) => {
+                if (!avatarImg) return;
+                const safeUrl = (avatarUrl && typeof avatarUrl === 'string') ? avatarUrl : '';
+                if (!safeUrl) {
+                    applyAgentToolsLetterAvatar(displayName);
+                    return;
+                }
+                avatarImg.onerror = () => {
+                    avatarImg.onerror = null;
+                    applyAgentToolsLetterAvatar(displayName);
+                };
+                avatarImg.src = safeUrl;
+                avatarImg.style.display = 'block';
+                if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                currentAgentAvatarUrl = safeUrl;
+            };
             
             // Optimistic UI update from cache
             const cachedAgent = allAgents.find(a => a.id === agentId);
             if (cachedAgent) {
                 const hasCustom = cachedAgent.avatarUrl && !cachedAgent.avatarUrl.includes('googleusercontent.com');
                 if (hasCustom) {
-                    if (avatarImg) {
-                        avatarImg.src = cachedAgent.avatarUrl;
-                        avatarImg.style.display = 'block';
-                    }
-                    if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
-                    currentAgentAvatarUrl = cachedAgent.avatarUrl;
+                    applyAgentToolsAvatar(cachedAgent.avatarUrl, cachedAgent.displayName || cachedAgent.name || 'Agent');
                 } else {
-                    if (avatarImg) avatarImg.style.display = 'none';
-                    if (avatarPlaceholder) {
-                        const name = cachedAgent.displayName || cachedAgent.name || 'Agent';
-                        const colorClass = getRandomColor(name);
-                        const initial = name.charAt(0).toUpperCase();
-                        avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
-                        avatarPlaceholder.innerText = initial;
-                        avatarPlaceholder.style.display = 'flex';
-                    }
-                    currentAgentAvatarUrl = null;
+                    applyAgentToolsLetterAvatar(cachedAgent.displayName || cachedAgent.name || 'Agent');
                 }
             } else {
                 // Fallback reset
-                if (avatarImg) avatarImg.style.display = 'none';
-                if (avatarPlaceholder) {
-                    avatarPlaceholder.className = 'w-full h-full flex items-center justify-center text-gray-700 text-6xl font-bold bg-black/50';
-                    avatarPlaceholder.innerText = '?';
-                    avatarPlaceholder.style.display = 'flex';
-                }
+                applyAgentToolsLetterAvatar('Agent');
             }
             
             const promptEl = document.getElementById('at-system-prompt');
@@ -1031,76 +2253,342 @@
             const skillsList = document.getElementById('at-skills-list');
             if (skillsList) skillsList.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">Loading skills...</div>';
             
-            const chatMsgs = document.getElementById('at-chat-messages');
-            if (chatMsgs) chatMsgs.innerHTML = '';
-            currentMessageDiv = null;
+            renderAgentToolsChat(agentId);
             
             const chatInput = document.getElementById('at-chat-input');
-            if (chatInput) chatInput.disabled = false;
+            if (chatInput) {
+                chatInput.disabled = false;
+                autosizeAgentToolsTextarea();
+            }
+            clearChannelComposer();
             
             const sendBtn = document.getElementById('at-send-btn');
             if (sendBtn) sendBtn.disabled = false;
+
+            connectAgentToolsSocket(agentId);
 
             try {
                 const res = await fetch(`/api/agents/${agentId}`);
                 const data = await res.json();
                 const agent = data.agent;
+                if (!agent || currentAgentToolId !== agentId) return;
                 
                 if (promptEl) promptEl.value = agent.systemPrompt || agent.prompt || 'No system prompt defined.';
                 
                 if (agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com')) {
-                    currentAgentAvatarUrl = agent.avatarUrl;
-                    if (avatarImg) {
-                        avatarImg.src = agent.avatarUrl;
-                        avatarImg.style.display = 'block';
-                    }
-                    if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                    applyAgentToolsAvatar(agent.avatarUrl, agent.displayName || agent.name || 'Agent');
                 } else {
-                    currentAgentAvatarUrl = null;
-                    if (avatarImg) avatarImg.style.display = 'none';
-                    
-                    if (avatarPlaceholder) {
-                        const name = agent.displayName || agent.name || 'Agent';
-                        const colorClass = getRandomColor(name);
-                        const initial = name.charAt(0).toUpperCase();
-                        
-                        // Update placeholder with dynamic color and initial
-                        avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
-                        avatarPlaceholder.innerText = initial;
-                        avatarPlaceholder.style.display = 'flex';
-                    }
+                    applyAgentToolsLetterAvatar(agent.displayName || agent.name || 'Agent');
                 }
                 
                 refreshAgentSkills();
-                connectAgentToolsSocket(agentId);
                 
                 // Load History
-                try {
-                    const historyRes = await fetch(`/api/agents/${agentId}/history`);
-                    const historyData = await historyRes.json();
-                    if (historyData.history && Array.isArray(historyData.history)) {
-                         // Sort or just append? Usually history is chronological.
-                         historyData.history.forEach(msg => {
-                             if (msg.role && msg.content) {
-                                 appendMessage(msg.role, msg.content);
-                             }
-                         });
-                         // Scroll to bottom with a slight delay to allow layout
-                         setTimeout(() => {
-                             if (chatMsgs) chatMsgs.scrollTop = chatMsgs.scrollHeight;
-                         }, 100);
-                         // Double tap for image loading
-                         setTimeout(() => {
-                             if (chatMsgs) chatMsgs.scrollTop = chatMsgs.scrollHeight;
-                         }, 500);
+                if (!state.historyLoaded) {
+                    try {
+                        const historyRes = await fetch(`/api/agents/${agentId}/history`);
+                        const historyData = await historyRes.json();
+                        if (historyData.history && Array.isArray(historyData.history)) {
+                            const normalizedHistory = historyData.history
+                                .filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
+                                .map(msg => ({
+                                    role: msg.role,
+                                    content: msg.content,
+                                    reasoning: '',
+                                    files: []
+                                }));
+                            if (normalizedHistory.length > 0) {
+                                state.messages = state.messages.length === 0
+                                    ? normalizedHistory
+                                    : [...normalizedHistory, ...state.messages];
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to load history', e);
+                    } finally {
+                        state.historyLoaded = true;
+                        if (currentAgentToolId === agentId) {
+                            renderAgentToolsChat(agentId);
+                        }
                     }
-                } catch (e) {
-                    console.error('Failed to load history', e);
                 }
                 
             } catch (e) {
                 console.error('Failed to load agent details', e);
                 if (promptEl) promptEl.value = 'Error loading details.';
+            }
+        }
+
+        function connectAgentChannelSocket(channelId) {
+            const existing = atChannelSockets.get(channelId);
+            if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+                return existing;
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const socket = new WebSocket(`${protocol}//${window.location.host}/agent-channels?channelId=${encodeURIComponent(channelId)}`);
+            atChannelSockets.set(channelId, socket);
+
+            socket.onmessage = (event) => {
+                let data = null;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (_) {
+                    return;
+                }
+                if (!data || !data.type) return;
+                if (data.channelId && data.channelId !== channelId) return;
+
+                if (data.type === 'channel_text_stream') {
+                    appendChannelText(channelId, data.agentId, data.agentName, data.content, data.isNew);
+                } else if (data.type === 'channel_reasoning_stream') {
+                    appendChannelReasoning(channelId, data.agentId, data.content, data.isNew);
+                } else if (data.type === 'channel_stream_done') {
+                    finalizeChannelAgentStream(channelId, data.agentId);
+                } else if (data.type === 'channel_round_done') {
+                    finalizeChannelRound(channelId);
+                } else if (data.type === 'channel_error') {
+                    const state = getChannelChatState(channelId);
+                    state.messages.push({
+                        role: 'assistant',
+                        content: `[Channel Error: ${data.message || 'unknown'}]`,
+                        senderName: 'System',
+                        reasoning: '',
+                        files: []
+                    });
+                    state.inFlight = false;
+                    state.loading = false;
+                    if (currentChannelId === channelId) {
+                        renderAgentToolsChannelChat(channelId);
+                    }
+                }
+            };
+
+            socket.onclose = () => {
+                if (atChannelSockets.get(channelId) === socket) {
+                    atChannelSockets.delete(channelId);
+                }
+                const state = getChannelChatState(channelId);
+                if (state.inFlight) {
+                    state.inFlight = false;
+                    state.loading = false;
+                    state.messages.push({
+                        role: 'assistant',
+                        content: '[Error: channel connection closed unexpectedly]',
+                        senderName: 'System',
+                        reasoning: '',
+                        files: []
+                    });
+                    if (currentChannelId === channelId) {
+                        renderAgentToolsChannelChat(channelId);
+                    }
+                }
+            };
+
+            socket.onerror = (e) => {
+                console.error('Agent Channel socket error', e);
+            };
+
+            return socket;
+        }
+
+        async function loadAgentToolsChannel(channelId) {
+            const channel = getChannelById(channelId);
+            if (!channel) return;
+            const previousChannelId = currentChannelId;
+            if (previousChannelId && previousChannelId !== channel.id) {
+                const oldSocket = atChannelSockets.get(previousChannelId);
+                if (oldSocket && (oldSocket.readyState === WebSocket.OPEN || oldSocket.readyState === WebSocket.CONNECTING)) {
+                    try { oldSocket.close(); } catch (_) {}
+                }
+                atChannelSockets.delete(previousChannelId);
+            }
+            currentChannelId = channel.id;
+            currentAgentToolId = null;
+            stopAgentToolsAudioPlayback();
+            setSidebarSelectedChannel(channel.id);
+            applyAgentToolsLayoutMode();
+
+            const select = document.getElementById('at-agent-select');
+            if (select) select.value = '';
+
+            const chatInput = document.getElementById('at-chat-input');
+            if (chatInput) chatInput.disabled = false;
+            const sendBtn = document.getElementById('at-send-btn');
+            if (sendBtn) sendBtn.disabled = false;
+            const channelInput = getChannelInputElement();
+            if (channelInput) {
+                channelInput.setAttribute('contenteditable', 'true');
+                setTimeout(() => {
+                    if (currentChannelId === channel.id) channelInput.focus();
+                }, 0);
+            }
+
+            const state = getChannelChatState(channel.id);
+            renderAgentToolsChannelChat(channel.id);
+
+            connectAgentChannelSocket(channel.id);
+            if (!state.historyLoaded) {
+                try {
+                    const res = await fetch(`/api/agent-channels/${channel.id}/history`);
+                    const data = await res.json();
+                    const normalized = Array.isArray(data.history) ? data.history
+                        .filter((msg) => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
+                        .map((msg) => ({
+                            role: msg.role,
+                            content: msg.content,
+                            senderName: msg.senderName || '',
+                            agentId: msg.agentId || '',
+                            reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : '',
+                            files: []
+                        })) : [];
+                    if (normalized.length > 0) {
+                        state.messages = normalized;
+                    }
+                } catch (e) {
+                    console.error('Failed to load channel history', e);
+                } finally {
+                    state.historyLoaded = true;
+                    if (currentChannelId === channel.id) {
+                        renderAgentToolsChannelChat(channel.id);
+                    }
+                }
+            }
+        }
+
+        function ensureStreamingChannelAssistantMessage(channelId, agentId, agentName, isNew) {
+            const state = getChannelChatState(channelId);
+            const key = agentId || 'unknown';
+            const idx = Number.isInteger(state.streamMessageIndexByAgent[key])
+                ? state.streamMessageIndexByAgent[key]
+                : null;
+            const current = idx !== null ? state.messages[idx] : null;
+            if (isNew || !current || current.role !== 'assistant') {
+                state.messages.push({
+                    role: 'assistant',
+                    content: '',
+                    senderName: agentName || agentId || 'Agent',
+                    agentId: agentId || '',
+                    reasoning: '',
+                    files: []
+                });
+                state.streamMessageIndexByAgent[key] = state.messages.length - 1;
+            }
+            return state;
+        }
+
+        function appendChannelText(channelId, agentId, agentName, text, isNew) {
+            if (typeof text !== 'string' || !text) return;
+            const state = ensureStreamingChannelAssistantMessage(channelId, agentId, agentName, isNew);
+            const key = agentId || 'unknown';
+            const idx = state.streamMessageIndexByAgent[key];
+            if (!Number.isInteger(idx) || !state.messages[idx]) return;
+            state.messages[idx].content += text;
+            state.loading = false;
+            if (currentChannelId === channelId) {
+                renderAgentToolsChannelChat(channelId);
+            }
+        }
+
+        function appendChannelReasoning(channelId, agentId, text, isNew) {
+            if (typeof text !== 'string' || !text) return;
+            const state = ensureStreamingChannelAssistantMessage(channelId, agentId, '', isNew);
+            const key = agentId || 'unknown';
+            const idx = state.streamMessageIndexByAgent[key];
+            if (!Number.isInteger(idx) || !state.messages[idx]) return;
+            state.messages[idx].reasoning = (state.messages[idx].reasoning || '') + text;
+            state.loading = false;
+            if (currentChannelId === channelId) {
+                renderAgentToolsChannelChat(channelId);
+            }
+        }
+
+        function finalizeChannelAgentStream(channelId, agentId) {
+            const state = getChannelChatState(channelId);
+            const key = agentId || 'unknown';
+            delete state.streamMessageIndexByAgent[key];
+            if (currentChannelId === channelId) {
+                renderAgentToolsChannelChat(channelId);
+            }
+        }
+
+        function finalizeChannelRound(channelId) {
+            const state = getChannelChatState(channelId);
+            state.inFlight = false;
+            state.loading = false;
+            state.streamMessageIndexByAgent = {};
+            if (currentChannelId === channelId) {
+                renderAgentToolsChannelChat(channelId);
+            }
+            if (state.pendingQueue.length > 0) {
+                setTimeout(() => processChannelSendQueue(channelId), 0);
+            }
+            fetchAgentChannels();
+        }
+
+        function renderAgentToolsChannelChat(channelId) {
+            if (!channelId || currentChannelId !== channelId) return;
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return;
+            const state = getChannelChatState(channelId);
+            chatContainer.innerHTML = '';
+            currentMessageDiv = null;
+
+            state.messages.forEach((msg) => {
+                const channelAgent = (msg.role === 'assistant' && msg.agentId) ? getAgentById(msg.agentId) : null;
+                const channelAvatarUrl = (channelAgent && typeof channelAgent.avatarUrl === 'string' && channelAgent.avatarUrl && !channelAgent.avatarUrl.includes('googleusercontent.com'))
+                    ? channelAgent.avatarUrl
+                    : '';
+                appendMessage(msg.role, msg.content || '', msg.files || [], {
+                    senderName: msg.senderName || '',
+                    avatarUrl: channelAvatarUrl,
+                    reasoning: msg.reasoning || '',
+                    skipScroll: true
+                });
+            });
+            if (state.loading) {
+                showLoadingIndicator();
+            }
+            requestAnimationFrame(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
+            });
+        }
+
+        async function processChannelSendQueue(channelId) {
+            const state = getChannelChatState(channelId);
+            if (state.inFlight) return;
+            const payload = state.pendingQueue.shift();
+            if (!payload) return;
+
+            state.inFlight = true;
+            state.loading = true;
+            state.streamMessageIndexByAgent = {};
+            if (currentChannelId === channelId) {
+                renderAgentToolsChannelChat(channelId);
+            }
+
+            try {
+                let socket = connectAgentChannelSocket(channelId);
+                socket = await waitForSocketOpen(socket);
+                socket.send(JSON.stringify(payload));
+            } catch (e) {
+                state.inFlight = false;
+                state.loading = false;
+                state.streamMessageIndexByAgent = {};
+                state.messages.push({
+                    role: 'assistant',
+                    content: `[Error: ${e.message}]`,
+                    senderName: 'System',
+                    reasoning: '',
+                    files: []
+                });
+                if (currentChannelId === channelId) {
+                    renderAgentToolsChannelChat(channelId);
+                }
+                if (state.pendingQueue.length > 0) {
+                    setTimeout(() => processChannelSendQueue(channelId), 0);
+                }
             }
         }
 
@@ -1221,39 +2709,380 @@
         };
 
         function connectAgentToolsSocket(agentId) {
-            if (atSocket) {
-                atSocket.close();
+            const existing = atSockets.get(agentId);
+            if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+                if (currentAgentToolId === agentId) atSocket = existing;
+                return existing;
             }
-            
+
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            atSocket = new WebSocket(`${protocol}//${window.location.host}/agent-tools?agentId=${agentId}`);
-            
-            atSocket.onmessage = async (event) => {
-                const data = JSON.parse(event.data);
-                
+            const socket = new WebSocket(`${protocol}//${window.location.host}/agent-tools?agentId=${agentId}`);
+            atSockets.set(agentId, socket);
+            if (currentAgentToolId === agentId) atSocket = socket;
+
+            socket.onmessage = async (event) => {
+                let data = null;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (e) {
+                    console.error('Agent Tools Socket message parse failed', e);
+                    return;
+                }
+                if (!data || !data.type) return;
+
                 if (data.type === 'text_stream') {
-                    appendAgentText(data.content, data.isNew);
+                    appendAgentText(agentId, data.content, data.isNew);
                 } else if (data.type === 'reasoning_stream' || data.type === 'thinking_stream') {
-                    appendAgentReasoning(data.content, data.isNew);
+                    appendAgentReasoning(agentId, data.content, data.isNew);
                 } else if (data.type === 'audio_stream') {
-                    playAudioChunk(data.audio);
+                    if (!atMiniMaxConfigured && shouldPlayForegroundAudio(agentId)) {
+                        enqueueAudioHexChunk(data.audio);
+                    }
+                } else if (data.type === 'stream_done') {
+                    finalizeAgentStream(agentId);
+                } else if (data.type === 'conversation_reset') {
+                    const state = getAgentChatState(agentId);
+                    finalizeAgentTtsStream(agentId);
+                    const commandText = typeof data.command === 'string' ? data.command.trim() : '';
+                    state.messages = commandText ? [{
+                        role: 'user',
+                        content: commandText,
+                        reasoning: '',
+                        files: []
+                    }] : [];
+                    state.loading = false;
+                    state.inFlight = false;
+                    state.ttsStreamingActive = false;
+                    state.streamMessageIndex = null;
+                    state.historyLoaded = true;
+                    state.pendingQueue = [];
+                    if (currentAgentToolId === agentId) {
+                        renderAgentToolsChat(agentId);
+                    }
                 } else if (data.type === 'skills_updated' || data.type === 'state_updated') {
-                    refreshAgentSkills();
-                    refreshSystemPrompt();
+                    if (currentAgentToolId === agentId) {
+                        refreshAgentSkills();
+                        refreshSystemPrompt();
+                    }
                 }
             };
-            
-            atSocket.onopen = () => {
-                console.log('Agent Tools Socket Connected');
+
+            socket.onopen = () => {
+                if (currentAgentToolId === agentId) {
+                    atSocket = socket;
+                }
+                console.log(`Agent Tools Socket Connected: ${agentId}`);
+            };
+
+            socket.onclose = () => {
+                if (atSockets.get(agentId) === socket) {
+                    atSockets.delete(agentId);
+                }
+                if (atSocket === socket) {
+                    atSocket = null;
+                }
+                const state = getAgentChatState(agentId);
+                if (state.inFlight) {
+                    finalizeAgentTtsStream(agentId);
+                    state.inFlight = false;
+                    state.loading = false;
+                    state.ttsStreamingActive = false;
+                    state.streamMessageIndex = null;
+                    state.messages.push({
+                        role: 'assistant',
+                        content: '[Error: 连接中断，本轮回复未完成]',
+                        reasoning: '',
+                        files: []
+                    });
+                    if (currentAgentToolId === agentId) {
+                        renderAgentToolsChat(agentId);
+                    }
+                    if (state.pendingQueue.length > 0) {
+                        setTimeout(() => processAgentSendQueue(agentId), 0);
+                    }
+                }
+            };
+
+            socket.onerror = (e) => {
+                console.error(`Agent Tools Socket Error: ${agentId}`, e);
+            };
+
+            return socket;
+        }
+
+        async function waitForSocketOpen(socket, timeoutMs = 8000) {
+            if (!socket) throw new Error('socket unavailable');
+            if (socket.readyState === WebSocket.OPEN) return socket;
+            if (socket.readyState !== WebSocket.CONNECTING) {
+                throw new Error('socket not open');
+            }
+            await new Promise((resolve, reject) => {
+                let settled = false;
+                const timer = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    reject(new Error('socket open timeout'));
+                }, timeoutMs);
+                const handleOpen = () => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    socket.removeEventListener('error', handleError);
+                    resolve();
+                };
+                const handleError = () => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    socket.removeEventListener('open', handleOpen);
+                    reject(new Error('socket open failed'));
+                };
+                socket.addEventListener('open', handleOpen, { once: true });
+                socket.addEventListener('error', handleError, { once: true });
+            });
+            return socket;
+        }
+
+        function ensureAgentTtsSession(agentId) {
+            const existing = atTtsSessions.get(agentId);
+            if (existing && existing.socket &&
+                (existing.socket.readyState === WebSocket.OPEN || existing.socket.readyState === WebSocket.CONNECTING)) {
+                return existing;
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const socket = new WebSocket(`${protocol}//${window.location.host}/tts/${agentId}`);
+            const session = { socket, pending: [] };
+            atTtsSessions.set(agentId, session);
+
+            socket.onopen = () => {
+                while (session.pending.length > 0 && socket.readyState === WebSocket.OPEN) {
+                    const payload = session.pending.shift();
+                    socket.send(JSON.stringify(payload));
+                }
+            };
+
+            socket.onmessage = (event) => {
+                let msg = null;
+                try {
+                    msg = JSON.parse(event.data);
+                } catch (_) {
+                    return;
+                }
+                if (msg && msg.data && msg.data.audio && shouldPlayForegroundAudio(agentId)) {
+                    enqueueAudioHexChunk(msg.data.audio);
+                }
+            };
+
+            socket.onclose = () => {
+                if (atTtsSessions.get(agentId) === session) {
+                    atTtsSessions.delete(agentId);
+                }
+            };
+
+            socket.onerror = (e) => {
+                console.error(`Agent Tools TTS socket error: ${agentId}`, e);
+            };
+
+            return session;
+        }
+
+        function sendAgentTtsPayload(agentId, payload) {
+            if (!payload || !agentId) return;
+            const session = ensureAgentTtsSession(agentId);
+            if (!session || !session.socket) return;
+            const ws = session.socket;
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(payload));
+                return;
+            }
+            session.pending.push(payload);
+        }
+
+        function streamAgentTtsText(agentId, text, isNew) {
+            if (!atMiniMaxConfigured || !atSoundEnabled) return;
+            if (currentAgentToolId !== agentId) return;
+            const content = typeof text === 'string' ? text : '';
+            if (!content || !content.trim()) return;
+
+            const state = getAgentChatState(agentId);
+            if (isNew || !state.ttsStreamingActive) {
+                state.ttsStreamingActive = true;
+            }
+            sendAgentTtsPayload(agentId, { type: 'text', content });
+        }
+
+        function finalizeAgentTtsStream(agentId) {
+            const state = getAgentChatState(agentId);
+            if (!state.ttsStreamingActive) return;
+            state.ttsStreamingActive = false;
+            sendAgentTtsPayload(agentId, { type: 'end' });
+        }
+
+        function classifyAssistantMediaUrl(url) {
+            const source = typeof url === 'string' ? url.trim() : '';
+            if (!source) return '';
+            let pathname = source;
+            try {
+                pathname = new URL(source).pathname || source;
+            } catch (_) {}
+            const imageExt = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i;
+            const videoExt = /\.(mp4|webm|ogg|ogv|mov|m4v|mkv)$/i;
+            if (imageExt.test(pathname)) return 'image';
+            if (videoExt.test(pathname)) return 'video';
+            return '';
+        }
+
+        function parseAssistantImageUrls(text) {
+            const source = typeof text === 'string' ? text : '';
+            if (!source) return { text: '', imageUrls: [], videoUrls: [] };
+            const imageUrls = [];
+            const videoUrls = [];
+            const pushMediaUrl = (url) => {
+                const mediaType = classifyAssistantMediaUrl(url);
+                if (mediaType === 'image') {
+                    imageUrls.push(url);
+                    return mediaType;
+                }
+                if (mediaType === 'video') {
+                    videoUrls.push(url);
+                    return mediaType;
+                }
+                return '';
+            };
+
+            const markdownImageRegex = /!\[[^\]]*]\((https?:\/\/[^\s)]+)\)/gi;
+            let stripped = source.replace(markdownImageRegex, (_, url) => {
+                const mediaType = pushMediaUrl(url);
+                return mediaType ? '' : _;
+            });
+            const markdownLinkRegex = /\[[^\]]*]\((https?:\/\/[^\s)]+)\)/gi;
+            stripped = stripped.replace(markdownLinkRegex, (_, url) => {
+                const mediaType = pushMediaUrl(url);
+                return mediaType ? '' : _;
+            });
+            const mediaUrlRegex = /(https?:\/\/[^\s)]+?\.(?:png|jpe?g|gif|webp|svg|avif|bmp|mp4|webm|ogg|ogv|mov|m4v|mkv)(?:\?[^\s)]*)?)/gi;
+            stripped = stripped.replace(mediaUrlRegex, (_, url) => {
+                const mediaType = pushMediaUrl(url);
+                return mediaType ? '' : _;
+            });
+            const dedupedImages = [];
+            imageUrls.forEach((url) => {
+                if (!dedupedImages.includes(url)) dedupedImages.push(url);
+            });
+            const dedupedVideos = [];
+            videoUrls.forEach((url) => {
+                if (!dedupedVideos.includes(url)) dedupedVideos.push(url);
+            });
+            return {
+                text: stripped.trim(),
+                imageUrls: dedupedImages,
+                videoUrls: dedupedVideos
             };
         }
 
-        function appendMessage(role, text, files = []) {
+        function appendMediaToBubble(bubble, files = [], assistantImageUrls = [], assistantVideoUrls = []) {
+            if (!bubble) return;
+            const mediaItems = [];
+            if (Array.isArray(files)) {
+                files.forEach((file) => mediaItems.push(file));
+            }
+            if (Array.isArray(assistantImageUrls)) {
+                assistantImageUrls.forEach((url) => {
+                    mediaItems.push({ name: 'image', type: 'image/url', data: url });
+                });
+            }
+            if (Array.isArray(assistantVideoUrls)) {
+                assistantVideoUrls.forEach((url) => {
+                    mediaItems.push({ name: 'video', type: 'video/url', data: url });
+                });
+            }
+            if (mediaItems.length === 0) return;
+
+            const filesContainer = document.createElement('div');
+            filesContainer.className = 'flex flex-wrap gap-2 mt-3';
+
+            mediaItems.forEach(file => {
+                const fileType = file && typeof file.type === 'string' ? file.type : '';
+                const maybeUrl = (file && typeof file.data === 'string' && file.data) ||
+                    (file && typeof file.url === 'string' && file.url) ||
+                    '';
+                const isVideo = fileType.startsWith('video/') ||
+                    /^data:video\//i.test(maybeUrl) ||
+                    /^https?:\/\/.+\.(mp4|webm|ogg|ogv|mov|m4v|mkv)(\?.*)?$/i.test(maybeUrl);
+                const isImage = fileType.startsWith('image/') ||
+                    /^data:image\//i.test(maybeUrl) ||
+                    /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(maybeUrl);
+
+                if (isVideo) {
+                    const videoWrap = document.createElement('div');
+                    videoWrap.className = 'w-full';
+                    const video = document.createElement('video');
+                    video.className = 'max-w-full rounded-xl border border-black/10 dark:border-white/10 max-h-80 bg-black/50';
+                    video.controls = true;
+                    video.preload = 'metadata';
+                    video.playsInline = true;
+                    let localObjectUrl = '';
+                    if (maybeUrl) {
+                        video.src = maybeUrl;
+                    } else if (file instanceof File) {
+                        localObjectUrl = URL.createObjectURL(file);
+                        video.src = localObjectUrl;
+                    }
+                    video.onloadeddata = () => {
+                        if (localObjectUrl) {
+                            URL.revokeObjectURL(localObjectUrl);
+                            localObjectUrl = '';
+                        }
+                        const chatContainer = document.getElementById('at-chat-messages');
+                        if (chatContainer) {
+                            chatContainer.scrollTop = chatContainer.scrollHeight;
+                        }
+                    };
+                    videoWrap.appendChild(video);
+                    filesContainer.appendChild(videoWrap);
+                    return;
+                }
+
+                if (isImage) {
+                    const img = document.createElement('img');
+                    img.className = 'max-w-full rounded-xl border border-black/10 dark:border-white/10 max-h-72 object-cover cursor-pointer hover:opacity-90 transition-opacity';
+                    if (maybeUrl) {
+                        img.src = maybeUrl;
+                    } else if (file instanceof File) {
+                        img.src = URL.createObjectURL(file);
+                        img.onload = () => URL.revokeObjectURL(img.src);
+                    }
+                    img.onclick = () => {
+                        if (img.src) window.open(img.src, '_blank');
+                    };
+                    img.onload = () => {
+                        const chatContainer = document.getElementById('at-chat-messages');
+                        if (chatContainer) {
+                            chatContainer.scrollTop = chatContainer.scrollHeight;
+                        }
+                    };
+                    filesContainer.appendChild(img);
+                    return;
+                }
+
+                const fileDiv = document.createElement('div');
+                fileDiv.className = 'flex items-center gap-2 p-3 bg-black/10 dark:bg-white/10 rounded-xl text-xs font-mono border border-black/5 dark:border-white/5';
+                const displayName = (file && file.name) ? file.name : 'file';
+                fileDiv.innerHTML = `<svg class="w-4 h-4 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> <span class="truncate max-w-[150px]">${displayName}</span>`;
+                filesContainer.appendChild(fileDiv);
+            });
+
+            bubble.appendChild(filesContainer);
+        }
+
+        function appendMessage(role, text, files = [], options = {}) {
             const chatContainer = document.getElementById('at-chat-messages');
-            if (!chatContainer) return;
+            if (!chatContainer) return null;
             
             const isUser = role === 'user';
             const div = document.createElement('div');
+            div.setAttribute('data-role', isUser ? 'user' : 'assistant');
             // Remove mb-6 to avoid large gaps, add specific margins
             div.className = `flex gap-4 max-w-[90%] ${isUser ? 'ml-auto flex-row-reverse' : ''} mb-4 animate-scale-in group`;
             
@@ -1264,8 +3093,10 @@
                         <span class="material-icons-round text-lg">person</span>
                     </div>`;
             } else {
-                 if (currentAgentAvatarUrl) {
-                     avatarHtml = `<img src="${currentAgentAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent group-hover:ring-primary/20 transition-all">`;
+                 const messageAvatarUrl = (typeof options.avatarUrl === 'string' && options.avatarUrl.trim()) ? options.avatarUrl.trim() : '';
+                 const assistantAvatarUrl = messageAvatarUrl || currentAgentAvatarUrl || '';
+                 if (assistantAvatarUrl) {
+                     avatarHtml = `<img src="${assistantAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent group-hover:ring-primary/20 transition-all">`;
                  } else {
                      avatarHtml = `
                         <div class="w-10 h-10 rounded-full bg-primary/20 flex-shrink-0 flex items-center justify-center text-primary text-xs border border-primary/20 shadow-neon ring-2 ring-transparent group-hover:ring-primary/20 transition-all">
@@ -1277,133 +3108,161 @@
             div.innerHTML = `
                 ${avatarHtml}
                 <div class="${isUser ? 'bg-primary text-black shadow-neon' : 'bg-white/10 text-gray-200 border border-white/5 shadow-glass'} p-5 rounded-3xl ${isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'} text-sm leading-relaxed backdrop-blur-md group relative hover:shadow-xl transition-all duration-300 min-w-[60px]">
-                    <div class="message-content whitespace-pre-wrap" style="word-break: break-word;"></div>
+                    ${isUser ? '' : '<div class="sender-label hidden text-[12px] font-semibold text-primary mb-2"></div>'}
+                    <div class="message-content select-text whitespace-pre-wrap" style="word-break: break-word;"></div>
                     ${isUser ? '' : `
                     <div class="reasoning-container hidden mt-3 p-3 rounded-2xl bg-black/20 border border-white/10">
                         <div class="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Thinking / 推理</div>
-                        <div class="reasoning-content whitespace-pre-wrap text-xs text-gray-300 leading-relaxed" style="word-break: break-word;"></div>
+                        <div class="reasoning-content select-text whitespace-pre-wrap text-xs text-gray-300 leading-relaxed" style="word-break: break-word;"></div>
                     </div>
                     `}
                 </div>
             `;
             
             const contentDiv = div.querySelector('.message-content');
-            contentDiv.textContent = text;
+            const parsedAssistant = isUser ? { text: text || '', imageUrls: [], videoUrls: [] } : parseAssistantImageUrls(text || '');
+            contentDiv.textContent = parsedAssistant.text;
+            const senderLabel = div.querySelector('.sender-label');
+            const senderName = (!isUser && typeof options.senderName === 'string') ? options.senderName.trim() : '';
+            if (senderLabel && senderName) {
+                senderLabel.classList.remove('hidden');
+                senderLabel.textContent = senderName;
+            }
 
-            if (files && files.length > 0) {
-                 const filesContainer = document.createElement('div');
-                 filesContainer.className = 'flex flex-wrap gap-2 mt-3';
-                 
-                 Array.from(files).forEach(file => {
-                     // Check if it's a File object or has type property
-                     const fileType = file.type || '';
-                     const isImage = fileType.startsWith('image/');
-                     
-                     if (isImage) {
-                         const img = document.createElement('img');
-                         img.className = 'max-w-full rounded-xl border border-black/10 dark:border-white/10 max-h-60 object-cover cursor-pointer hover:opacity-90 transition-opacity';
-                         img.onclick = () => window.open(img.src, '_blank');
-                         
-                         if (file instanceof File) {
-                            img.src = URL.createObjectURL(file);
-                            img.onload = () => {
-                                URL.revokeObjectURL(img.src);
-                                const chatContainer = document.getElementById('at-chat-messages');
-                                if (chatContainer) {
-                                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                                    // Double check scroll after a tiny delay for layout reflow
-                                    setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 50);
-                                }
-                            };
-                        } else if (file.data) {
-                             // If file has data (base64)
-                             img.src = file.data;
-                             // Scroll when image loads
-                             img.onload = () => {
-                                 const chatContainer = document.getElementById('at-chat-messages');
-                                 if (chatContainer) {
-                                     chatContainer.scrollTop = chatContainer.scrollHeight;
-                                     setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 50);
-                                 }
-                             };
-                         }
-                          filesContainer.appendChild(img);
-                      } else {
-                          const fileDiv = document.createElement('div');
-                          fileDiv.className = 'flex items-center gap-2 p-3 bg-black/10 dark:bg-white/10 rounded-xl text-xs font-mono border border-black/5 dark:border-white/5';
-                          fileDiv.innerHTML = `<svg class="w-4 h-4 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> <span class="truncate max-w-[150px]">${file.name}</span>`;
-                          filesContainer.appendChild(fileDiv);
-                      }
-                  });
-                  
-                  // Append files container inside the bubble, after the text content
-                  const bubble = div.querySelector('.p-5'); 
-                  if (bubble) {
-                      bubble.appendChild(filesContainer);
-                  }
-              }
+            const reasoningContainer = div.querySelector('.reasoning-container');
+            const reasoningDiv = div.querySelector('.reasoning-content');
+            const reasoningText = typeof options.reasoning === 'string' ? options.reasoning : '';
+            if (reasoningContainer && reasoningDiv && reasoningText) {
+                reasoningContainer.classList.remove('hidden');
+                reasoningDiv.textContent = reasoningText;
+            }
+
+            const bubble = div.querySelector('.p-5');
+            appendMediaToBubble(bubble, files, parsedAssistant.imageUrls, parsedAssistant.videoUrls);
 
             chatContainer.appendChild(div);
-            // Use requestAnimationFrame for scroll
-            requestAnimationFrame(() => {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-                // Double check for images
-                setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 100);
-            });
+            if (!options.skipScroll) {
+                requestAnimationFrame(() => {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 100);
+                });
+            }
             
             if (!isUser) {
                 currentMessageDiv = div;
             }
+            return div;
         }
 
-        function appendAgentText(text, isNew) {
-            const chatContainer = document.getElementById('at-chat-messages');
-            if (!chatContainer) return;
-            
-            // Remove loading indicator if exists
-            const loadingIndicator = document.getElementById('at-loading-indicator');
-            if (loadingIndicator) {
-                loadingIndicator.remove();
-            }
-            
-            if (isNew || !currentMessageDiv) {
-                appendMessage('assistant', '');
-            }
-
-            if (!currentMessageDiv) return;
-
-            const contentDiv = currentMessageDiv.querySelector('.message-content');
-            if (contentDiv) {
-                contentDiv.textContent += text;
-            }
-            // Use requestAnimationFrame to ensure scroll happens after layout update
-            requestAnimationFrame(() => {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-            });
-        }
-
-        function appendAgentReasoning(text, isNew) {
+        function renderAgentToolsChat(agentId) {
+            if (!agentId || currentAgentToolId !== agentId) return;
             const chatContainer = document.getElementById('at-chat-messages');
             if (!chatContainer) return;
 
-            const loadingIndicator = document.getElementById('at-loading-indicator');
-            if (loadingIndicator) {
-                loadingIndicator.remove();
-            }
+            const state = getAgentChatState(agentId);
+            chatContainer.innerHTML = '';
+            currentMessageDiv = null;
 
-            if (isNew || !currentMessageDiv) {
-                appendMessage('assistant', '');
-            }
-            if (!currentMessageDiv) return;
+            state.messages.forEach((msg) => {
+                appendMessage(msg.role, msg.content || '', msg.files || [], {
+                    reasoning: msg.reasoning || '',
+                    skipScroll: true
+                });
+            });
 
-            const reasoningContainer = currentMessageDiv.querySelector('.reasoning-container');
-            const reasoningDiv = currentMessageDiv.querySelector('.reasoning-content');
-            if (reasoningContainer) reasoningContainer.classList.remove('hidden');
-            if (reasoningDiv) reasoningDiv.textContent += text;
+            if (state.loading) {
+                showLoadingIndicator();
+            }
 
             requestAnimationFrame(() => {
                 chatContainer.scrollTop = chatContainer.scrollHeight;
+                setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
             });
+        }
+
+        function ensureStreamingAssistantMessage(agentId, isNew) {
+            const state = getAgentChatState(agentId);
+            const currentIndex = state.streamMessageIndex;
+            const current = Number.isInteger(currentIndex) ? state.messages[currentIndex] : null;
+            if (isNew || !current || current.role !== 'assistant') {
+                state.messages.push({ role: 'assistant', content: '', reasoning: '', files: [] });
+                state.streamMessageIndex = state.messages.length - 1;
+            }
+            return state;
+        }
+
+        function appendAgentText(agentId, text, isNew) {
+            if (typeof text !== 'string' || !text) return;
+            const state = ensureStreamingAssistantMessage(agentId, isNew);
+            const msg = state.messages[state.streamMessageIndex];
+            msg.content += text;
+            streamAgentTtsText(agentId, text, isNew);
+            state.loading = false;
+            if (currentAgentToolId === agentId) {
+                renderAgentToolsChat(agentId);
+            }
+        }
+
+        function appendAgentReasoning(agentId, text, isNew) {
+            if (typeof text !== 'string' || !text) return;
+            const state = ensureStreamingAssistantMessage(agentId, isNew);
+            const msg = state.messages[state.streamMessageIndex];
+            msg.reasoning += text;
+            state.loading = false;
+            if (currentAgentToolId === agentId) {
+                renderAgentToolsChat(agentId);
+            }
+        }
+
+        function finalizeAgentStream(agentId) {
+            const state = getAgentChatState(agentId);
+            finalizeAgentTtsStream(agentId);
+            state.inFlight = false;
+            state.loading = false;
+            state.streamMessageIndex = null;
+            if (currentAgentToolId === agentId) {
+                renderAgentToolsChat(agentId);
+            }
+            if (state.pendingQueue.length > 0) {
+                setTimeout(() => processAgentSendQueue(agentId), 0);
+            }
+        }
+
+        async function processAgentSendQueue(agentId) {
+            const state = getAgentChatState(agentId);
+            if (state.inFlight) return;
+            const payload = state.pendingQueue.shift();
+            if (!payload) return;
+
+            state.inFlight = true;
+            state.loading = true;
+            state.streamMessageIndex = null;
+            if (currentAgentToolId === agentId) {
+                renderAgentToolsChat(agentId);
+            }
+
+            try {
+                let socket = connectAgentToolsSocket(agentId);
+                socket = await waitForSocketOpen(socket);
+                if (currentAgentToolId === agentId) atSocket = socket;
+                socket.send(JSON.stringify(payload));
+            } catch (e) {
+                state.inFlight = false;
+                state.loading = false;
+                state.streamMessageIndex = null;
+                state.messages.push({
+                    role: 'assistant',
+                    content: `[Error: ${e.message}]`,
+                    reasoning: '',
+                    files: []
+                });
+                if (currentAgentToolId === agentId) {
+                    renderAgentToolsChat(agentId);
+                }
+                if (state.pendingQueue.length > 0) {
+                    setTimeout(() => processAgentSendQueue(agentId), 0);
+                }
+            }
         }
 
         function showLoadingIndicator() {
@@ -1556,74 +3415,278 @@
             }
         };
 
+        async function encodePendingFiles(files) {
+            if (!files || files.length === 0) return [];
+            const filePromises = Array.from(files).map(file => {
+                return new Promise((resolve) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve({
+                        name: file.name,
+                        type: file.type,
+                        data: e.target.result
+                    });
+                    reader.onerror = () => resolve({
+                        name: file.name,
+                        type: file.type,
+                        data: ''
+                    });
+                    reader.readAsDataURL(file);
+                });
+            });
+            return Promise.all(filePromises);
+        }
+
+        async function resetAgentToolsConversation(agentId, commandText = '/new') {
+            const normalizedCommand = (typeof commandText === 'string' ? commandText.trim() : '') || '/new';
+            const state = getAgentChatState(agentId);
+            finalizeAgentTtsStream(agentId);
+            state.messages = [{
+                role: 'user',
+                content: normalizedCommand,
+                reasoning: '',
+                files: []
+            }];
+            state.loading = false;
+            state.inFlight = false;
+            state.ttsStreamingActive = false;
+            state.streamMessageIndex = null;
+            state.historyLoaded = true;
+            state.pendingQueue = [];
+            if (currentAgentToolId === agentId) {
+                renderAgentToolsChat(agentId);
+            }
+
+            const res = await fetch(`/api/agents/${agentId}/history/reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: normalizedCommand })
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(body.error || 'reset failed');
+            }
+            if (body && body.remoteResetOk === false) {
+                throw new Error(body.remoteResetError || 'remote reset failed');
+            }
+            return body;
+        }
+
         window.sendAgentToolsMessage = async function() {
             const input = document.getElementById('at-chat-input');
-            const text = input.value.trim();
-            
-            if ((!text && atPendingFiles.length === 0) || !atSocket || atSocket.readyState !== WebSocket.OPEN) return;
-            
-            // Append User Message using shared function
-            appendMessage('user', text, atPendingFiles);
-            
-            // Prepare payload
-            const payload = { type: 'message', content: text, files: [] };
-            
-            if (atPendingFiles.length > 0) {
-                const filePromises = atPendingFiles.map(file => {
-                    return new Promise((resolve) => {
-                        const reader = new FileReader();
-                        reader.onload = (e) => resolve({
-                            name: file.name,
-                            type: file.type,
-                            data: e.target.result // Base64
-                        });
-                        reader.readAsDataURL(file);
-                    });
-                });
-                
-                payload.files = await Promise.all(filePromises);
+            const channelId = currentChannelId;
+            const agentId = currentAgentToolId;
+            const text = channelId ? getChannelComposerText() : (input ? input.value.trim() : '');
+            if (!channelId && !agentId) return;
+            if (!text && atPendingFiles.length === 0) return;
+
+            if (!channelId && text === '/new' && atPendingFiles.length === 0) {
+                if (input) {
+                    input.value = '';
+                    autosizeAgentToolsTextarea();
+                }
+                atPendingFiles = [];
+                const previewArea = document.getElementById('file-preview-area');
+                if (previewArea) previewArea.innerHTML = '';
+                try {
+                    await resetAgentToolsConversation(agentId, '/new');
+                } catch (e) {
+                    alert(`/new 失败: ${e.message}`);
+                }
+                return;
             }
-            
-            atSocket.send(JSON.stringify(payload));
-            
-            // Show loading indicator
-            showLoadingIndicator();
-            
-            // Reset
-            input.value = '';
-            input.style.height = '';
+
+            const payload = { type: 'message', content: text, files: [] };
+            payload.files = await encodePendingFiles(atPendingFiles);
+
+            if (channelId) {
+                const state = getChannelChatState(channelId);
+                const fallbackText = payload.files.length > 0
+                    ? `[Uploaded ${payload.files.length} file(s)]`
+                    : '';
+                state.messages.push({
+                    role: 'user',
+                    content: text || fallbackText,
+                    senderName: 'You',
+                    reasoning: '',
+                    files: payload.files
+                });
+                state.pendingQueue.push(payload);
+                renderAgentToolsChannelChat(channelId);
+
+                clearChannelComposer();
+                atPendingFiles = [];
+                const previewArea = document.getElementById('file-preview-area');
+                if (previewArea) previewArea.innerHTML = '';
+                currentMessageDiv = null;
+                processChannelSendQueue(channelId);
+                return;
+            }
+
+            const state = getAgentChatState(agentId);
+            state.messages.push({
+                role: 'user',
+                content: text,
+                reasoning: '',
+                files: payload.files
+            });
+            state.pendingQueue.push(payload);
+            renderAgentToolsChat(agentId);
+
+            if (input) {
+                input.value = '';
+                autosizeAgentToolsTextarea();
+            }
             atPendingFiles = [];
             const previewArea = document.getElementById('file-preview-area');
             if (previewArea) previewArea.innerHTML = '';
-            currentMessageDiv = null; 
+            currentMessageDiv = null;
+            processAgentSendQueue(agentId);
         };
 
-        function playAudioChunk(hexData) {
+        function hexToArrayBuffer(hexData) {
+            if (!hexData || typeof hexData !== 'string') return null;
+            const source = hexData.trim();
+            if (!source || source.length < 2 || (source.length % 2) !== 0) return null;
+            const byteLength = source.length / 2;
+            const bytes = new Uint8Array(byteLength);
+            for (let i = 0; i < byteLength; i++) {
+                const pos = i * 2;
+                const value = parseInt(source.slice(pos, pos + 2), 16);
+                if (Number.isNaN(value)) return null;
+                bytes[i] = value;
+            }
+            return bytes.buffer;
+        }
+
+        function ensureAgentToolsAudioContext() {
             if (!atAudioContext) {
                 atAudioContext = new (window.AudioContext || window.webkitAudioContext)();
             }
-            
-            const view = new Uint8Array(hexData.match(/[\da-f]{2}/gi).map(h => parseInt(h, 16)));
-            const buffer = view.buffer;
-            
-            atAudioContext.decodeAudioData(buffer, (decodedBuffer) => {
-                atAudioQueue.push(decodedBuffer);
-                if (!atIsPlaying) playNextChunk();
-            }, (e) => console.error("Error decoding audio", e));
+            if (atAudioContext.state === 'suspended') {
+                atAudioContext.resume().catch(() => {});
+            }
+            return atAudioContext;
         }
 
-        function playNextChunk() {
-            if (atAudioQueue.length === 0) {
-                atIsPlaying = false;
+        function scheduleDecodedAudioBuffer(decodedBuffer, generationAtEnqueue) {
+            if (!decodedBuffer || generationAtEnqueue !== atAudioGeneration) return;
+            ensureAgentToolsAudioContext();
+            if (atAudioIdleTimer) {
+                clearTimeout(atAudioIdleTimer);
+                atAudioIdleTimer = null;
+            }
+            const now = atAudioContext.currentTime;
+            if (atNextPlayTime <= 0) {
+                atNextPlayTime = now + AT_AUDIO_START_LEAD_SEC;
+            } else if (atNextPlayTime < now + 0.02) {
+                atNextPlayTime = now + AT_AUDIO_RECOVERY_LEAD_SEC;
+            }
+
+            const source = atAudioContext.createBufferSource();
+            source.buffer = decodedBuffer;
+            source.connect(atAudioContext.destination);
+            const startAt = atNextPlayTime;
+            atNextPlayTime += decodedBuffer.duration;
+            atIsPlaying = true;
+            atCurrentAudioSource = source;
+            atActiveAudioSources.add(source);
+            source.onended = () => {
+                atActiveAudioSources.delete(source);
+                if (atCurrentAudioSource === source) {
+                    atCurrentAudioSource = null;
+                }
+                if (atActiveAudioSources.size === 0) {
+                    atIsPlaying = false;
+                    if (atAudioIdleTimer) {
+                        clearTimeout(atAudioIdleTimer);
+                    }
+                    atAudioIdleTimer = setTimeout(() => {
+                        atAudioIdleTimer = null;
+                        if (atActiveAudioSources.size > 0 || atIncomingAudioHexQueue.length > 0) return;
+                        atNextPlayTime = 0;
+                        atAudioHasStarted = false;
+                    }, AT_AUDIO_IDLE_RESET_MS);
+                }
+            };
+            source.start(startAt);
+        }
+
+        function decodeAndScheduleAudioBatch(hexChunks) {
+            const chunks = Array.isArray(hexChunks) ? hexChunks.filter(Boolean) : [];
+            if (chunks.length === 0) return;
+            ensureAgentToolsAudioContext();
+            const generationAtEnqueue = atAudioGeneration;
+            const decodeBuffer = (arrayBuffer) => new Promise((resolve, reject) => {
+                atAudioContext.decodeAudioData(arrayBuffer, resolve, reject);
+            });
+
+            atDecodeChain = atDecodeChain
+                .then(async () => {
+                    if (generationAtEnqueue !== atAudioGeneration) return;
+                    const combined = chunks.join('');
+                    const combinedBuffer = hexToArrayBuffer(combined);
+                    if (combinedBuffer) {
+                        try {
+                            const decoded = await decodeBuffer(combinedBuffer);
+                            scheduleDecodedAudioBuffer(decoded, generationAtEnqueue);
+                            return;
+                        } catch (_) {
+                            // fallback to chunk-by-chunk decode
+                        }
+                    }
+
+                    for (const chunk of chunks) {
+                        if (generationAtEnqueue !== atAudioGeneration) return;
+                        const arr = hexToArrayBuffer(chunk);
+                        if (!arr) continue;
+                        try {
+                            const decoded = await decodeBuffer(arr);
+                            scheduleDecodedAudioBuffer(decoded, generationAtEnqueue);
+                        } catch (e) {
+                            console.error("Error decoding audio chunk", e);
+                        }
+                    }
+                })
+                .catch((e) => {
+                    if (generationAtEnqueue === atAudioGeneration) {
+                        console.error("Error decoding audio batch", e);
+                    }
+                });
+        }
+
+        function flushQueuedAudioChunks() {
+            if (atAudioBatchTimer) {
+                clearTimeout(atAudioBatchTimer);
+                atAudioBatchTimer = null;
+            }
+            if (!atIncomingAudioHexQueue.length) return;
+            const chunks = atIncomingAudioHexQueue.splice(0, atIncomingAudioHexQueue.length);
+            atAudioHasStarted = true;
+            decodeAndScheduleAudioBatch(chunks);
+        }
+
+        function enqueueAudioHexChunk(hexData) {
+            if (!hexData || typeof hexData !== 'string') return;
+            if (atAudioIdleTimer) {
+                clearTimeout(atAudioIdleTimer);
+                atAudioIdleTimer = null;
+            }
+            atIncomingAudioHexQueue.push(hexData);
+
+            if (!atAudioHasStarted) {
+                if (atIncomingAudioHexQueue.length >= AT_AUDIO_INITIAL_BUFFER_CHUNKS) {
+                    flushQueuedAudioChunks();
+                    return;
+                }
+                if (!atAudioBatchTimer) {
+                    atAudioBatchTimer = setTimeout(flushQueuedAudioChunks, AT_AUDIO_INITIAL_BUFFER_TIMEOUT_MS);
+                }
                 return;
             }
-            atIsPlaying = true;
-            const buffer = atAudioQueue.shift();
-            const source = atAudioContext.createBufferSource();
-            source.buffer = buffer;
-            source.connect(atAudioContext.destination);
-            source.onended = playNextChunk;
-            source.start(0);
+
+            if (!atAudioBatchTimer) {
+                atAudioBatchTimer = setTimeout(flushQueuedAudioChunks, AT_AUDIO_BATCH_DELAY_MS);
+            }
         }
         
         document.addEventListener('DOMContentLoaded', () => {
@@ -1636,11 +3699,137 @@
             document.addEventListener('click', (e) => {
                 const root = document.getElementById('profile-menu-root');
                 const menu = document.getElementById('profile-dropdown');
-                if (!root || !menu) return;
-                if (!root.contains(e.target)) {
+                if (root && menu && !root.contains(e.target)) {
                     menu.classList.add('hidden');
                 }
+                const mentionPopup = getMentionPopupElement();
+                const mentionInput = getChannelInputElement();
+                const mentionInputWrap = document.getElementById('at-channel-input-wrap');
+                if (mentionPopup && mentionInput) {
+                    const inside = mentionPopup.contains(e.target)
+                        || mentionInput.contains(e.target)
+                        || (mentionInputWrap && mentionInputWrap.contains(e.target));
+                    if (!inside) hideMentionPopup();
+                }
             });
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Alt') atAltPressed = true;
+            });
+            document.addEventListener('keyup', (event) => {
+                if (event.key === 'Alt') atAltPressed = false;
+            });
+            window.addEventListener('blur', () => {
+                atAltPressed = false;
+            });
+
+            const mentionInput = getChannelInputElement();
+            if (mentionInput) {
+                mentionInput.addEventListener('compositionstart', () => {
+                    atChannelComposing = true;
+                });
+                mentionInput.addEventListener('compositionend', () => {
+                    atChannelComposing = false;
+                    updateMentionPopupFromCaret();
+                });
+                mentionInput.addEventListener('input', () => {
+                    updateMentionPopupFromCaret();
+                });
+                mentionInput.addEventListener('click', () => {
+                    updateMentionPopupFromCaret();
+                });
+                mentionInput.addEventListener('paste', (event) => {
+                    event.preventDefault();
+                    const text = (event.clipboardData || window.clipboardData).getData('text') || '';
+                    if (!text) return;
+                    document.execCommand('insertText', false, text);
+                    updateMentionPopupFromCaret();
+                });
+                mentionInput.addEventListener('keydown', (event) => {
+                    const hasModifier = !!(
+                        event.shiftKey ||
+                        event.altKey ||
+                        event.ctrlKey ||
+                        event.metaKey ||
+                        atAltPressed ||
+                        (typeof event.getModifierState === 'function' && event.getModifierState('AltGraph'))
+                    );
+                    if (event.key === 'ArrowDown' && atMentionPopupVisible) {
+                        event.preventDefault();
+                        moveMentionSelection(1);
+                        return;
+                    }
+                    if (event.key === 'ArrowUp' && atMentionPopupVisible) {
+                        event.preventDefault();
+                        moveMentionSelection(-1);
+                        return;
+                    }
+                    if ((event.key === 'Tab' || (event.key === 'Enter' && !hasModifier)) && atMentionPopupVisible) {
+                        event.preventDefault();
+                        commitSelectedMention();
+                        return;
+                    }
+                    if (event.key === 'Escape' && atMentionPopupVisible) {
+                        event.preventDefault();
+                        hideMentionPopup();
+                        return;
+                    }
+
+                    if (event.key === 'Backspace' && removeMentionNearCaret('backward')) {
+                        event.preventDefault();
+                        return;
+                    }
+                    if (event.key === 'Delete' && removeMentionNearCaret('forward')) {
+                        event.preventDefault();
+                        return;
+                    }
+
+                    if (event.key === 'Enter' && hasModifier) {
+                        event.preventDefault();
+                        document.execCommand('insertLineBreak');
+                        updateMentionPopupFromCaret();
+                        return;
+                    }
+
+                    if (event.key === 'Enter' && !hasModifier) {
+                        if (atChannelComposing || event.isComposing || event.keyCode === 229 || event.which === 229) return;
+                        event.preventDefault();
+                        sendAgentToolsMessage();
+                    }
+                });
+            }
+            const atTextInput = getAgentTextInputElement();
+            if (atTextInput) {
+                atTextInput.addEventListener('input', () => {
+                    autosizeAgentToolsTextarea();
+                });
+                atTextInput.addEventListener('keydown', (event) => {
+                    const hasModifier = !!(
+                        event.shiftKey ||
+                        event.altKey ||
+                        event.ctrlKey ||
+                        event.metaKey ||
+                        atAltPressed ||
+                        (typeof event.getModifierState === 'function' && event.getModifierState('AltGraph'))
+                    );
+                    if (event.key === 'Enter' && hasModifier) {
+                        setTimeout(() => autosizeAgentToolsTextarea(), 0);
+                        return;
+                    }
+                    if (event.key === 'Enter' && !hasModifier) {
+                        if (event.isComposing || event.keyCode === 229 || event.which === 229) return;
+                        event.preventDefault();
+                        sendAgentToolsMessage();
+                    }
+                });
+                autosizeAgentToolsTextarea();
+            }
+            window.addEventListener('resize', () => {
+                if (window.location.hash === '#agenttools' && currentChannelId) {
+                    applyAgentToolsLayoutMode();
+                    renderAgentToolsChannelChat(currentChannelId);
+                }
+            });
+            refreshAgentToolsSoundAvailability();
             fetchAgents();
         });
     </script>
@@ -1727,6 +3916,15 @@
         </div>
         <div id="sidebar-agent-list" class="px-4 space-y-1">
             <!-- Dynamic Agent List -->
+        </div>
+        <div class="px-6 pt-5 pb-3 flex items-center justify-between">
+            <span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Channels</span>
+            <button class="material-icons-outlined text-gray-500 text-sm hover:text-primary transition-colors"
+                    title="Create Channel"
+                    onclick="openChannelCreateModal()">add</button>
+        </div>
+        <div id="sidebar-channel-list" class="px-4 space-y-1">
+            <div class="px-3 py-2 text-xs text-gray-600">No channels yet</div>
         </div>
         <div class="mt-auto px-4 py-6">
             <a class="flex items-center gap-3 px-4 py-3 text-gray-600 cursor-not-allowed rounded-xl transition-colors opacity-50 pointer-events-none" href="javascript:void(0)">
@@ -1821,7 +4019,7 @@
         <!-- Agent Tools View -->
         <div id="agenttools-view" class="absolute inset-0 overflow-hidden hidden bg-dark-bg z-20 flex">
             <!-- Column 1: Brain & Logic -->
-            <div class="w-1/4 border-r border-white/5 p-6 flex flex-col gap-6 overflow-y-auto glass-panel border-t-0 border-b-0 border-l-0">
+            <div id="at-col-brain" class="w-1/4 border-r border-white/5 p-6 flex flex-col gap-6 overflow-y-auto glass-panel border-t-0 border-b-0 border-l-0">
                 <h2 class="text-xl font-bold text-primary flex items-center gap-2 mb-2">
                     <span class="material-icons-round">psychology</span> Brain & Logic
                 </h2>
@@ -1841,14 +4039,20 @@
             </div>
 
             <!-- Column 2: Avatar & Chat -->
-            <div class="w-2/4 border-r border-white/5 flex flex-col relative bg-gradient-to-b from-gray-900 to-black">
+            <div id="at-col-chat" class="w-2/4 border-r border-white/5 flex flex-col relative bg-gradient-to-b from-gray-900 to-black">
                 <!-- Avatar Display -->
-                <div class="flex-1 relative overflow-hidden flex items-center justify-center p-8">
+                <div id="at-chat-stage" class="flex-1 relative overflow-hidden flex items-center justify-center p-8">
                     <div id="at-avatar-container" class="relative w-full h-full max-w-lg max-h-[700px] rounded-[2rem] overflow-hidden shadow-2xl border border-white/10 group bg-black/50">
-                         <img id="at-avatar-img" src="" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 opacity-50" alt="Agent Avatar" style="display:none;">
+                         <img id="at-avatar-img" src="" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-[1.02] opacity-90" alt="Agent Avatar" style="display:none;">
                          <div id="at-avatar-placeholder" class="w-full h-full flex items-center justify-center text-gray-700 text-6xl font-bold bg-black/50">?</div>
                          
-                         <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-90"></div>
+                         <div id="at-avatar-overlay" class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent opacity-70"></div>
+                         <div id="at-channel-banner" class="hidden absolute inset-x-0 top-0 z-20 px-6 py-4 bg-black/50 backdrop-blur-md border-b border-white/10">
+                             <div class="text-sm text-primary font-semibold">Channel</div>
+                             <div id="at-channel-banner-title" class="text-white font-bold mt-0.5">-</div>
+                             <div id="at-channel-banner-members" class="text-xs text-gray-400 mt-1">-</div>
+                         </div>
+                         <div id="at-channel-member-strip" class="hidden absolute right-0 top-0 bottom-0 w-64 z-10 bg-black/30 border-l border-white/10"></div>
                          
                          <!-- Chat Overlay -->
                          <div id="at-chat-messages" class="absolute inset-x-0 bottom-0 top-0 p-6 overflow-y-auto space-y-4 scroll-smooth pt-20">
@@ -1860,6 +4064,15 @@
 
                 <!-- Chat Input -->
                 <div class="p-6 bg-black/80 backdrop-blur-md border-t border-white/5 z-10">
+                     <div id="at-sound-toggle-wrap" class="hidden max-w-3xl mx-auto mb-3 flex justify-center">
+                         <button id="at-sound-toggle-btn"
+                                 type="button"
+                                 onclick="toggleAgentToolsSound()"
+                                 class="inline-flex items-center gap-2 h-9 px-4 rounded-full border bg-white/5 text-gray-300 border-white/10 hover:bg-white/10 transition-colors">
+                             <span id="at-sound-toggle-icon" class="material-icons-round text-[18px]">volume_off</span>
+                             <span id="at-sound-toggle-text" class="text-sm font-medium">Enable Sound</span>
+                         </button>
+                     </div>
                      <div class="relative max-w-3xl mx-auto flex items-end gap-3">
                          <!-- File Upload Button -->
                          <button class="w-14 h-14 flex items-center justify-center flex-shrink-0 bg-white/5 hover:bg-white/10 rounded-full transition-colors text-gray-400 hover:text-white border border-transparent hover:border-white/10" onclick="document.getElementById('at-file-input').click()" title="Upload files">
@@ -1871,14 +4084,35 @@
                               ondragover="event.preventDefault(); this.classList.add('border-primary', 'bg-white/10')"
                               ondragleave="this.classList.remove('border-primary', 'bg-white/10')"
                               ondrop="event.preventDefault(); this.classList.remove('border-primary', 'bg-white/10'); handleFileUpload(event.dataTransfer.files)">
+                             <div id="at-mention-popup" class="mention-popup hidden"></div>
                              <div id="file-preview-area" class="flex flex-wrap gap-2 p-3 pb-0 empty:hidden"></div>
                              <textarea id="at-chat-input" 
-                                    class="w-full bg-transparent border-none px-6 py-4 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none max-h-32 min-h-[56px] leading-normal"
+                                    class="w-full bg-transparent border-none px-6 py-4 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none h-14 min-h-[56px] max-h-[104px] leading-6 overflow-y-hidden box-border"
                                     placeholder="Message agent..."
                                     rows="1"
-                                    disabled
-                                    oninput="this.style.height = ''; this.style.height = this.scrollHeight + 'px'"
-                                    onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendAgentToolsMessage(); }"></textarea>
+                                    disabled></textarea>
+                             <div id="at-channel-input-wrap" class="hidden w-full px-6">
+                                 <div class="flex items-center gap-2">
+                                     <div class="flex items-center gap-2 pr-2">
+                                         <button type="button"
+                                                 class="channel-shortcut-btn"
+                                                 onclick="openChannelMentionPicker('mention')"
+                                                 title="Mention member">
+                                             @
+                                         </button>
+                                         <button type="button"
+                                                 class="channel-shortcut-btn"
+                                                 onclick="openChannelMentionPicker('next')"
+                                                 title="Insert next speaker">
+                                             &gt;
+                                         </button>
+                                     </div>
+                                     <div id="at-channel-input"
+                                          class="channel-mention-input text-white leading-normal flex-1"
+                                          contenteditable="false"
+                                          data-placeholder="Message channel..."></div>
+                                 </div>
+                             </div>
                          </div>
                          
                          <button id="at-send-btn" class="w-14 h-14 flex items-center justify-center flex-shrink-0 bg-primary hover:bg-primaryHover text-black rounded-full transition-all shadow-neon hover:shadow-neon-strong disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105 active:scale-95" onclick="sendAgentToolsMessage()" disabled>
@@ -1889,7 +4123,7 @@
             </div>
 
             <!-- Column 3: Connectivity -->
-            <div class="w-1/4 p-6 flex flex-col gap-8 overflow-y-auto glass-panel border-t-0 border-b-0 border-r-0 bg-gray-900/30">
+            <div id="at-col-connectivity" class="w-1/4 p-6 flex flex-col gap-8 overflow-y-auto glass-panel border-t-0 border-b-0 border-r-0 bg-gray-900/30">
                 <!-- Social Channels -->
                 <div class="space-y-4 flex flex-col max-h-[40%]">
                     <h2 class="text-xl font-bold text-blue-400 flex items-center gap-2 mb-2 shrink-0">
@@ -2129,6 +4363,47 @@
             </button>
             <button id="room-create-btn" onclick="confirmCreateRoom()" class="flex-1 py-3 rounded-xl bg-primary hover:bg-primaryHover text-black font-bold transition-colors shadow-lg shadow-primary/20">
                 Create Room
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Channel Create Modal -->
+<div id="channel-create-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeChannelCreateModal()"></div>
+    <div class="relative w-full max-w-xl bg-[#0a0a0a] rounded-3xl p-6 border border-white/10 shadow-2xl mx-4 animate-scale-in">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                <span class="material-icons-round text-primary">groups</span>
+                Create Channel
+            </h3>
+            <button class="text-gray-400 hover:text-white" onclick="closeChannelCreateModal()">
+                <span class="material-icons-round">close</span>
+            </button>
+        </div>
+        <div class="space-y-4">
+            <div>
+                <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block mb-1">Channel Name *</label>
+                <input id="channel-name-input"
+                       type="text"
+                       maxlength="60"
+                       placeholder="e.g. Product Council"
+                       class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 outline-none transition-colors" />
+            </div>
+            <div>
+                <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block mb-2">Select Agents (2+)</label>
+                <div id="channel-agent-pick-list" class="max-h-64 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
+                    <div class="text-xs text-gray-500">No agents available.</div>
+                </div>
+            </div>
+            <p id="channel-create-error" class="text-red-400 text-sm hidden"></p>
+        </div>
+        <div class="flex gap-3 mt-6">
+            <button onclick="closeChannelCreateModal()" class="flex-1 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-colors border border-white/5">
+                Cancel
+            </button>
+            <button id="channel-create-btn" onclick="confirmCreateChannel()" class="flex-1 py-3 rounded-xl bg-primary hover:bg-primaryHover text-black font-bold transition-colors shadow-lg shadow-primary/20">
+                Create
             </button>
         </div>
     </div>

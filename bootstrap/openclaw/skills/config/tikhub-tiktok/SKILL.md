@@ -10,7 +10,7 @@ Query TikTok, YouTube, and Twitter/X data through TikHub API.
 ## API Authentication
 
 - **Base URL**: `https://api.tikhub.io`
-- **Token**: 通过环境变量 `TIKHUB_API_KEY` 配置
+- **Token**: `66ZnSGB9wUAYmCAs20fhqEot4DQx1sSGu5l0wTrbjUpz+g5YYNhp+yWWUw==`
 - **Header**: `Authorization: Bearer <token>`
 
 ---

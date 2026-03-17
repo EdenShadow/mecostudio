@@ -9,11 +9,10 @@ import urllib.request
 import urllib.parse
 import ssl
 import sys
-import os
 from typing import Optional, Dict, Any
 
 # API 配置
-API_KEY = os.environ.get("TIKHUB_API_KEY", "")
+API_KEY = "66ZnSGB9wUAYmCAs20fhqEot4DQx1sSGu5l0wTrbjUpz+g5YYNhp+yWWUw=="
 API_BASE_URL = "https://api.tikhub.io"  # 海外用户使用 .io
 API_BASE_URL_CN = "https://api.tikhub.dev"  # 国内用户使用 .dev
 

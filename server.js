@@ -1031,6 +1031,313 @@ function appendAgentToolsHistory(agentId, role, content) {
   saveAgentToolsHistory(agentId);
 }
 
+function clearAgentToolsHistory(agentId) {
+  const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() : '';
+  if (!normalizedAgentId) return;
+  agentToolsHistoryCache[normalizedAgentId] = [];
+  saveAgentToolsHistory(normalizedAgentId);
+}
+
+const AGENT_CHANNELS_FILE = path.join(MEMORY_DIR, 'agent-channels.json');
+const AGENT_CHANNEL_HISTORY_DIR = path.join(MEMORY_DIR, 'agent-channel-history');
+const AGENT_CHANNEL_HISTORY_LIMIT = 200;
+if (!fs.existsSync(AGENT_CHANNEL_HISTORY_DIR)) {
+  fs.mkdirSync(AGENT_CHANNEL_HISTORY_DIR, { recursive: true });
+}
+let agentChannelsCache = null;
+const agentChannelHistoryCache = {};
+
+function normalizeAgentChannel(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const membersRaw = Array.isArray(raw.agentIds) ? raw.agentIds : [];
+  const agentIds = Array.from(new Set(
+    membersRaw
+      .map((x) => typeof x === 'string' ? x.trim() : '')
+      .filter(Boolean)
+  ));
+  if (!id || !name || agentIds.length === 0) return null;
+  return {
+    id,
+    name,
+    agentIds,
+    createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString(),
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString()
+  };
+}
+
+function loadAgentChannelsFromFile() {
+  try {
+    if (!fs.existsSync(AGENT_CHANNELS_FILE)) return [];
+    const raw = JSON.parse(fs.readFileSync(AGENT_CHANNELS_FILE, 'utf-8') || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw.map(normalizeAgentChannel).filter(Boolean);
+  } catch (e) {
+    console.warn(`[AgentChannels] Failed to load channels: ${e.message}`);
+    return [];
+  }
+}
+
+function getAgentChannels() {
+  if (!Array.isArray(agentChannelsCache)) {
+    agentChannelsCache = loadAgentChannelsFromFile();
+  }
+  return agentChannelsCache;
+}
+
+function saveAgentChannels() {
+  try {
+    const payload = Array.isArray(agentChannelsCache) ? agentChannelsCache : [];
+    fs.writeFileSync(AGENT_CHANNELS_FILE, JSON.stringify(payload, null, 2));
+  } catch (e) {
+    console.warn(`[AgentChannels] Failed to save channels: ${e.message}`);
+  }
+}
+
+function findAgentChannelById(channelId) {
+  const id = typeof channelId === 'string' ? channelId.trim() : '';
+  if (!id) return null;
+  return getAgentChannels().find((c) => c.id === id) || null;
+}
+
+function getAgentDisplayName(agentId) {
+  const id = typeof agentId === 'string' ? agentId.trim() : '';
+  if (!id) return '';
+  const runtimeAgent = AGENTS[id];
+  if (runtimeAgent) {
+    return runtimeAgent.displayName || runtimeAgent.name || id;
+  }
+  try {
+    const scanned = scanOpenClawAgents();
+    if (scanned && scanned[id]) {
+      return scanned[id].displayName || scanned[id].name || id;
+    }
+  } catch (_) {}
+  return id;
+}
+
+function extractNextDirectives(text) {
+  const source = typeof text === 'string' ? text : '';
+  if (!source) return [];
+  const regex = /\{next[:：]\s*["'“”‘’]?([^}"'“”‘’]+)["'“”‘’]?\s*\}/gi;
+  const names = [];
+  let match = null;
+  while ((match = regex.exec(source)) !== null) {
+    const raw = (match[1] || '').trim();
+    if (!raw) continue;
+    if (!names.includes(raw)) {
+      names.push(raw);
+    }
+  }
+  return names;
+}
+
+function escapeRegexLiteral(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function resolveChannelDesignatedAgents(messageText, channelMembers) {
+  const directives = extractNextDirectives(messageText);
+  if (!Array.isArray(channelMembers) || channelMembers.length === 0 || directives.length === 0) {
+    return [];
+  }
+
+  const normalizedMembers = channelMembers.map((id) => {
+    const displayName = getAgentDisplayName(id) || id;
+    return {
+      id,
+      idLower: String(id || '').trim().toLowerCase(),
+      displayName,
+      displayLower: String(displayName || '').trim().toLowerCase()
+    };
+  });
+
+  const resolved = new Set();
+  directives.forEach((directive) => {
+    const needle = String(directive || '').trim().toLowerCase();
+    if (!needle) return;
+
+    // 1) Exact match on displayName / id
+    let target = normalizedMembers.find((m) => m.displayLower === needle || m.idLower === needle);
+
+    // 2) Fallback: partial match for user-typed abbreviated names
+    if (!target) {
+      target = normalizedMembers.find((m) => m.displayLower.includes(needle) || needle.includes(m.displayLower));
+    }
+
+    if (target) {
+      resolved.add(target.id);
+    }
+  });
+
+  // Keep original member order
+  return channelMembers.filter((id) => resolved.has(id));
+}
+
+function resolveChannelMentionedAgents(messageText, channelMembers) {
+  const source = typeof messageText === 'string' ? messageText : '';
+  if (!source || !Array.isArray(channelMembers) || channelMembers.length === 0) {
+    return [];
+  }
+
+  const normalizedMembers = channelMembers.map((id) => {
+    const displayName = getAgentDisplayName(id) || id;
+    return {
+      id,
+      displayName: String(displayName || '').trim(),
+      agentId: String(id || '').trim()
+    };
+  });
+
+  const resolved = new Set();
+  for (const member of normalizedMembers) {
+    const candidates = Array.from(new Set([member.displayName, member.agentId].filter(Boolean)));
+    const hit = candidates.some((candidate) => {
+      const escaped = escapeRegexLiteral(candidate).replace(/\s+/g, '\\s+');
+      if (!escaped) return false;
+      // Match @Name / @AgentId with boundary on both sides, avoid matching emails/tokens.
+      const pattern = new RegExp(`(^|[^A-Za-z0-9_])@${escaped}(?=$|[^A-Za-z0-9_])`, 'i');
+      return pattern.test(source);
+    });
+    if (hit) resolved.add(member.id);
+  }
+
+  return channelMembers.filter((id) => resolved.has(id));
+}
+
+function serializeAgentChannel(channel) {
+  const normalized = normalizeAgentChannel(channel);
+  if (!normalized) return null;
+  return {
+    ...normalized,
+    members: normalized.agentIds.map((agentId) => ({
+      id: agentId,
+      name: getAgentDisplayName(agentId)
+    }))
+  };
+}
+
+function touchAgentChannel(channelId) {
+  const channel = findAgentChannelById(channelId);
+  if (!channel) return;
+  channel.updatedAt = new Date().toISOString();
+  saveAgentChannels();
+}
+
+function getAgentChannelHistoryPath(channelId) {
+  return path.join(AGENT_CHANNEL_HISTORY_DIR, `${channelId}.json`);
+}
+
+function normalizeAgentChannelHistoryItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const role = item.role === 'assistant' ? 'assistant' : (item.role === 'user' ? 'user' : null);
+  if (!role) return null;
+  const content = typeof item.content === 'string' ? item.content.trim() : '';
+  if (!content) return null;
+  const agentId = typeof item.agentId === 'string' ? item.agentId.trim() : '';
+  const senderName = typeof item.senderName === 'string'
+    ? item.senderName.trim()
+    : (typeof item.agentName === 'string' ? item.agentName.trim() : '');
+  const reasoning = typeof item.reasoning === 'string' ? item.reasoning : '';
+  return {
+    role,
+    content,
+    agentId: agentId || undefined,
+    senderName: senderName || undefined,
+    reasoning: reasoning || undefined,
+    timestamp: typeof item.timestamp === 'string' ? item.timestamp : new Date().toISOString()
+  };
+}
+
+function loadAgentChannelHistoryFromFile(channelId) {
+  const filePath = getAgentChannelHistoryPath(channelId);
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8') || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map(normalizeAgentChannelHistoryItem)
+      .filter(Boolean)
+      .slice(-AGENT_CHANNEL_HISTORY_LIMIT);
+  } catch (e) {
+    console.warn(`[AgentChannels] Failed to load history for ${channelId}: ${e.message}`);
+    return [];
+  }
+}
+
+function getAgentChannelHistory(channelId) {
+  const id = typeof channelId === 'string' ? channelId.trim() : '';
+  if (!id) return [];
+  if (!agentChannelHistoryCache[id]) {
+    agentChannelHistoryCache[id] = loadAgentChannelHistoryFromFile(id);
+  }
+  return agentChannelHistoryCache[id];
+}
+
+function saveAgentChannelHistory(channelId) {
+  const id = typeof channelId === 'string' ? channelId.trim() : '';
+  if (!id) return;
+  try {
+    const history = (agentChannelHistoryCache[id] || []).slice(-AGENT_CHANNEL_HISTORY_LIMIT);
+    fs.writeFileSync(getAgentChannelHistoryPath(id), JSON.stringify(history, null, 2));
+  } catch (e) {
+    console.warn(`[AgentChannels] Failed to save history for ${id}: ${e.message}`);
+  }
+}
+
+function appendAgentChannelHistory(channelId, item) {
+  const id = typeof channelId === 'string' ? channelId.trim() : '';
+  if (!id) return;
+  const normalized = normalizeAgentChannelHistoryItem(item);
+  if (!normalized) return;
+  const history = getAgentChannelHistory(id);
+  history.push(normalized);
+  if (history.length > AGENT_CHANNEL_HISTORY_LIMIT) {
+    history.splice(0, history.length - AGENT_CHANNEL_HISTORY_LIMIT);
+  }
+  saveAgentChannelHistory(id);
+}
+
+function clearAgentChannelHistory(channelId) {
+  const id = typeof channelId === 'string' ? channelId.trim() : '';
+  if (!id) return;
+  agentChannelHistoryCache[id] = [];
+  saveAgentChannelHistory(id);
+}
+
+function saveUploadedFilesAndBuildContext(files) {
+  const uploads = Array.isArray(files) ? files : [];
+  if (uploads.length === 0) {
+    return { savedFiles: [], fileNames: '' };
+  }
+  const uploadsDir = path.join(__dirname, 'public', 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+  const savedFiles = [];
+  const fileNames = uploads
+    .map((f) => (f && typeof f.name === 'string') ? f.name : '')
+    .filter(Boolean)
+    .join(', ');
+
+  uploads.forEach((f) => {
+    if (!f || typeof f.data !== 'string') return;
+    try {
+      const matches = f.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (!matches || matches.length !== 3) return;
+      const buffer = Buffer.from(matches[2], 'base64');
+      const safeName = ((typeof f.name === 'string' ? f.name : 'upload.bin').replace(/[^a-zA-Z0-9.-]/g, '_'));
+      const filePath = path.join(uploadsDir, `${Date.now()}_${safeName}`);
+      fs.writeFileSync(filePath, buffer);
+      savedFiles.push(filePath);
+    } catch (e) {
+      console.warn(`[Upload] Failed to save file ${(f && f.name) || 'unknown'}: ${e.message}`);
+    }
+  });
+  return { savedFiles, fileNames };
+}
+
 // 保存记忆到文件
 function saveMemoryToFile(agentId) {
   const filePath = path.join(MEMORY_DIR, `${agentId}.json`);
@@ -3012,7 +3319,16 @@ You are currently in a roundtable discussion.
 
 **STRICT RULE:** You may ONLY address or ask questions to the attendees listed above.
 Do NOT address Bill Gates, Kobe Bryant, Steve Jobs, or anyone else UNLESS they are in the list above.
-Ignore any examples in this file that mention other names.`;
+Ignore any examples in this file that mention other names.
+
+## Next-Speaker Protocol
+
+- If a message contains \`{next: "Name"}\` and **Name is not you**, do not jump in. Let that person handle this turn.
+- If **Name is you**, first read the full context/question from the person who called on you, then decide whether to reply.
+- If you reply, answer that person's point directly before expanding to anything else.
+- If a message contains \`@Name\` and Name is not you, do not jump in. Let the @mentioned person handle this turn.
+- If you are @mentioned, read the caller's context first. You may decide whether to reply (recommended to reply); if you reply, answer the caller first.
+- If no \`{next: ...}\` appears, follow the normal turn order.`;
 
                 fs.writeFileSync(soulPath, content + context, 'utf-8');
                 console.log(`[Roundtable] Updated SOUL.md for ${id} with context: ${otherNames.join(', ')}`);
@@ -5648,6 +5964,95 @@ app.post('/api/room/:channelId/preload', (req, res) => {
 
 // === Agent Tools APIs ===
 
+app.get('/api/agent-channels', (req, res) => {
+    const channels = getAgentChannels()
+        .map((c) => serializeAgentChannel(c))
+        .filter(Boolean)
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    res.json({ channels });
+});
+
+app.post('/api/agent-channels', (req, res) => {
+    const name = (req.body && typeof req.body.name === 'string') ? req.body.name.trim() : '';
+    const incomingAgentIds = Array.isArray(req.body && req.body.agentIds) ? req.body.agentIds : [];
+    const uniqIds = Array.from(new Set(
+        incomingAgentIds
+            .map((x) => typeof x === 'string' ? x.trim() : '')
+            .filter(Boolean)
+    ));
+
+    if (!name) {
+        return res.status(400).json({ error: 'channel name is required' });
+    }
+    if (uniqIds.length < 2) {
+        return res.status(400).json({ error: 'at least 2 agents are required' });
+    }
+
+    const scanned = scanOpenClawAgents();
+    const knownAgents = new Set([...Object.keys(AGENTS), ...Object.keys(scanned || {})]);
+    const validAgentIds = uniqIds.filter((id) => knownAgents.has(id));
+    if (validAgentIds.length < 2) {
+        return res.status(400).json({ error: 'selected agents are invalid or unavailable' });
+    }
+
+    const channels = getAgentChannels();
+    const existed = channels.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (existed) {
+        return res.status(409).json({ error: 'channel name already exists' });
+    }
+
+    const now = new Date().toISOString();
+    const channel = {
+        id: `ch_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        agentIds: validAgentIds,
+        createdAt: now,
+        updatedAt: now
+    };
+    channels.push(channel);
+    saveAgentChannels();
+
+    res.json({
+        success: true,
+        channel: serializeAgentChannel(channel)
+    });
+});
+
+app.delete('/api/agent-channels/:id', (req, res) => {
+    const channelId = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+    if (!channelId) {
+        return res.status(400).json({ error: 'channel id is required' });
+    }
+    const channels = getAgentChannels();
+    const idx = channels.findIndex((c) => c.id === channelId);
+    if (idx === -1) {
+        return res.status(404).json({ error: 'channel not found' });
+    }
+    channels.splice(idx, 1);
+    saveAgentChannels();
+
+    clearAgentChannelHistory(channelId);
+    const historyPath = getAgentChannelHistoryPath(channelId);
+    try {
+        if (fs.existsSync(historyPath)) fs.unlinkSync(historyPath);
+    } catch (_) {}
+
+    res.json({ success: true });
+});
+
+app.get('/api/agent-channels/:id/history', (req, res) => {
+    const channelId = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+    if (!channelId) {
+        return res.status(400).json({ error: 'channel id is required' });
+    }
+    const channel = findAgentChannelById(channelId);
+    if (!channel) {
+        return res.status(404).json({ error: 'channel not found' });
+    }
+    const history = getAgentChannelHistory(channelId).slice(-AGENT_CHANNEL_HISTORY_LIMIT);
+    res.json({ history });
+});
+
 // Get Agent Details
 app.get('/api/agents/:id', (req, res) => {
     const { id } = req.params;
@@ -5964,6 +6369,92 @@ app.get('/api/agents/:id/history', async (req, res) => {
     res.json({ history: history.slice(-20) });
 });
 
+const agentToolsSocketsByAgent = new Map();
+
+function trackAgentToolsSocket(agentId, ws) {
+    if (!agentId || !ws) return;
+    if (!agentToolsSocketsByAgent.has(agentId)) {
+        agentToolsSocketsByAgent.set(agentId, new Set());
+    }
+    agentToolsSocketsByAgent.get(agentId).add(ws);
+}
+
+function untrackAgentToolsSocket(agentId, ws) {
+    if (!agentId || !ws) return;
+    const set = agentToolsSocketsByAgent.get(agentId);
+    if (!set) return;
+    set.delete(ws);
+    if (set.size === 0) {
+        agentToolsSocketsByAgent.delete(agentId);
+    }
+}
+
+function abortAgentToolsStreams(agentId) {
+    const set = agentToolsSocketsByAgent.get(agentId);
+    if (!set || set.size === 0) return;
+    for (const ws of set) {
+        if (ws && ws._agentToolsStreamHandle && typeof ws._agentToolsStreamHandle.abort === 'function') {
+            try { ws._agentToolsStreamHandle.abort(); } catch (_) {}
+        }
+        ws._agentToolsStreamHandle = null;
+        ws._agentToolsActiveRequestId = null;
+    }
+}
+
+function broadcastAgentToolsReset(agentId, payload = {}) {
+    const set = agentToolsSocketsByAgent.get(agentId);
+    if (!set || set.size === 0) return;
+    const body = JSON.stringify({ type: 'conversation_reset', agentId, ...payload });
+    for (const ws of set) {
+        if (ws.readyState === WebSocket.OPEN) {
+            try { ws.send(body); } catch (_) {}
+        }
+    }
+}
+
+app.post('/api/agents/:id/history/reset', async (req, res) => {
+    const { id } = req.params;
+    const agentId = typeof id === 'string' ? id.trim() : '';
+    const command = (req.body && typeof req.body.command === 'string')
+        ? req.body.command.trim()
+        : '';
+    if (!agentId) {
+        return res.status(400).json({ error: 'agent id is required' });
+    }
+
+    abortAgentToolsStreams(agentId);
+    clearAgentToolsHistory(agentId);
+    if (command) {
+        appendAgentToolsHistory(agentId, 'user', command);
+    }
+
+    let remoteResetOk = true;
+    let remoteResetError = '';
+    try {
+        if (openclaw && typeof openclaw.resetConversation === 'function') {
+            await openclaw.resetConversation(agentId);
+        }
+    } catch (e) {
+        remoteResetOk = false;
+        remoteResetError = e.message || String(e);
+        console.warn(`[AgentTools] resetConversation failed for ${agentId}: ${remoteResetError}`);
+    }
+
+    broadcastAgentToolsReset(agentId, {
+        success: remoteResetOk,
+        warning: remoteResetOk ? '' : remoteResetError,
+        command
+    });
+
+    res.json({
+        success: true,
+        cleared: true,
+        remoteResetOk,
+        remoteResetError,
+        command
+    });
+});
+
 // Toggle Skill
 app.post('/api/agents/:id/skills/toggle', (req, res) => {
     const { id } = req.params;
@@ -6048,10 +6539,230 @@ function generateAudioStream(text, voiceId, onChunk, onComplete) {
 wss.on('connection', (ws, req) => {
   if (req.url.startsWith('/tts/')) return;
 
+  if (req.url.startsWith('/agent-channels')) {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const channelId = url.searchParams.get('channelId');
+      const channel = findAgentChannelById(channelId);
+      if (!channel) {
+          try {
+              ws.send(JSON.stringify({ type: 'channel_error', message: 'channel not found' }));
+          } catch (_) {}
+          try { ws.close(); } catch (_) {}
+          return;
+      }
+
+      ws._agentChannelId = channel.id;
+      ws._agentChannelStreamHandle = null;
+      ws._agentChannelInFlight = false;
+      console.log(`[AgentChannels] Connected: ${channel.id}`);
+
+      ws.on('message', async (message) => {
+          let data = null;
+          try {
+              data = JSON.parse(message);
+          } catch (_) {
+              return;
+          }
+          if (!data || data.type !== 'message') return;
+          if (ws._agentChannelInFlight) {
+              try {
+                  ws.send(JSON.stringify({ type: 'channel_warning', message: 'channel is processing previous message' }));
+              } catch (_) {}
+              return;
+          }
+
+          const activeChannel = findAgentChannelById(channel.id);
+          if (!activeChannel) {
+              try {
+                  ws.send(JSON.stringify({ type: 'channel_error', message: 'channel no longer exists' }));
+              } catch (_) {}
+              return;
+          }
+
+          const userText = typeof data.content === 'string' ? data.content : '';
+          const uploads = Array.isArray(data.files) ? data.files : [];
+          if (!userText.trim() && uploads.length === 0) return;
+
+          const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(uploads);
+          let finalText = userText;
+          if (savedFiles.length > 0) {
+              finalText += `\n\n[System Notification: User uploaded ${savedFiles.length} files. The files are saved locally at the following absolute paths. Please use these paths if you need to process or view the images/files.]\n`;
+              savedFiles.forEach((p) => {
+                  finalText += `- ${p}\n`;
+              });
+          } else if (uploads.length > 0) {
+              finalText += `\n[User attached ${uploads.length} files${fileNames ? `: ${fileNames}` : ''}]`;
+          }
+
+          let historyUserText = userText.trim();
+          if (!historyUserText && uploads.length > 0) {
+              historyUserText = `[Uploaded ${uploads.length} file(s)${fileNames ? `: ${fileNames}` : ''}]`;
+          }
+          appendAgentChannelHistory(activeChannel.id, {
+              role: 'user',
+              content: historyUserText || '[empty message]'
+          });
+          touchAgentChannel(activeChannel.id);
+
+          ws._agentChannelInFlight = true;
+          const channelMembers = Array.isArray(activeChannel.agentIds) ? activeChannel.agentIds : [];
+          const designatedByNextMembers = resolveChannelDesignatedAgents(finalText, channelMembers);
+          const designatedByMentionMembers = designatedByNextMembers.length === 0
+              ? resolveChannelMentionedAgents(finalText, channelMembers)
+              : [];
+          const effectiveMembers = designatedByNextMembers.length > 0
+              ? designatedByNextMembers
+              : (designatedByMentionMembers.length > 0 ? designatedByMentionMembers : channelMembers);
+          const routeByNext = designatedByNextMembers.length > 0;
+          const routeByMention = !routeByNext && designatedByMentionMembers.length > 0;
+          if (routeByNext) {
+              console.log(`[AgentChannels] 🎯 {next} 命中，仅向指定成员发送: ${designatedByNextMembers.join(', ')}`);
+          } else if (routeByMention) {
+              console.log(`[AgentChannels] 🎯 @mention 命中，仅向被@成员发送: ${designatedByMentionMembers.join(', ')}`);
+          }
+          for (const agentId of effectiveMembers) {
+              if (ws.readyState !== WebSocket.OPEN) break;
+
+              const agentName = getAgentDisplayName(agentId) || agentId;
+              const agentInputText = (routeByNext || routeByMention)
+                  ? `${finalText}\n\n[System Instruction: You are explicitly designated by ${routeByNext ? '{next}' : '@ mention'}. Read the caller's full context carefully before replying. You may decide whether to reply (recommended to reply). If you reply, answer the caller's point directly first.]`
+                  : finalText;
+              let fullResponse = '';
+              let fullReasoning = '';
+              let hasStartedStreaming = false;
+
+              await new Promise((resolveAgent) => {
+                  ws._agentChannelStreamHandle = openclaw.sendMessageStream(
+                      agentId,
+                      agentInputText,
+                      (chunk) => {
+                          if (ws.readyState !== WebSocket.OPEN) return;
+                          const emitText = (content) => {
+                              if (typeof content !== 'string' || !content) return;
+                              const isNew = !hasStartedStreaming;
+                              hasStartedStreaming = true;
+                              fullResponse += content;
+                              ws.send(JSON.stringify({
+                                  type: 'channel_text_stream',
+                                  channelId: activeChannel.id,
+                                  agentId,
+                                  agentName,
+                                  content,
+                                  isNew
+                              }));
+                          };
+                          const emitReasoning = (content) => {
+                              if (typeof content !== 'string' || !content) return;
+                              const isNew = !hasStartedStreaming;
+                              hasStartedStreaming = true;
+                              fullReasoning += content;
+                              ws.send(JSON.stringify({
+                                  type: 'channel_reasoning_stream',
+                                  channelId: activeChannel.id,
+                                  agentId,
+                                  agentName,
+                                  content,
+                                  isNew
+                              }));
+                          };
+
+                          if (typeof chunk === 'string') {
+                              emitText(chunk);
+                              return;
+                          }
+                          if (!chunk || typeof chunk !== 'object') return;
+                          if (chunk.type === 'reasoning_stream' && typeof chunk.content === 'string') {
+                              emitReasoning(chunk.content);
+                              return;
+                          }
+                          if (chunk.type === 'text_stream' && typeof chunk.content === 'string') {
+                              emitText(chunk.content);
+                          }
+                      },
+                      () => {
+                          ws._agentChannelStreamHandle = null;
+                          const content = fullResponse.trim() || '[No response]';
+                          appendAgentChannelHistory(activeChannel.id, {
+                              role: 'assistant',
+                              content,
+                              agentId,
+                              senderName: agentName,
+                              reasoning: fullReasoning.trim()
+                          });
+                          if (ws.readyState === WebSocket.OPEN) {
+                              ws.send(JSON.stringify({
+                                  type: 'channel_stream_done',
+                                  channelId: activeChannel.id,
+                                  agentId,
+                                  agentName
+                              }));
+                          }
+                          resolveAgent();
+                      },
+                      (error) => {
+                          ws._agentChannelStreamHandle = null;
+                          const errorText = `[Error: ${error.message}]`;
+                          if (ws.readyState === WebSocket.OPEN) {
+                              ws.send(JSON.stringify({
+                                  type: 'channel_text_stream',
+                                  channelId: activeChannel.id,
+                                  agentId,
+                                  agentName,
+                                  content: errorText,
+                                  isNew: !hasStartedStreaming
+                              }));
+                              ws.send(JSON.stringify({
+                                  type: 'channel_stream_done',
+                                  channelId: activeChannel.id,
+                                  agentId,
+                                  agentName
+                              }));
+                          }
+                          appendAgentChannelHistory(activeChannel.id, {
+                              role: 'assistant',
+                              content: errorText,
+                              agentId,
+                              senderName: agentName
+                          });
+                          resolveAgent();
+                      },
+                      { thinking: 'medium' }
+                  );
+              });
+          }
+
+          ws._agentChannelInFlight = false;
+          touchAgentChannel(activeChannel.id);
+          if (ws.readyState === WebSocket.OPEN) {
+              try {
+                  ws.send(JSON.stringify({
+                      type: 'channel_round_done',
+                      channelId: activeChannel.id
+                  }));
+              } catch (_) {}
+          }
+      });
+
+      ws.on('close', () => {
+          ws._agentChannelInFlight = false;
+          if (ws._agentChannelStreamHandle && typeof ws._agentChannelStreamHandle.abort === 'function') {
+              try { ws._agentChannelStreamHandle.abort(); } catch (_) {}
+          }
+          ws._agentChannelStreamHandle = null;
+      });
+      return;
+  }
+
   // Agent Tools Chat Handler
   if (req.url.startsWith('/agent-tools')) {
       const url = new URL(req.url, `http://${req.headers.host}`);
       const agentId = url.searchParams.get('agentId');
+      if (!agentId) {
+          try { ws.close(); } catch (_) {}
+          return;
+      }
+      ws._agentToolsAgentId = agentId;
+      trackAgentToolsSocket(agentId, ws);
       
       console.log(`[AgentTools] Connected to ${agentId}`);
       
@@ -6203,6 +6914,7 @@ wss.on('connection', (ws, req) => {
               ws._agentToolsStreamHandle = null;
           }
           ws._agentToolsActiveRequestId = null;
+          untrackAgentToolsSocket(agentId, ws);
       });
       return;
   }

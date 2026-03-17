@@ -1,4 +1,4 @@
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
@@ -248,6 +248,16 @@ Your message content here...
 {next: "AgentName"} 
 
 Do NOT use "@". Do not say things like "Let me think" — just speak naturally.
+
+### Next-Speaker Discipline
+- If you see \`{next: "Name"}\` and **Name is not you**, do not jump in; let that person take the turn.
+- If **Name is you**, read the full context/question from the previous speaker before replying.
+- If you choose to reply, answer that person's point directly first, then continue naturally.
+
+### @ Mention Discipline
+- If you see \`@Name\` and **Name is not you**, do not jump in; let the @mentioned person take the turn.
+- If you are @mentioned, read the full context/question from the previous speaker first.
+- You may decide whether to reply (recommended to reply). If you reply, answer that speaker directly first.
 
 ### Topic Switching 
 🔄 **Change Topic Option**: If you want to change the topic, keep your response to 1-2 sentences MAX — do NOT elaborate or dive deep. Give a quick reaction and say you'd rather talk about something else. Append \`{changeTopic: true}\` at the end.
@@ -879,6 +889,58 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     return { child, abort };
 };
 
+const resetConversation = async (agentId) => {
+    const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() : '';
+    if (!normalizedAgentId) {
+        throw new Error('agentId is required');
+    }
+
+    return new Promise((resolve, reject) => {
+        const child = spawn(
+            OPENCLAW_CMD,
+            ['agent', '--agent', normalizedAgentId, '--message', '/new', '--local'],
+            { env: { ...process.env, PYTHONUNBUFFERED: '1', FORCE_COLOR: '0' } }
+        );
+
+        let settled = false;
+        let stderr = '';
+        const timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try { child.kill('SIGTERM'); } catch (_) {}
+            setTimeout(() => {
+                try {
+                    if (!child.killed) child.kill('SIGKILL');
+                } catch (_) {}
+            }, 800);
+            reject(new Error('reset conversation timeout'));
+        }, 15000);
+
+        child.stderr.on('data', (chunk) => {
+            stderr += chunk.toString();
+        });
+
+        child.on('error', (err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            reject(err);
+        });
+
+        child.on('close', (code) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            if (code === 0) {
+                resolve(true);
+                return;
+            }
+            const details = stderr.trim();
+            reject(new Error(details || `reset conversation failed with code ${code}`));
+        });
+    });
+};
+
 module.exports = {
     getAgents,
     createAgent,
@@ -890,6 +952,7 @@ module.exports = {
     addKnowledge,
     sendMessage,
     sendMessageStream,
+    resetConversation,
     writeFileContent,
     readSoulMd
 };
