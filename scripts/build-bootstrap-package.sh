@@ -80,7 +80,48 @@ sync_dir_clean() {
   local src="$1"
   local dst="$2"
   mkdir -p "$dst"
-  rsync -a --delete --exclude '.DS_Store' --exclude '.git' --exclude 'node_modules' "$src"/ "$dst"/
+  rsync -a --delete \
+    --exclude '.DS_Store' \
+    --exclude '.git' \
+    --exclude 'node_modules' \
+    --exclude '.env' \
+    --exclude '.env.*' \
+    --exclude '*.log' \
+    --exclude 'logs' \
+    --exclude 'tmp' \
+    --exclude '__pycache__' \
+    "$src"/ "$dst"/
+}
+
+sanitize_json_secrets() {
+  local json_file="$1"
+  [[ -f "$json_file" ]] || return 0
+  node -e '
+    const fs = require("fs");
+    const file = process.argv[1];
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (_) {
+      process.exit(0);
+    }
+    const secretKeyRegex = /(api[-_]?key|token|secret|password)/i;
+    const walk = (input) => {
+      if (Array.isArray(input)) return input.map(walk);
+      if (!input || typeof input !== "object") return input;
+      const out = {};
+      for (const [k, v] of Object.entries(input)) {
+        if (secretKeyRegex.test(k)) {
+          out[k] = "";
+        } else {
+          out[k] = walk(v);
+        }
+      }
+      return out;
+    };
+    const cleaned = walk(parsed);
+    fs.writeFileSync(file, JSON.stringify(cleaned, null, 2) + "\n");
+  ' "$json_file"
 }
 
 copy_workspace_profile() {
@@ -136,6 +177,7 @@ main() {
     [[ -d "$data_src" ]] || continue
 
     sync_dir_clean "$data_src" "$BOOTSTRAP_DIR/data-agents/$agent_id"
+    sanitize_json_secrets "$BOOTSTRAP_DIR/data-agents/$agent_id/meta.json"
 
     local display_name
     display_name="$(node -e '

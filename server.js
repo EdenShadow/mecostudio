@@ -941,6 +941,12 @@ if (!fs.existsSync(MEMORY_DIR)) {
 
 const memory = {};
 const MAX_MEMORY = 20;  // 保留最近20条，平衡记忆深度和推理速度
+const AGENTTOOLS_HISTORY_DIR = path.join(MEMORY_DIR, 'agenttools-history');
+const AGENTTOOLS_HISTORY_LIMIT = 20;
+if (!fs.existsSync(AGENTTOOLS_HISTORY_DIR)) {
+  fs.mkdirSync(AGENTTOOLS_HISTORY_DIR, { recursive: true });
+}
+const agentToolsHistoryCache = {};
 
 
 
@@ -958,6 +964,71 @@ function loadMemoryFromFile(agentId) {
     console.error(`[${agentId}] 加载记忆文件失败:`, err.message);
   }
   return [];
+}
+
+function getAgentToolsHistoryPath(agentId) {
+  return path.join(AGENTTOOLS_HISTORY_DIR, `${agentId}.json`);
+}
+
+function normalizeAgentToolsHistoryItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const role = item.role === 'assistant' ? 'assistant' : (item.role === 'user' ? 'user' : null);
+  const content = typeof item.content === 'string' ? item.content : '';
+  if (!role || !content.trim()) return null;
+  return {
+    role,
+    content,
+    timestamp: typeof item.timestamp === 'string' ? item.timestamp : new Date().toISOString()
+  };
+}
+
+function loadAgentToolsHistoryFromFile(agentId) {
+  const filePath = getAgentToolsHistoryPath(agentId);
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8') || '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map(normalizeAgentToolsHistoryItem)
+      .filter(Boolean)
+      .slice(-AGENTTOOLS_HISTORY_LIMIT);
+  } catch (e) {
+    console.warn(`[AgentTools] Failed to load history for ${agentId}: ${e.message}`);
+    return [];
+  }
+}
+
+function getAgentToolsHistory(agentId) {
+  if (!agentToolsHistoryCache[agentId]) {
+    agentToolsHistoryCache[agentId] = loadAgentToolsHistoryFromFile(agentId);
+  }
+  return agentToolsHistoryCache[agentId];
+}
+
+function saveAgentToolsHistory(agentId) {
+  try {
+    const history = (agentToolsHistoryCache[agentId] || []).slice(-AGENTTOOLS_HISTORY_LIMIT);
+    const filePath = getAgentToolsHistoryPath(agentId);
+    fs.writeFileSync(filePath, JSON.stringify(history, null, 2));
+  } catch (e) {
+    console.warn(`[AgentTools] Failed to save history for ${agentId}: ${e.message}`);
+  }
+}
+
+function appendAgentToolsHistory(agentId, role, content) {
+  const normalizedRole = role === 'assistant' ? 'assistant' : (role === 'user' ? 'user' : null);
+  const normalizedContent = typeof content === 'string' ? content.trim() : '';
+  if (!normalizedRole || !normalizedContent) return;
+  const history = getAgentToolsHistory(agentId);
+  history.push({
+    role: normalizedRole,
+    content: normalizedContent,
+    timestamp: new Date().toISOString()
+  });
+  if (history.length > AGENTTOOLS_HISTORY_LIMIT) {
+    history.splice(0, history.length - AGENTTOOLS_HISTORY_LIMIT);
+  }
+  saveAgentToolsHistory(agentId);
 }
 
 // 保存记忆到文件
@@ -5752,6 +5823,11 @@ app.get('/api/agents/:id/skills', async (req, res) => {
 // Get Agent Chat History (Last 20)
 app.get('/api/agents/:id/history', async (req, res) => {
     const { id } = req.params;
+
+    const cachedHistory = getAgentToolsHistory(id);
+    if (cachedHistory.length > 0) {
+        return res.json({ history: cachedHistory.slice(-20) });
+    }
     
     // We need to read the agent's memory file from the workspace.
     // OpenClaw typically stores memories in MEMORY.json or similar, 
@@ -6025,70 +6101,95 @@ wss.on('connection', (ws, req) => {
                       }
                   }
 
-                  // Stream Response
+                  let historyUserText = typeof userText === 'string' ? userText.trim() : '';
+                  if (!historyUserText && data.files && data.files.length > 0) {
+                      const fileNames = data.files.map(f => f.name).join(', ');
+                      historyUserText = `[Uploaded ${data.files.length} file(s): ${fileNames}]`;
+                  }
+                  appendAgentToolsHistory(agentId, 'user', historyUserText);
+
+                  // Stream Response (OpenClaw CLI streaming)
                   let fullResponse = '';
                   let hasStartedStreaming = false;
                   const thinkingLevel = (typeof data.thinkingLevel === 'string' && data.thinkingLevel.trim()) ? data.thinkingLevel.trim() : 'medium';
 
                   // 新请求进来时，中断之前仍在流式中的请求，避免串流互相覆盖
-                  if (ws._agentToolsAbortController) {
-                      try { ws._agentToolsAbortController.abort(); } catch(e) {}
+                  if (ws._agentToolsStreamHandle && typeof ws._agentToolsStreamHandle.abort === 'function') {
+                      try { ws._agentToolsStreamHandle.abort(); } catch(e) {}
                   }
                   const requestId = `${agentId}-${Date.now()}`;
                   ws._agentToolsActiveRequestId = requestId;
-                  const abortController = new AbortController();
-                  ws._agentToolsAbortController = abortController;
 
-                  streamOpenClawHTTP(
+                  const streamOptions = {};
+                  if (thinkingLevel && thinkingLevel !== 'off') {
+                      streamOptions.thinking = thinkingLevel;
+                  }
+
+                  ws._agentToolsStreamHandle = openclaw.sendMessageStream(
                       agentId,
                       finalText,
-                      {
-                          onText: (chunk) => {
-                              if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                      (chunk) => {
+                          if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                          const emitText = (content) => {
+                              if (typeof content !== 'string' || !content) return;
                               const isNew = !hasStartedStreaming;
                               hasStartedStreaming = true;
-                              fullResponse += chunk;
-                              ws.send(JSON.stringify({ type: 'text_stream', content: chunk, isNew }));
-                          },
-                          onReasoning: (chunk) => {
-                              if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                              fullResponse += content;
+                              ws.send(JSON.stringify({ type: 'text_stream', content, isNew }));
+                          };
+                          const emitReasoning = (content) => {
+                              if (typeof content !== 'string' || !content) return;
                               const isNew = !hasStartedStreaming;
                               hasStartedStreaming = true;
-                              ws.send(JSON.stringify({ type: 'reasoning_stream', content: chunk, isNew }));
-                          },
-                          onDone: () => {
-                              if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
-                              ws._agentToolsAbortController = null;
-                              console.log(`[AgentTools] Response complete`);
-                              ws.send(JSON.stringify({ type: 'stream_done' }));
+                              ws.send(JSON.stringify({ type: 'reasoning_stream', content, isNew }));
+                          };
 
-                              // Send state update event to refresh UI (Prompt, Skills, etc.)
-                              ws.send(JSON.stringify({ type: 'state_updated' }));
-
-                              // Generate Audio
-                              const agent = AGENTS[agentId];
-                              const voiceId = agent ? agent.voiceId : DEFAULT_VOICE_IDS[0];
-                              if (voiceId && fullResponse.trim()) {
-                                  console.log(`[AgentTools] Generating audio for ${voiceId}`);
-                                  generateAudioStream(fullResponse, voiceId, (audioChunk) => {
-                                      if (ws.readyState === WebSocket.OPEN) {
-                                          ws.send(JSON.stringify({ type: 'audio_stream', audio: audioChunk }));
-                                      }
-                                  });
-                              }
-                          },
-                          onError: (error) => {
-                              if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
-                              ws._agentToolsAbortController = null;
-                              ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
+                          if (typeof chunk === 'string') {
+                              emitText(chunk);
+                              return;
+                          }
+                          if (!chunk || typeof chunk !== 'object') return;
+                          if (chunk.type === 'reasoning_stream') {
+                              emitReasoning(chunk.content);
+                              return;
+                          }
+                          if (chunk.type === 'text_stream') {
+                              emitText(chunk.content);
                           }
                       },
-                      {
-                          reasoningEnabled: thinkingLevel !== 'off',
-                          firstChunkTimeoutMs: 30000,
-                          silentAbort: true,
-                          controller: abortController
-                      }
+                      () => {
+                          if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                          ws._agentToolsStreamHandle = null;
+                          ws._agentToolsActiveRequestId = null;
+                          console.log(`[AgentTools] Response complete`);
+                          if (fullResponse.trim()) {
+                              appendAgentToolsHistory(agentId, 'assistant', fullResponse);
+                          }
+                          ws.send(JSON.stringify({ type: 'stream_done' }));
+
+                          // Send state update event to refresh UI (Prompt, Skills, etc.)
+                          ws.send(JSON.stringify({ type: 'state_updated' }));
+
+                          // Generate Audio
+                          const agent = AGENTS[agentId];
+                          const voiceId = agent ? agent.voiceId : DEFAULT_VOICE_IDS[0];
+                          if (voiceId && fullResponse.trim()) {
+                              console.log(`[AgentTools] Generating audio for ${voiceId}`);
+                              generateAudioStream(fullResponse, voiceId, (audioChunk) => {
+                                  if (ws.readyState === WebSocket.OPEN) {
+                                      ws.send(JSON.stringify({ type: 'audio_stream', audio: audioChunk }));
+                                  }
+                              });
+                          }
+                      },
+                      (error) => {
+                          if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                          ws._agentToolsStreamHandle = null;
+                          ws._agentToolsActiveRequestId = null;
+                          ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
+                          ws.send(JSON.stringify({ type: 'stream_done' }));
+                      },
+                      streamOptions
                   );
               }
           } catch (e) {
@@ -6097,9 +6198,9 @@ wss.on('connection', (ws, req) => {
       });
 
       ws.on('close', () => {
-          if (ws._agentToolsAbortController) {
-              try { ws._agentToolsAbortController.abort(); } catch(e) {}
-              ws._agentToolsAbortController = null;
+          if (ws._agentToolsStreamHandle && typeof ws._agentToolsStreamHandle.abort === 'function') {
+              try { ws._agentToolsStreamHandle.abort(); } catch(e) {}
+              ws._agentToolsStreamHandle = null;
           }
           ws._agentToolsActiveRequestId = null;
       });

@@ -657,6 +657,8 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
         args.push('--thinking', options.thinking.trim());
     }
     const child = spawn(OPENCLAW_CMD, args, { env });
+    let settled = false;
+    let aborted = false;
     
     console.log(`[sendMessageStream] Spawned process for ${agentId}`);
     
@@ -749,6 +751,7 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     let pending = ''; // Buffer for incomplete lines
     
     child.stdout.on('data', (data) => {
+        if (settled) return;
         const chunk = data.toString();
         buffer += chunk; // Keep full buffer for final check
 
@@ -818,10 +821,13 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     });
     
     child.stderr.on('data', (data) => {
+        if (settled) return;
         console.error(`[sendMessageStream] stderr: ${data}`);
     });
     
     child.on('close', (code) => {
+        if (aborted || settled) return;
+        settled = true;
         console.log(`[sendMessageStream] Process exited with code ${code}`);
 
         // Flush pending tail
@@ -850,9 +856,27 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     });
     
     child.on('error', (err) => {
+        if (aborted || settled) return;
+        settled = true;
         console.error(`[sendMessageStream] Spawn error:`, err);
         onError(err);
     });
+
+    const abort = () => {
+        if (settled || aborted) return;
+        aborted = true;
+        settled = true;
+        try {
+            child.kill('SIGTERM');
+        } catch (_) {}
+        setTimeout(() => {
+            try {
+                if (!child.killed) child.kill('SIGKILL');
+            } catch (_) {}
+        }, 1200);
+    };
+
+    return { child, abort };
 };
 
 module.exports = {
