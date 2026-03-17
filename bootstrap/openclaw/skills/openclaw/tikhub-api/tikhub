@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""
+TikHub API 统一命令行工具
+用法: tikhub <平台> <操作> <参数>
+"""
+
+import sys
+import os
+import re
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from tikhub_common import TikHubAPI, print_json
+
+def print_usage():
+    print("TikHub API 工具")
+    print("用法: tikhub <平台> <操作> <参数>")
+    print()
+    print("支持的平台:")
+    print("  tiktok    - TikTok 视频/用户")
+    print("  twitter   - Twitter/X 推文/用户")
+    print("  instagram - Instagram 帖子/用户")
+    print("  youtube   - YouTube 视频/频道")
+    print("  reddit    - Reddit 帖子/用户")
+    print()
+    print("操作:")
+    print("  video <URL>       - 获取视频/帖子信息")
+    print("  user <用户名>     - 获取用户信息")
+    print("  posts <用户名>   - 获取用户最新发帖")
+    print("  tweet <URL/ID>   - 获取推文详情")
+    print()
+    print("示例:")
+    print("  tikhub tiktok video https://www.tiktok.com/@username/video/123456")
+    print("  tikhub twitter user elonmusk")
+    print("  tikhub twitter posts elonmusk")
+    print("  tikhub twitter tweet https://x.com/elonmusk/status/1234567890")
+    print("  tikhub instagram post https://www.instagram.com/p/ABC123/")
+    print("  tikhub youtube video https://youtube.com/watch?v=dQw4w9WgXcQ")
+
+def main():
+    if len(sys.argv) < 4:
+        print_usage()
+        sys.exit(1)
+    
+    platform = sys.argv[1].lower()
+    action = sys.argv[2].lower()
+    param = sys.argv[3]
+    
+    api = TikHubAPI()
+    
+    # Twitter/X
+    if platform == "twitter" or platform == "x":
+        if action == "tweet":
+            # 提取 tweet_id
+            tweet_id = param
+            match = re.search(r'status/(\d+)', param)
+            if match:
+                tweet_id = match.group(1)
+            print(f"获取 Twitter 推文: {tweet_id}")
+            result = api.twitter_get_tweet_detail(tweet_id)
+        elif action == "posts" or action == "post":
+            print(f"获取 Twitter 用户 @{param} 的发帖")
+            result = api.twitter_get_user_posts(param, limit=5)
+        elif action == "user":
+            print(f"获取 Twitter 用户 @{param}")
+            result = api._request("/api/v1/twitter/web/fetch_user_profile", {"screen_name": param})
+        else:
+            print(f"未知操作: {action}")
+            sys.exit(1)
+    
+    # TikTok
+    elif platform == "tiktok":
+        if action == "video":
+            print(f"获取 TikTok 视频: {param}")
+            result = api.tiktok_get_video(param)
+        elif action == "user":
+            print(f"获取 TikTok 用户: @{param}")
+            result = api.tiktok_get_user(param)
+        else:
+            print(f"未知操作: {action}")
+            sys.exit(1)
+    
+    # Instagram
+    elif platform == "instagram" or platform == "ig":
+        if action == "post":
+            print(f"获取 Instagram 帖子: {param}")
+            result = api.instagram_get_post(param)
+        elif action == "user":
+            print(f"获取 Instagram 用户: @{param}")
+            result = api.instagram_get_user(param)
+        else:
+            print(f"未知操作: {action}")
+            sys.exit(1)
+    
+    # YouTube
+    elif platform == "youtube" or platform == "yt":
+        if action == "video":
+            print(f"获取 YouTube 视频: {param}")
+            result = api.youtube_get_video(param)
+        elif action == "channel":
+            print(f"获取 YouTube 频道: {param}")
+            result = api._request("/api/v1/youtube/web/fetch_channel", {"channel_id": param})
+        else:
+            print(f"未知操作: {action}")
+            sys.exit(1)
+    
+    # Reddit
+    elif platform == "reddit":
+        if action == "post":
+            print(f"获取 Reddit 帖子: {param}")
+            result = api.reddit_get_post(param)
+        elif action == "user":
+            print(f"获取 Reddit 用户: u/{param}")
+            result = api.reddit_get_user(param)
+        else:
+            print(f"未知操作: {action}")
+            sys.exit(1)
+    
+    else:
+        print(f"不支持的平台: {platform}")
+        print("支持的平台: tiktok, twitter, instagram, youtube, reddit")
+        sys.exit(1)
+    
+    print("-" * 50)
+    print_json(result)
+
+if __name__ == "__main__":
+    main()

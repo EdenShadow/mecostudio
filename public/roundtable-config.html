@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>圆桌配置 - Meco Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .glass { background: rgba(18, 18, 18, 0.8); backdrop-filter: blur(12px); }
+  </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+  <div class="max-w-4xl mx-auto p-6">
+    <div class="flex items-center justify-between mb-8">
+      <div>
+        <h1 class="text-2xl font-bold">圆桌会议配置</h1>
+        <p class="text-gray-400 text-sm mt-1">选择参与圆桌的智能体</p>
+      </div>
+      <a href="/" class="text-primary hover:underline">&larr; 返回控制台</a>
+    </div>
+
+    <!-- Agent Selection -->
+    <div class="glass rounded-xl p-6 mb-6">
+      <h2 class="text-lg font-semibold mb-4">选择智能体</h2>
+      <div id="agent-list" class="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <!-- Loading -->
+        <div class="col-span-full text-center py-8 text-gray-400">
+          加载中...
+        </div>
+      </div>
+    </div>
+
+    <!-- Generated URL -->
+    <div id="result-section" class="hidden glass rounded-xl p-6">
+      <h2 class="text-lg font-semibold mb-4">圆桌链接</h2>
+
+      <!-- URL Display -->
+      <div class="mb-4">
+        <label class="text-sm text-gray-400 block mb-2">链接地址</label>
+        <div class="flex gap-2">
+          <input type="text" id="generated-url" readonly class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm font-mono" />
+          <button onclick="copyUrl()" class="bg-primary hover:bg-primary/80 px-4 py-2 rounded-lg text-sm font-medium">
+            复制
+          </button>
+        </div>
+      </div>
+
+      <!-- QR Code -->
+      <div class="mb-4">
+        <label class="text-sm text-gray-400 block mb-2">二维码 (手机扫码体验)</label>
+        <div id="qrcode" class="inline-block bg-white p-4 rounded-lg"></div>
+      </div>
+
+      <!-- Open on PC Button -->
+      <div>
+        <button onclick="openOnPC()" class="flex items-center justify-center gap-2 w-full bg-primary hover:bg-primary/80 px-6 py-3 rounded-lg font-medium">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+          从PC打开
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script>
+    let selectedAgents = new Set();
+    let agents = [];
+
+    // Load agents on page load
+    async function loadAgents() {
+      try {
+        const res = await fetch('/api/roundtable/agents');
+        const data = await res.json();
+        agents = data.agents || [];
+
+        // Default: select first 5 agents
+        const agentList = document.getElementById('agent-list');
+        agentList.innerHTML = agents.slice(0, 6).map(agent => `
+          <div class="agent-card p-4 bg-gray-800 rounded-lg border-2 border-transparent cursor-pointer hover:border-primary/50 transition-all ${selectedAgents.has(agent.id) ? 'border-primary bg-primary/10' : ''}"
+               onclick="toggleAgent('${agent.id}')" data-agent-id="${agent.id}">
+            <div class="text-2xl mb-2">${agent.emoji}</div>
+            <div class="font-medium">${agent.displayName}</div>
+            <div class="text-xs text-gray-400 mt-1">音色: ${agent.voiceId}</div>
+          </div>
+        `).join('');
+
+        // Auto-select first 5
+        agents.slice(0, 5).forEach(a => selectedAgents.add(a.id));
+        updateUI();
+      } catch (e) {
+        console.error('Failed to load agents:', e);
+        document.getElementById('agent-list').innerHTML = '<div class="col-span-full text-center py-8 text-red-400">加载失败</div>';
+      }
+    }
+
+    function toggleAgent(agentId) {
+      if (selectedAgents.has(agentId)) {
+        selectedAgents.delete(agentId);
+      } else {
+        selectedAgents.add(agentId);
+      }
+      updateUI();
+    }
+
+    function updateUI() {
+      // Update card styles
+      document.querySelectorAll('.agent-card').forEach(card => {
+        const agentId = card.dataset.agentId;
+        if (selectedAgents.has(agentId)) {
+          card.classList.add('border-primary', 'bg-primary/10');
+          card.classList.remove('border-transparent');
+        } else {
+          card.classList.remove('border-primary', 'bg-primary/10');
+          card.classList.add('border-transparent');
+        }
+      });
+
+      // Generate URL if we have at least 2 agents
+      if (selectedAgents.size >= 2) {
+        generateUrl();
+        document.getElementById('result-section').classList.remove('hidden');
+      } else {
+        document.getElementById('result-section').classList.add('hidden');
+      }
+    }
+
+    function generateUrl() {
+      const selectedArray = Array.from(selectedAgents);
+      const voices = selectedArray.map(id => {
+        const agent = agents.find(a => a.id === id);
+        return agent ? agent.voiceId : 'jobs_voice_20260115_v3';
+      });
+
+      const baseUrl = window.location.origin + '/roundtable';
+      const url = `${baseUrl}?characters=${selectedArray.join(',')}&character_voices=${voices.join(',')}`;
+
+      document.getElementById('generated-url').value = url;
+
+      // Generate QR code
+      const qrContainer = document.getElementById('qrcode');
+      qrContainer.innerHTML = '';
+      QRCode.toCanvas(url, { width: 200, margin: 2 }, (err, canvas) => {
+        if (!err) {
+          qrContainer.appendChild(canvas);
+        }
+      });
+    }
+
+    function copyUrl() {
+      const urlInput = document.getElementById('generated-url');
+      urlInput.select();
+      document.execCommand('copy');
+      alert('链接已复制到剪贴板');
+    }
+
+    function openOnPC() {
+      const url = document.getElementById('generated-url').value;
+      window.open(url, '_blank');
+    }
+
+    // Load agents on init
+    loadAgents();
+  </script>
+</body>
+</html>

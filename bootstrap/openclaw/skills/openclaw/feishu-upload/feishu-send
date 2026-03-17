@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""
+Feishu File Send Script
+Usage: feishu-send <receive_id> <file_key> [--msg "消息"]
+"""
+
+import subprocess
+import json
+import argparse
+import sys
+
+APP_ID = "cli_a900506216789cb2"
+APP_SECRET = "Ma7i5O239TuL8MO843wnmdp6YQt1R6JW"
+
+def get_token():
+    """获取 tenant_access_token"""
+    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token"
+    data = json.dumps({"app_id": APP_ID, "app_secret": APP_SECRET})
+    
+    result = subprocess.run(
+        ["curl", "-s", "-X", "POST", url, "-H", "Content-Type: application/json", "-d", data],
+        capture_output=True, text=True
+    )
+    
+    if result.returncode == 0:
+        response = json.loads(result.stdout)
+        if response.get("code") == 0:
+            return response.get("tenant_access_token")
+    
+    print(f"❌ Token 获取失败")
+    return None
+
+def send_file(receive_id, file_key, msg=""):
+    """发送文件"""
+    token = get_token()
+    if not token:
+        return False
+    
+    # 获取文件信息
+    url = f"https://open.feishu.cn/open-apis/drive/v1/files/{file_key}/send"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    data = json.dumps({
+        "receive_id": receive_id,
+        "msg_type": "file",
+        "content": json.dumps({"file_key": file_key})
+    })
+    
+    result = subprocess.run(
+        ["curl", "-s", "-X", "POST", url, "-H", "Authorization: Bearer " + token, "-H", "Content-Type: application/json", "-d", data],
+        capture_output=True, text=True
+    )
+    
+    print(f"发送文件响应: {result.stdout[:200]")
+    return True
+
+def main():
+    if len(sys.argv) < 3:
+        print("用法: feishu-send <receive_id> <file_key> [--msg 消息]")
+        sys.exit(1)
+    
+    receive_id = sys.argv[1]
+    file_key = sys.argv[2]
+    msg = sys.argv[3] if len(sys.argv) > 3 else "📹 文件"
+    
+    send_file(receive_id, file_key, msg)
+
+if __name__ == "__main__":
+    main()

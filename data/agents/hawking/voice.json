@@ -1,0 +1,6 @@
+{
+  "fileId": 123,
+  "voiceId": "hawking_v1_hd",
+  "status": "mock_success_fallback",
+  "error": "Voice cloning failed: input new_sensitive"
+}

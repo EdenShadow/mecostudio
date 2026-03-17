@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw 六人议会</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0c10;
+      color: #c9d1d9;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .header {
+      background: #161b22;
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    .header h1 { font-size: 14px; color: #58a6ff; }
+    .status { display: flex; gap: 12px; font-size: 11px; }
+    .status-item { display: flex; align-items: center; gap: 4px; }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #238636; }
+    .status-dot.disconnected { background: #da3633; }
+    .grid-container {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 8px;
+      padding: 8px;
+      overflow: hidden;
+    }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .panel-header {
+      background: #21262d;
+      padding: 6px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    .panel-title { font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+    .panel-icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+    .panel-icon.main { background: #238636; }
+    .panel-icon.jobs { background: #8957e5; }
+    .panel-icon.kobe { background: #f97316; }
+    .panel-icon.munger { background: #22c55e; }
+    .panel-icon.hawking { background: #3b82f6; }
+    .panel-icon.gates { background: #06b6d4; }
+    .panel-model { font-size: 9px; color: #8b949e; }
+    .panel-actions { display: flex; gap: 2px; }
+    .btn-icon {
+      background: #30363d; border: none; color: #c9d1d9;
+      cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 10px;
+    }
+    .btn-icon:hover { background: #484f58; }
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .message { max-width: 95%; padding: 6px 10px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; }
+    .message.user { align-self: flex-end; background: #1f6feb; color: #fff; border-bottom-right-radius: 3px; }
+    .message.assistant { align-self: flex-start; background: #21262d; border: 1px solid #30363d; border-bottom-left-radius: 3px; }
+    .message.system { align-self: center; background: transparent; color: #8b949e; font-size: 9px; padding: 2px 8px; }
+    .message.error { align-self: center; background: #da3633; color: #fff; font-size: 10px; }
+    .input-area { background: #21262d; padding: 6px 8px; border-top: 1px solid #30363d; flex-shrink: 0; }
+    .input-wrapper { display: flex; gap: 4px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 2px; }
+    .input-wrapper input { flex: 1; background: transparent; border: none; padding: 4px 8px; color: #c9d1d9; font-size: 11px; outline: none; }
+    .btn-send { background: #238636; border: none; color: #fff; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+    .btn-send:hover { background: #2ea043; }
+    .btn-send:disabled { background: #484f58; cursor: not-allowed; }
+    .typing-cursor { display: inline-block; width: 2px; height: 1em; background: #58a6ff; margin-left: 2px; animation: blink 1s infinite; vertical-align: text-bottom; }
+    @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+    .tts-indicator { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; font-size: 10px; color: #58a6ff; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🦀 OpenClaw 六人议会</h1>
+    <div class="status" id="status-bar"></div>
+  </div>
+
+  <div class="grid-container">
+    <div class="panel" id="panel-main">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon main">🤖</div>
+          <div><div>Main</div><div class="panel-model">通用助手</div></div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('main')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-main"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-main" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('main')">
+          <button class="btn-send" id="btn-main" onclick="sendMessage('main')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-jobs">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon jobs">🍎</div>
+          <div><div>Steve Jobs</div><div class="panel-model">苹果创始人</div></div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('jobs')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-jobs"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-jobs" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('jobs')">
+          <button class="btn-send" id="btn-jobs" onclick="sendMessage('jobs')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-kobe">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon kobe">🐍</div>
+          <div><div>Kobe Bryant</div><div class="panel-model">黑曼巴</div></div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('kobe')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-kobe"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-kobe" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('kobe')">
+          <button class="btn-send" id="btn-kobe" onclick="sendMessage('kobe')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-munger">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon munger">🧠</div>
+          <div><div>Charlie Munger</div><div class="panel-model">智慧导师</div></div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('munger')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-munger"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-munger" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('munger')">
+          <button class="btn-send" id="btn-munger" onclick="sendMessage('munger')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-hawking">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon hawking">🔭</div>
+          <div><div>Stephen Hawking</div><div class="panel-model">宇宙学家</div></div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('hawking')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-hawking"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-hawking" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('hawking')">
+          <button class="btn-send" id="btn-hawking" onclick="sendMessage('hawking')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-gates">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon gates">💻</div>
+          <div><div>Bill Gates</div><div class="panel-model">慈善家</div></div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('gates')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-gates"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-gates" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('gates')">
+          <button class="btn-send" id="btn-gates" onclick="sendMessage('gates')">发送</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const AGENT_IDS = ['main', 'jobs', 'kobe', 'munger', 'hawking', 'gates'];
+    const connections = {};
+    const messageHistory = {};
+    const typingBuffers = {};
+    const typingTimeouts = {};
+    const ttsManagers = {};
+    
+    AGENT_IDS.forEach(id => {
+      connections[id] = { ws: null, connected: false };
+      messageHistory[id] = [];
+      typingBuffers[id] = '';
+      ttsManagers[id] = new TTSManager(id);
+    });
+
+    // TTS Manager 类
+    function TTSManager(agentId) {
+      this.agentId = agentId;
+      this.audioContext = null;
+      this.analyser = null;
+      this.ws = null;
+      this.isOpen = false;
+      this.nextTime = 0;
+      this.seen = new Set();
+      this.textBuf = '';
+      this.pendingTexts = [];
+      this.audioChunks = []; // 收集音频数据
+      this.isPlaying = false;
+      this.activeSources = 0; // 活跃播放源计数
+    }
+    
+    TTSManager.prototype.init = function() {
+      if (!this.audioContext) {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 64;
+        this.analyser.connect(this.audioContext.destination);
+        console.log('[' + this.agentId + '] AudioContext created, state:', this.audioContext.state);
+      }
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume().then(function() {
+          console.log('[' + this.agentId + '] AudioContext resumed');
+        }.bind(this));
+      }
+    };
+    
+    TTSManager.prototype.appendText = function(text, isFinal) {
+      if (!this.audioContext) this.init();
+      
+      // 新会话开始
+      if (!this.ws && text) {
+        this.seen.clear();
+        this.nextTime = this.audioContext.currentTime;
+        this.textBuf = ''; // 重置缓冲区
+        this.connectWS();
+      }
+      
+      // 添加到缓冲区
+      if (text) {
+        this.textBuf += text;
+      }
+      
+      // 检查是否需要发送：
+      // 1. 遇到标点符号（断句点）
+      // 2. 缓冲区满了（>= 30 字符）
+      // 3. 最后一段（isFinal）
+      // 遇到完整断句或满20字就发送
+      var hasEndPunctuation = /[。！？.!?]/.test(this.textBuf);
+      var isLongEnough = this.textBuf.length >= 20;
+      
+      if ((hasEndPunctuation || isLongEnough || isFinal) && this.textBuf.length > 0) {
+        var clean = this.textBuf.replace(/[*#\`_[\](){}|]/g, '').trim();
+        if (clean.length > 0) {
+          this.sendText(clean);
+        }
+        this.textBuf = ''; // 清空缓冲区
+      }
+      
+      // 结束
+      if (isFinal) {
+        this.sendEnd();
+      }
+    };
+    
+    TTSManager.prototype.connectWS = function() {
+      if (this.ws) return;
+      var self = this;
+      
+      // 先初始化 pendingTexts，避免 sendText 时出错
+      if (!this.pendingTexts) this.pendingTexts = [];
+      
+      this.ws = new WebSocket('ws://' + location.host + '/tts/' + this.agentId);
+      console.log('[' + this.agentId + '] Connecting TTS WebSocket...');
+      
+      this.ws.onopen = function() { 
+        self.isOpen = true;
+        console.log('[' + self.agentId + '] TTS WebSocket connected');
+        // 发送队列中的文本
+        while (self.pendingTexts && self.pendingTexts.length > 0) {
+          var t = self.pendingTexts.shift();
+          self.ws.send(JSON.stringify({type: 'text', content: t}));
+        }
+      };
+      
+      this.ws.onmessage = function(e) {
+        try {
+          var d = JSON.parse(e.data);
+          console.log('[' + self.agentId + '] TTS msg:', d.event || 'audio');
+          if (d.data && d.data.audio) {
+            // 收集音频，满4个或结束时播放
+            self.audioChunks.push(d.data.audio);
+            if (self.audioChunks.length >= 4 || d.event === 'task_finished') {
+              self.playChunks();
+            }
+          }
+        } catch(err) {
+          console.error('[' + self.agentId + '] TTS msg error:', err);
+        }
+      };
+      
+      this.ws.onerror = function(e) { 
+        console.error('[' + self.agentId + '] TTS WebSocket error:', e);
+      };
+      this.ws.onclose = function() { 
+        console.log('[' + self.agentId + '] TTS WebSocket closed');
+        self.isOpen = false; 
+        self.ws = null; 
+      };
+    };
+    
+    TTSManager.prototype.sendText = function(text) {
+      if (!this.pendingTexts) this.pendingTexts = [];
+      if (this.ws && this.ws.readyState === 1) {
+        this.ws.send(JSON.stringify({type: 'text', content: text}));
+      } else {
+        this.pendingTexts.push(text);
+        console.log('[' + this.agentId + '] Queued text:', text.slice(0, 20));
+      }
+    };
+    
+    TTSManager.prototype.sendEnd = function() {
+      var self = this;
+      setTimeout(function() {
+        if (self.ws && self.ws.readyState === 1) {
+          self.ws.send(JSON.stringify({type: 'end'}));
+        }
+      }, 200);
+    };
+    
+    TTSManager.prototype.play = async function(hex) {
+      var hash = hex.slice(0, 200);
+      if (this.seen.has(hash)) {
+        console.log('[' + this.agentId + '] Skip duplicate audio');
+        return;
+      }
+      this.seen.add(hash);
+      
+      try {
+        var bytes = hex.match(/.{1,2}/g).map(function(b) { return parseInt(b, 16); });
+        var arrayBuf = new Uint8Array(bytes).buffer.slice(0);
+        var buf = await this.audioContext.decodeAudioData(arrayBuf);
+        
+        var now = this.audioContext.currentTime;
+        // 如果已经落后太多，追赶一下
+        if (this.nextTime < now) {
+          this.nextTime = now;
+        }
+        
+        var src = this.audioContext.createBufferSource();
+        src.buffer = buf;
+        src.connect(this.analyser);
+        
+        // 稍微提前一点开始，减少停顿感（10ms overlap）
+        var startTime = this.nextTime;
+        if (this.activeSources > 0) {
+          startTime = Math.max(now, this.nextTime - 0.01);
+        }
+        src.start(startTime);
+        
+        this.nextTime = startTime + buf.duration;
+        
+        // 有音频开始播放，显示指示器
+        this.activeSources++;
+        this.showIndicator(true);
+        
+        var self = this;
+        src.onended = function() {
+          self.activeSources--;
+          // 所有音频都播放完毕才隐藏
+          if (self.activeSources <= 0) {
+            self.activeSources = 0;
+            self.showIndicator(false);
+          }
+        };
+        
+      } catch(e) {
+        console.error('[' + this.agentId + '] Audio play error:', e);
+      }
+    };
+    
+    // 合并缓冲的 chunks 并播放
+    TTSManager.prototype.playChunks = async function() {
+      if (this.audioChunks.length === 0) return;
+      
+      try {
+        var chunksToPlay = this.audioChunks.splice(0, this.audioChunks.length);
+        var fullHex = chunksToPlay.join('');
+        
+        var bytes = new Uint8Array(fullHex.length / 2);
+        for (var i = 0; i < fullHex.length; i += 2) {
+          bytes[i / 2] = parseInt(fullHex.substr(i, 2), 16);
+        }
+        
+        var buf = await this.audioContext.decodeAudioData(bytes.buffer.slice(0));
+        
+        var now = this.audioContext.currentTime;
+        if (this.nextTime < now) this.nextTime = now;
+        
+        var src = this.audioContext.createBufferSource();
+        src.buffer = buf;
+        src.connect(this.analyser);
+        
+        var startTime = this.nextTime;
+        if (this.activeSources > 0) {
+          startTime = Math.max(now, this.nextTime - 0.01);
+        }
+        src.start(startTime);
+        
+        this.nextTime = startTime + buf.duration;
+        
+        this.activeSources++;
+        this.showIndicator(true);
+        
+        var self = this;
+        src.onended = function() {
+          self.activeSources--;
+          if (self.activeSources <= 0) {
+            self.activeSources = 0;
+            self.showIndicator(false);
+          }
+        };
+        
+      } catch(e) {
+        console.error('[' + this.agentId + '] Audio playChunks error:', e);
+      }
+    };
+    
+    TTSManager.prototype.playAll = async function() {
+      this.playChunks();
+    };
+    
+    TTSManager.prototype.showIndicator = function(show) {
+      var p = document.getElementById('panel-' + this.agentId);
+      if (!p) return;
+      var ind = p.querySelector('.tts-indicator');
+      if (!ind) {
+        ind = document.createElement('span');
+        ind.className = 'tts-indicator';
+        ind.innerHTML = '<span style="display:inline-block;width:4px;height:4px;background:#58a6ff;border-radius:50%;animation:pulse 0.6s infinite;"></span><span style="display:inline-block;width:4px;height:4px;background:#58a6ff;border-radius:50%;animation:pulse 0.6s infinite 0.15s;margin-left:2px;"></span><span style="display:inline-block;width:4px;height:4px;background:#58a6ff;border-radius:50%;animation:pulse 0.6s infinite 0.3s;margin-left:2px;"></span>';
+        p.querySelector('.panel-title').appendChild(ind);
+      }
+      ind.style.display = show ? 'inline-flex' : 'none';
+    };
+    
+    TTSManager.prototype.reset = function() {
+      if (this.ws) try { this.ws.close(); } catch(e) {}
+      this.ws = null;
+      this.pendingTexts = [];
+      this.isOpen = false;
+      this.seen.clear();
+      this.audioChunks = [];
+      this.isPlaying = false;
+      this.activeSources = 0;
+      this.showIndicator(false);
+    };
+
+    function initStatusBar() {
+      var statusBar = document.getElementById('status-bar');
+      statusBar.innerHTML = AGENT_IDS.map(function(id) {
+        return '<div class="status-item"><span class="status-dot disconnected" id="status-' + id + '"></span><span>' + id.charAt(0).toUpperCase() + id.slice(1) + '</span></div>';
+      }).join('');
+    }
+
+    function initConnection(agentId) {
+      var ws = new WebSocket('ws://' + window.location.host + '/ws/' + agentId);
+      connections[agentId].ws = ws;
+      updateStatus(agentId, 'connecting');
+
+      ws.onopen = function() {
+        connections[agentId].connected = true;
+        updateStatus(agentId, 'connected');
+      };
+
+      ws.onmessage = function(event) {
+        var data = JSON.parse(event.data);
+        handleMessage(agentId, data);
+      };
+
+      ws.onclose = function() {
+        connections[agentId].connected = false;
+        updateStatus(agentId, 'disconnected');
+        setTimeout(function() { initConnection(agentId); }, 3000);
+      };
+
+      ws.onerror = function() { updateStatus(agentId, 'disconnected'); };
+    }
+
+    function updateStatus(agentId, status) {
+      var dot = document.getElementById('status-' + agentId);
+      if (dot) {
+        dot.className = 'status-dot';
+        if (status === 'disconnected') dot.classList.add('disconnected');
+      }
+    }
+
+    function handleMessage(agentId, data) {
+      switch (data.type) {
+        case 'system':
+          addMessage(agentId, data.content, 'system');
+          break;
+        case 'start':
+          typingBuffers[agentId] = '';
+          setLoading(agentId, true);
+          ttsManagers[agentId].reset();
+          break;
+        case 'chunk':
+          typingBuffers[agentId] += data.content;
+          // 立即创建或更新消息气泡
+          updateStreamingMessage(agentId, typingBuffers[agentId]);
+          // TTS 语音
+          ttsManagers[agentId].appendText(data.content, false);
+          break;
+        case 'end':
+          if (typingTimeouts[agentId]) clearTimeout(typingTimeouts[agentId]);
+          finalizeMessage(agentId, typingBuffers[agentId]);
+          ttsManagers[agentId].appendText('', true);
+          typingBuffers[agentId] = '';
+          setLoading(agentId, false);
+          break;
+        case 'error':
+          addMessage(agentId, data.content, 'error');
+          setLoading(agentId, false);
+          ttsManagers[agentId].reset();
+          break;
+      }
+    }
+
+    function updateStreamingMessage(agentId, content) {
+      var messagesDiv = document.getElementById('messages-' + agentId);
+      var messageDiv = messagesDiv.querySelector('.message.assistant.streaming');
+      
+      if (!messageDiv) {
+        messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant streaming';
+        messagesDiv.appendChild(messageDiv);
+      }
+      
+      messageDiv.textContent = content;
+      scrollToBottom(agentId);
+    }
+
+    function finalizeMessage(agentId, content) {
+      var messagesDiv = document.getElementById('messages-' + agentId);
+      var messageDiv = messagesDiv.querySelector('.message.assistant.streaming');
+      if (messageDiv) {
+        messageDiv.classList.remove('streaming');
+        messageDiv.textContent = content;
+        messageHistory[agentId].push({ role: 'assistant', content: content });
+      } else if (content) {
+        // 如果没有找到流式消息，创建一个新的
+        addMessage(agentId, content, 'assistant');
+        messageHistory[agentId].push({ role: 'assistant', content: content });
+      }
+    }
+
+    function sendMessage(agentId) {
+      var input = document.getElementById('input-' + agentId);
+      var content = input.value.trim();
+      if (!content || !connections[agentId].connected) return;
+      
+      addMessage(agentId, content, 'user');
+      messageHistory[agentId].push({ role: 'user', content: content });
+      
+      connections[agentId].ws.send(JSON.stringify({ type: 'chat', message: content }));
+      
+      input.value = '';
+    }
+
+    function addMessage(agentId, content, type) {
+      var messagesDiv = document.getElementById('messages-' + agentId);
+      var messageDiv = document.createElement('div');
+      messageDiv.className = 'message ' + type;
+      messageDiv.textContent = content;
+      messagesDiv.appendChild(messageDiv);
+      scrollToBottom(agentId);
+    }
+
+    function setLoading(agentId, loading) {
+      var btn = document.getElementById('btn-' + agentId);
+      btn.disabled = loading;
+      btn.textContent = loading ? '...' : '发送';
+    }
+
+    function scrollToBottom(agentId) {
+      var messagesDiv = document.getElementById('messages-' + agentId);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function clearChat(agentId) {
+      document.getElementById('messages-' + agentId).innerHTML = '';
+      messageHistory[agentId] = [];
+    }
+
+    window.onload = function() {
+      initStatusBar();
+      AGENT_IDS.forEach(function(id) { initConnection(id); });
+    };
+
+    window.onbeforeunload = function() {
+      AGENT_IDS.forEach(function(id) {
+        if (connections[id].ws) connections[id].ws.close();
+      });
+    };
+  </script>
+</body>
+</html>

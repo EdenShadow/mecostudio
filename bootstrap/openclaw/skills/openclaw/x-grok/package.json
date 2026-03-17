@@ -1,0 +1,19 @@
+{
+  "name": "x-grok",
+  "version": "1.0.0",
+  "description": "X.com Grok 查询工具，自动打开浏览器提问并保存回答到知识库",
+  "main": "cli.js",
+  "type": "module",
+  "bin": {
+    "x-grok": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["grok", "x", "twitter", "automation", "browser"],
+  "author": "OpenClaw",
+  "license": "MIT"
+}

@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+<title>Meco Studio - Futuristic Dashboard</title>
+<script src="lib/js/tailwindcss.js"></script>
+<link href="lib/css/inter.css" rel="stylesheet"/>
+<link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
+<link href="lib/css/material-icons-round.css" rel="stylesheet"/>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#c084fc", // Lighter Neon Purple
+                        primaryHover: "#d8b4fe",
+                        "dark-bg": "#050505", // Deepest Black
+                        "glass-border": "rgba(255, 255, 255, 0.08)",
+                        "glass-surface": "rgba(20, 20, 20, 0.6)",
+                        "glass-surface-hover": "rgba(30, 30, 30, 0.8)",
+                    },
+                    fontFamily: {
+                        sans: ["Inter", "sans-serif"],
+                        display: ["Inter", "sans-serif"],
+                    },
+                    borderRadius: {
+                        'xl': '1rem',
+                        '2xl': '1.5rem',
+                        '3xl': '2rem',
+                    },
+                    boxShadow: {
+                        'neon': '0 0 20px rgba(192, 132, 252, 0.15)',
+                        'neon-strong': '0 0 25px rgba(192, 132, 252, 0.3)',
+                        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+                    }
+                },
+            },
+        };
+</script>
+<style>
+    /* Global selection disable */
+    body { -webkit-user-select: none; user-select: none; }
+    input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
+
+    ::-webkit-scrollbar {
+            width: 0px; /* Hide scrollbar */
+            background: transparent;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: transparent;
+        }
+        
+        /* Ensure content is still scrollable but bar is hidden */
+        .custom-scrollbar {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .glass-panel {
+            background: rgba(18, 18, 18, 0.65);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-card {
+            background: linear-gradient(145deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.2);
+        }
+        .glass-card:hover {
+            border-color: rgba(192, 132, 252, 0.3);
+            background: linear-gradient(145deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
+        }
+        .glass-modal {
+            background: rgba(10, 10, 12, 0.75);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(192, 132, 252, 0.3);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 30px rgba(192, 132, 252, 0.1);
+        }
+        @keyframes float {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(30px, -50px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+        }
+        .ambient-blob {
+            animation: float 10s ease-in-out infinite;
+        }
+        .glow-text {
+            text-shadow: 0 0 10px rgba(192, 132, 252, 0.5);
+        }
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(10px);
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .loader {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(192, 132, 252, 0.2);
+            border-left-color: #c084fc;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Transparent mode for iframe embedding */
+        body.in-iframe {
+            background: transparent !important;
+        }
+        body.in-iframe .ambient-blob {
+            display: none !important;
+        }
+    </style>
+</head>
+<body class="bg-dark-bg text-gray-200 font-sans antialiased h-screen overflow-hidden flex flex-col selection:bg-primary/30">
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" class="loading-overlay">
+    <div class="loader"></div>
+    <h3 class="text-xl font-bold text-white mt-4 tracking-wide">Creating Agent...</h3>
+    <p class="text-gray-400 text-sm mt-2">Training voice model &amp; configuring workspace</p>
+</div>
+
+<form id="createForm" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+<div class="absolute inset-0 bg-black/60 backdrop-blur-md transition-opacity"></div>
+<div class="relative w-full max-w-4xl glass-modal rounded-3xl overflow-hidden flex flex-col max-h-[90vh]">
+<div class="p-8 border-b border-white/10 flex justify-between items-center bg-gradient-to-r from-primary/5 to-transparent">
+<div>
+<h2 class="text-2xl font-bold text-white glow-text tracking-wide">Create New Character</h2>
+<p class="text-sm text-gray-400 mt-1">Design your digital human's persona and identity.</p>
+</div>
+<button type="button" onclick="parent.closeCreateModal()" class="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-gray-400 hover:text-white hover:bg-white/10 transition-colors">
+<span class="material-icons-round text-lg">close</span>
+</button>
+</div>
+<div class="p-8 overflow-y-auto custom-scrollbar space-y-8">
+    <!-- Agent Name Input -->
+    <div class="space-y-4">
+        <label class="flex items-center gap-2 text-sm font-semibold text-primary tracking-wide uppercase">
+            <span class="material-icons-outlined text-lg">badge</span>
+            Agent Name
+        </label>
+        <div class="relative group">
+            <input name="name" type="text" required class="relative w-full bg-[#0a0a0a] border border-white/10 rounded-xl p-4 text-gray-200 placeholder-gray-600 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all text-sm leading-relaxed" placeholder="e.g. Sarah Scientist"/>
+        </div>
+    </div>
+
+<div class="space-y-4">
+<label class="flex items-center gap-2 text-sm font-semibold text-primary tracking-wide uppercase">
+<span class="material-icons-outlined text-lg">psychology</span>
+                    Persona Prompt
+                </label>
+<div class="relative group">
+<div class="absolute -inset-0.5 bg-gradient-to-r from-primary/20 to-blue-500/20 rounded-xl blur opacity-30 group-hover:opacity-60 transition duration-500"></div>
+<textarea name="prompt" required class="relative w-full bg-[#0a0a0a] border border-white/10 rounded-xl p-4 text-gray-200 placeholder-gray-600 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all resize-none h-32 text-sm leading-relaxed" placeholder="Describe your AI agent's personality, backstory, expertise, and tone of voice. E.g., 'A witty cybersecurity expert named Alex who explains complex topics with metaphors...'"></textarea>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+<div class="space-y-4">
+<label class="flex items-center gap-2 text-sm font-semibold text-primary tracking-wide uppercase">
+<span class="material-icons-outlined text-lg">face</span>
+                        Visual Identity
+                    </label>
+<div class="grid grid-cols-2 gap-4">
+<label class="relative group cursor-pointer overflow-hidden rounded-2xl h-40 block">
+    <input type="file" name="avatar" accept="image/*" class="hidden" onchange="handleFileSelect(this, 'avatar')">
+    <div class="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+    <div id="avatar-placeholder" class="border border-dashed border-white/20 rounded-2xl h-full flex flex-col items-center justify-center bg-white/[0.02] hover:bg-white/[0.05] hover:border-primary/40 transition-all">
+        <div class="w-12 h-12 mb-3 rounded-full bg-gradient-to-br from-gray-800 to-black flex items-center justify-center shadow-lg border border-white/5">
+            <span class="material-icons-round text-2xl text-gray-400 group-hover:text-primary transition-colors">add_a_photo</span>
+        </div>
+        <span class="text-xs font-medium text-gray-300">Avatar Image</span>
+        <span class="text-[10px] text-gray-600 mt-1">PNG, JPG up to 5MB</span>
+    </div>
+    <div id="avatar-preview" class="absolute inset-0 hidden bg-black">
+        <img id="avatar-img" class="w-full h-full object-cover" />
+        <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+            <span class="material-icons-round text-white">edit</span>
+        </div>
+    </div>
+</label>
+<label class="relative group cursor-pointer overflow-hidden rounded-2xl h-40 block">
+    <input type="file" name="video" accept="video/mp4" class="hidden" onchange="handleFileSelect(this, 'video')">
+    <div class="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+    <div id="video-placeholder" class="border border-dashed border-white/20 rounded-2xl h-full flex flex-col items-center justify-center bg-white/[0.02] hover:bg-white/[0.05] hover:border-blue-400/40 transition-all">
+        <div class="absolute top-2 right-2 text-[9px] bg-white/10 px-1.5 py-0.5 rounded text-gray-400 border border-white/5">Optional</div>
+        <div class="w-12 h-12 mb-3 rounded-full bg-gradient-to-br from-gray-800 to-black flex items-center justify-center shadow-lg border border-white/5">
+            <span class="material-icons-round text-2xl text-gray-400 group-hover:text-blue-400 transition-colors">videocam</span>
+        </div>
+        <span class="text-xs font-medium text-gray-300">Motion Video</span>
+        <span class="text-[10px] text-gray-600 mt-1">MP4 for reference</span>
+    </div>
+    <div id="video-preview" class="absolute inset-0 hidden bg-black">
+        <video id="video-vid" class="w-full h-full object-cover" muted loop autoplay></video>
+        <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+            <span class="material-icons-round text-white">edit</span>
+        </div>
+    </div>
+</label>
+</div>
+</div>
+<div class="space-y-4">
+<label class="flex items-center gap-2 text-sm font-semibold text-primary tracking-wide uppercase">
+<span class="material-icons-outlined text-lg">graphic_eq</span>
+                        Voice Training
+                    </label>
+<label class="relative group cursor-pointer h-40 block">
+    <input type="file" name="voice" accept="audio/*" class="hidden" onchange="updateFileName(this, 'voiceLabel')">
+<div class="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+<div class="border border-dashed border-white/20 rounded-2xl h-full flex flex-col items-center justify-center bg-white/[0.02] hover:bg-white/[0.05] hover:border-primary/40 transition-all px-6 text-center">
+<div class="flex gap-2 mb-3">
+<div class="w-1 h-6 bg-gray-600 rounded-full animate-[pulse_1s_ease-in-out_infinite]"></div>
+<div class="w-1 h-8 bg-gray-500 rounded-full animate-[pulse_1.2s_ease-in-out_infinite]"></div>
+<div class="w-1 h-5 bg-primary rounded-full animate-[pulse_0.8s_ease-in-out_infinite]"></div>
+<div class="w-1 h-9 bg-gray-500 rounded-full animate-[pulse_1.1s_ease-in-out_infinite]"></div>
+<div class="w-1 h-6 bg-gray-600 rounded-full animate-[pulse_0.9s_ease-in-out_infinite]"></div>
+</div>
+<span id="voiceLabel" class="text-xs font-medium text-gray-300">Upload Voice Samples</span>
+<p class="text-[10px] text-gray-500 mt-1 max-w-[200px]">Upload at least 1 min of clear audio to clone voice style and tone.</p>
+</div>
+</label>
+</div>
+</div>
+</div>
+<div class="p-6 border-t border-white/10 bg-black/20 flex justify-end gap-4">
+<button type="button" onclick="parent.closeCreateModal()" class="px-6 py-2.5 rounded-xl text-sm font-medium text-gray-300 hover:text-white hover:bg-white/5 transition-colors">
+                Cancel
+            </button>
+<button type="submit" class="px-8 py-2.5 rounded-xl text-sm font-bold bg-gradient-to-r from-primary to-purple-600 text-white shadow-neon-strong hover:shadow-[0_0_35px_rgba(192,132,252,0.5)] hover:scale-105 transition-all duration-300 border border-white/20">
+                Confirm &amp; Create
+            </button>
+</div>
+</div>
+</form>
+
+<!-- Background elements (blurred) -->
+<div class="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+    <!-- Same background as index -->
+    <div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-purple-900/20 rounded-full blur-[120px] ambient-blob"></div>
+    <div class="absolute bottom-[10%] right-[-5%] w-[600px] h-[600px] bg-blue-900/10 rounded-full blur-[130px] ambient-blob" style="animation-delay: -2s;"></div>
+    <div class="absolute top-[40%] left-[30%] w-[300px] h-[300px] bg-indigo-900/20 rounded-full blur-[100px] ambient-blob" style="animation-delay: -5s;"></div>
+</div>
+
+<script>
+    // Detect iframe and set transparent mode
+    if (window.self !== window.top) {
+        document.body.classList.add('in-iframe');
+    }
+
+    function updateFileName(input, labelId) {
+        const label = document.getElementById(labelId);
+        if (input.files && input.files[0]) {
+            label.textContent = input.files[0].name;
+            label.classList.add('text-primary');
+        }
+    }
+
+    function handleFileSelect(input, type) {
+        if (input.files && input.files[0]) {
+            const file = input.files[0];
+            const placeholder = document.getElementById(`${type}-placeholder`);
+            const preview = document.getElementById(`${type}-preview`);
+            
+            // Hide placeholder, show preview
+            placeholder.classList.add('hidden');
+            preview.classList.remove('hidden');
+            
+            if (type === 'avatar') {
+                const img = document.getElementById('avatar-img');
+                const reader = new FileReader();
+                reader.onload = (e) => { img.src = e.target.result; };
+                reader.readAsDataURL(file);
+            } else if (type === 'video') {
+                const vid = document.getElementById('video-vid');
+                const url = URL.createObjectURL(file);
+                vid.src = url;
+            }
+        }
+    }
+
+    document.getElementById('createForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        
+        // Show loading
+        document.getElementById('loadingOverlay').classList.add('active');
+
+        try {
+            const response = await fetch('/api/agents', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                // Alert if voice training failed
+                if (data.voiceError) {
+                    alert('Agent created, but voice training failed:\n' + data.voiceError);
+                }
+                // Redirect parent window to edit page using ID
+                if (data.id) {
+                    window.parent.location.href = `edit.html?id=${encodeURIComponent(data.id)}`;
+                } else {
+                    window.parent.location.href = `edit.html?name=${encodeURIComponent(data.name)}`;
+                }
+            } else {
+                alert('Failed to create agent');
+                document.getElementById('loadingOverlay').classList.remove('active');
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('Error creating agent');
+            document.getElementById('loadingOverlay').classList.remove('active');
+        }
+    });
+</script>
+</body></html>

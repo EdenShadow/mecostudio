@@ -1,0 +1,19 @@
+{
+  "name": "kimi-search",
+  "version": "1.0.0",
+  "description": "使用Kimi AI进行联网搜索，生成本地知识库和索引",
+  "main": "cli.js",
+  "type": "module",
+  "bin": {
+    "kimi-search": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["search", "kimi", "knowledge-base", "agent"],
+  "author": "OpenClaw",
+  "license": "MIT"
+}

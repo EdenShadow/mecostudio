@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw 六人议会</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0c10;
+      color: #c9d1d9;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    
+    .header {
+      background: #161b22;
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    
+    .header h1 { font-size: 14px; color: #58a6ff; }
+    
+    .status { display: flex; gap: 12px; font-size: 11px; }
+    .status-item { display: flex; align-items: center; gap: 4px; }
+    .status-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: #238636;
+    }
+    .status-dot.disconnected { background: #da3633; }
+    
+    .grid-container {
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      grid-template-rows: repeat(3, 1fr);
+      gap: 8px;
+      padding: 8px;
+      overflow: hidden;
+    }
+    
+    .panel {
+      display: flex;
+      flex-direction: column;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    
+    .panel-header {
+      background: #21262d;
+      padding: 6px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    
+    .panel-title { 
+      font-weight: 600; 
+      font-size: 12px; 
+      display: flex; 
+      align-items: center; 
+      gap: 6px; 
+    }
+    .panel-icon { 
+      width: 22px; height: 22px; border-radius: 50%; 
+      display: flex; align-items: center; justify-content: center; 
+      font-size: 12px; 
+    }
+    .panel-icon.main { background: #238636; }
+    .panel-icon.jobs { background: #8957e5; }
+    .panel-icon.kobe { background: #f97316; }
+    .panel-icon.munger { background: #22c55e; }
+    .panel-icon.hawking { background: #3b82f6; }
+    .panel-icon.gates { background: #06b6d4; }
+    
+    .panel-model { font-size: 9px; color: #8b949e; }
+    
+    .panel-actions { display: flex; gap: 2px; }
+    .btn-icon {
+      background: #30363d; border: none; color: #c9d1d9;
+      cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 10px;
+    }
+    .btn-icon:hover { background: #484f58; }
+    
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    
+    .message {
+      max-width: 95%;
+      padding: 6px 10px;
+      border-radius: 10px;
+      animation: fadeIn 0.2s ease;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+    
+    .message.user {
+      align-self: flex-end;
+      background: #1f6feb;
+      color: #fff;
+      border-bottom-right-radius: 3px;
+    }
+    
+    .message.assistant {
+      align-self: flex-start;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-bottom-left-radius: 3px;
+    }
+    
+    .message.system {
+      align-self: center;
+      background: transparent;
+      color: #8b949e;
+      font-size: 9px;
+      padding: 2px 8px;
+    }
+    
+    .message.error {
+      align-self: center;
+      background: #da3633;
+      color: #fff;
+      font-size: 10px;
+    }
+    
+    .input-area {
+      background: #21262d;
+      padding: 6px 8px;
+      border-top: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    
+    .input-wrapper {
+      display: flex;
+      gap: 4px;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 2px;
+    }
+    
+    .input-wrapper input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 4px 8px;
+      color: #c9d1d9;
+      font-size: 11px;
+      outline: none;
+    }
+    
+    .btn-send {
+      background: #238636;
+      border: none;
+      color: #fff;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .btn-send:hover { background: #2ea043; }
+    .btn-send:disabled { background: #484f58; cursor: not-allowed; }
+    
+    .typing-cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      background: #58a6ff;
+      margin-left: 2px;
+      animation: blink 1s infinite;
+      vertical-align: text-bottom;
+    }
+    @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+    @keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.5; } }
+    
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🦀 OpenClaw 六人议会</h1>
+    <div class="status" id="status-bar">
+      <!-- 动态生成状态 -->
+    </div>
+  </div>
+
+  <div class="grid-container">
+    <!-- Main Agent -->
+    <div class="panel" id="panel-main">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon main">🤖</div>
+          <div>
+            <div>Main</div>
+            <div class="panel-model">通用助手</div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('main')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-main"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-main" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('main')">
+          <button class="btn-send" id="btn-main" onclick="sendMessage('main')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Steve Jobs -->
+    <div class="panel" id="panel-jobs">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon jobs">🍎</div>
+          <div>
+            <div>Steve Jobs</div>
+            <div class="panel-model">苹果创始人</div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('jobs')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-jobs"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-jobs" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('jobs')">
+          <button class="btn-send" id="btn-jobs" onclick="sendMessage('jobs')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Kobe Bryant -->
+    <div class="panel" id="panel-kobe">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon kobe">🐍</div>
+          <div>
+            <div>Kobe Bryant</div>
+            <div class="panel-model">黑曼巴</div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('kobe')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-kobe"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-kobe" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('kobe')">
+          <button class="btn-send" id="btn-kobe" onclick="sendMessage('kobe')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charlie Munger -->
+    <div class="panel" id="panel-munger">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon munger">🧠</div>
+          <div>
+            <div>Charlie Munger</div>
+            <div class="panel-model">智慧导师</div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('munger')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-munger"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-munger" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('munger')">
+          <button class="btn-send" id="btn-munger" onclick="sendMessage('munger')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stephen Hawking -->
+    <div class="panel" id="panel-hawking">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon hawking">🔭</div>
+          <div>
+            <div>Stephen Hawking</div>
+            <div class="panel-model">宇宙学家</div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('hawking')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-hawking"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-hawking" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('hawking')">
+          <button class="btn-send" id="btn-hawking" onclick="sendMessage('hawking')">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bill Gates -->
+    <div class="panel" id="panel-gates">
+      <div class="panel-header">
+        <div class="panel-title">
+          <div class="panel-icon gates">💻</div>
+          <div>
+            <div>Bill Gates</div>
+            <div class="panel-model">慈善家</div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button class="btn-icon" onclick="clearChat('gates')">清</button>
+        </div>
+      </div>
+      <div class="messages" id="messages-gates"></div>
+      <div class="input-area">
+        <div class="input-wrapper">
+          <input type="text" id="input-gates" placeholder="输入消息..." 
+            onkeydown="if(event.key==='Enter'&&!event.isComposing)sendMessage('gates')">
+          <button class="btn-send" id="btn-gates" onclick="sendMessage('gates')">发送</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const AGENT_IDS = ['main', 'jobs', 'kobe', 'munger', 'hawking', 'gates'];
+    const connections = {};
+    const messageHistory = {};
+    const typingBuffers = {};
+    const typingTimeouts = {};
+    
+    // ==================== TTS 配置 ====================
+    const MINIMAX_API_KEY = "";
+    const MINIMAX_TTS_URL = "https://api.minimaxi.com/v1/t2a_v2";
+    
+    // 智能体声音配置
+    const AGENT_VOICES = {
+      'main': 'Chinese (Mandarin)_Sincere_Adult',
+      'jobs': 'jobs_voice_20260115_v3',
+      'kobe': 'Chinese (Mandarin)_Sincere_Adult',
+      'munger': 'charles_munger_v1_hd',
+      'hawking': 'Chinese (Mandarin)_Sincere_Adult',
+      'gates': 'Chinese (Mandarin)_Sincere_Adult'
+    };
+    
+    // TTS 流式管理器（每个智能体独立）
+    const ttsManagers = {};
+    
+    // TTS Manager 类
+    class TTSManager {
+      constructor(agentId) {
+        this.agentId = agentId;
+        this.audioContext = null;
+        this.analyser = null;
+        this.ws = null;
+        this.wsState = 'closed'; // 'closed' | 'connecting' | 'open'
+        this.textQueue = [];     // 待发送文本队列
+        this.decodedChunks = new Set();
+        this.totalDecodedDuration = 0;
+        this.nextStartTime = 0;
+        this.sessionActive = false;
+      }
+      
+      init() {
+        if (!this.audioContext) {
+          this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          this.analyser = this.audioContext.createAnalyser();
+          this.analyser.fftSize = 64;
+          this.analyser.connect(this.audioContext.destination);
+        }
+        if (this.audioContext.state === 'suspended') {
+          this.audioContext.resume();
+        }
+      }
+      
+      // 添加文本到TTS
+      async appendText(text, isFinal = false) {
+        if (!this.audioContext) this.init();
+        
+        // 如果会话已结束，重置
+        if (!this.sessionActive && this.wsState === 'closed') {
+          this.reset();
+          this.sessionActive = true;
+        }
+        
+        // 确保连接
+        if (this.wsState === 'closed') {
+          this.connectTTSWebSocket();
+        }
+        
+        // 累积文本
+        if (text) {
+          this.textQueue.push({ text, isFinal });
+        } else if (isFinal) {
+          this.textQueue.push({ text: '', isFinal: true });
+        }
+        
+        // 处理队列
+        this.processQueue();
+      }
+      
+      // 处理发送队列
+      async processQueue() {
+        if (this.wsState !== 'open') return;
+        
+        while (this.textQueue.length > 0) {
+          const item = this.textQueue.shift();
+          const cleanText = item.text ? this.cleanTextForTTS(item.text) : '';
+          
+          if (cleanText) {
+            this.ws.send(JSON.stringify({ type: 'text', content: cleanText }));
+          }
+          
+          if (item.isFinal) {
+            setTimeout(() => {
+              if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify({ type: 'end' }));
+                this.sessionActive = false;
+              }
+            }, 300);
+          }
+        }
+      }
+      
+      // 连接TTS WebSocket（严格单例）
+      connectTTSWebSocket() {
+        if (this.wsState !== 'closed') return; // 已连接或连接中，不再创建
+        
+        this.wsState = 'connecting';
+        
+        try {
+          this.ws = new WebSocket(`ws://${window.location.host}/tts/${this.agentId}`);
+          
+          this.ws.onopen = () => {
+            this.wsState = 'open';
+            this.nextStartTime = this.audioContext.currentTime;
+            this.processQueue(); // 发送队列中的文本
+          };
+          
+          this.ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              
+              if (data.data && data.data.audio) {
+                this.decodeAndPlay(data.data.audio);
+              }
+              
+              if (data.is_final || data.event === 'task_finished') {
+                this.wsState = 'closing';
+              }
+            } catch (e) {}
+          };
+          
+          this.ws.onerror = () => {
+            // 静默处理错误
+          };
+          
+          this.ws.onclose = () => {
+            this.wsState = 'closed';
+            this.ws = null;
+          };
+          
+        } catch (e) {
+          this.wsState = 'closed';
+        }
+      }
+      
+      // 解码并入队（带去重）
+      async decodeAndQueue(hexString) {
+        try {
+          // 生成唯一ID（取前32个字符作为指纹）
+          const chunkId = hexString.slice(0, 32);
+          
+          // 检查是否已解码过
+          if (this.decodedChunks.has(chunkId)) {
+            console.log(`[${this.agentId}] Skip duplicate chunk`);
+            return;
+          }
+          this.decodedChunks.add(chunkId);
+          
+          const bytes = hexString.match(/.{1,2}/g).map(b => parseInt(b, 16));
+          const u8 = new Uint8Array(bytes);
+          
+          const audioBuffer = await this.audioContext.decodeAudioData(u8.buffer.slice(0));
+          
+          // 累积解码总时长（原始时长，后续计算时/2）
+          this.totalDecodedDuration += audioBuffer.duration;
+          
+          this.playbackQueue.push(audioBuffer);
+          this.showSpeakingIndicator(true);
+          
+          // 如果还没开始播放，启动播放
+          if (!this.isProcessingQueue && this.isPlaying) {
+            this.processQueue();
+          }
+          
+        } catch (e) {
+          console.error(`[${this.agentId}] Audio decode error:`, e);
+        }
+      }
+      
+      // 开始播放
+      startPlayback() {
+        if (!this.audioContext) this.init();
+        this.isPlaying = true;
+        this.nextStartTime = this.audioContext.currentTime;
+        this.playbackStartTime = this.audioContext.currentTime; // 记录开始时间
+        this.processQueue();
+      }
+      
+      // 处理播放队列（带锁，防止并发）
+      async processQueue() {
+        if (!this.isPlaying || this.isProcessingQueue) return;
+        
+        this.isProcessingQueue = true;
+        
+        try {
+          while (this.playbackQueue.length > 0) {
+            const buffer = this.playbackQueue.shift();
+            this.playBuffer(buffer);
+          }
+        } finally {
+          this.isProcessingQueue = false;
+        }
+        
+        // 启动播放完成检查定时器（基于总时长/2）
+        if (!this.playbackCheckInterval) {
+          this.startPlaybackCheck();
+        }
+      }
+      
+      // 启动播放完成检查
+      startPlaybackCheck() {
+        if (this.playbackCheckInterval) return;
+        
+        this.playbackCheckInterval = setInterval(() => {
+          if (!this.isPlaying) {
+            this.stopPlaybackCheck();
+            return;
+          }
+          
+          // 计算实际总时长（解码总时长/2）
+          const totalActualDuration = this.totalDecodedDuration / 2;
+          // 当前已播放时长（基于audioContext时间）
+          const currentPlayedDuration = this.audioContext.currentTime - this.playbackStartTime;
+          
+          // 检查是否播放完成（到达总时长的/2位置）
+          if (!this.hasCompleted && currentPlayedDuration >= totalActualDuration - 0.1) {
+            this.hasCompleted = true;
+            this.stopPlaybackCheck();
+            this.onPlaybackComplete();
+          }
+          
+          // 如果已经没数据了且没在生成，也可以结束
+          if (!this.hasCompleted && this.playbackQueue.length === 0 && !this.isGenerating &&
+              currentPlayedDuration >= totalActualDuration - 0.5) {
+            this.hasCompleted = true;
+            this.stopPlaybackCheck();
+            this.onPlaybackComplete();
+          }
+        }, 100); // 每100ms检查一次
+      }
+      
+      // 停止播放检查
+      stopPlaybackCheck() {
+        if (this.playbackCheckInterval) {
+          clearInterval(this.playbackCheckInterval);
+          this.playbackCheckInterval = null;
+        }
+      }
+      
+      // 播放单个缓冲区
+      playBuffer(buffer) {
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.analyser);
+        
+        const currentTime = this.audioContext.currentTime;
+        if (this.nextStartTime < currentTime) {
+          this.nextStartTime = currentTime;
+        }
+        
+        source.start(this.nextStartTime);
+        // MiniMax TTS 音频实际播放时长是解码时长的 1/2
+        const actualDuration = buffer.duration / 2;
+        this.nextStartTime += actualDuration;
+      }
+      
+      // 播放完成回调（由 processQueue 统一调用）
+      onPlaybackComplete() {
+        console.log(`[${this.agentId}] TTS 播放完成（总时长/2到达）`);
+        this.stopPlaybackCheck(); // 确保停止检查
+        this.showSpeakingIndicator(false);
+        // 这里可以添加其他回调逻辑
+      }
+      
+      // 显示说话指示器
+      showSpeakingIndicator(show) {
+        const panel = document.getElementById(`panel-${this.agentId}`);
+        if (!panel) return;
+        
+        let indicator = panel.querySelector('.tts-indicator');
+        if (!indicator) {
+          indicator = document.createElement('span');
+          indicator.className = 'tts-indicator';
+          indicator.style.cssText = `
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: 6px;
+            font-size: 10px;
+            color: #58a6ff;
+          `;
+          indicator.innerHTML = `
+            <span style="width:4px;height:4px;background:#58a6ff;border-radius:50%;animation:pulse 0.6s infinite;"></span>
+            <span style="width:4px;height:4px;background:#58a6ff;border-radius:50%;animation:pulse 0.6s infinite 0.15s;"></span>
+            <span style="width:4px;height:4px;background:#58a6ff;border-radius:50%;animation:pulse 0.6s infinite 0.3s;"></span>
+          `;
+          const titleEl = panel.querySelector('.panel-title');
+          if (titleEl) titleEl.appendChild(indicator);
+        }
+        
+        indicator.style.display = show ? 'inline-flex' : 'none';
+      }
+      
+      // 清理文本供TTS使用
+      cleanTextForTTS(text) {
+        return text
+          // XML/HTML 标签
+          .replace(/<[^>]+>/g, '')
+          // Markdown 格式
+          .replace(/[*#`_~\[\](){}|]/g, '')
+          // 链接 [text](url) -> text
+          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+          // 纯URL
+          .replace(/https?:\/\/[^\s\])]+/g, '')
+          // 引用标记 [1], [2] 等
+          .replace(/\[\d+\]/g, '')
+          // 多余空格
+          .replace(/\s+/g, ' ')
+          // 特殊字符但保留基本标点
+          .replace(/[^\u4e00-\u9fa5a-zA-Z0-9\s。，！？；：""''（）、.,!?;:\-\(\)]/g, '')
+          .trim();
+      }
+      
+      // 解码并入队（带去重）
+      async decodeAndQueue(hexString) {
+        try {
+          // 检查空数据
+          if (!hexString || hexString.length < 10) return;
+          
+          // 去重检查 - 使用完整 hash
+          if (this.decodedChunks.has(hexString)) return;
+          this.decodedChunks.add(hexString);
+          
+          // 限制缓存大小，防止内存泄漏
+          if (this.decodedChunks.size > 100) {
+            const first = this.decodedChunks.values().next().value;
+            this.decodedChunks.delete(first);
+          }
+          
+          const bytes = hexString.match(/.{1,2}/g).map(b => parseInt(b, 16));
+          const u8 = new Uint8Array(bytes);
+          
+          const audioBuffer = await this.audioContext.decodeAudioData(u8.buffer.slice(0));
+          
+          this.totalDecodedDuration += audioBuffer.duration;
+          
+          // 立即播放（不需要队列，因为服务端已经按顺序发送）
+          this.playBuffer(audioBuffer);
+          this.showSpeakingIndicator(true);
+          
+        } catch (e) {
+          // 静默忽略解码错误（可能是空数据或损坏数据）
+          // console.error(`[${this.agentId}] Audio decode error:`, e.message);
+        }
+      }
+      
+      // 播放单个缓冲区
+      playBuffer(buffer) {
+        const source = this.audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.analyser);
+        
+        const currentTime = this.audioContext.currentTime;
+        if (this.nextStartTime < currentTime) {
+          this.nextStartTime = currentTime;
+        }
+        
+        source.start(this.nextStartTime);
+        // 实际播放时长是解码时长的/2
+        this.nextStartTime += buffer.duration / 2;
+      }
+      
+      // 启动播放完成检查
+      startPlaybackCheck() {
+        if (this.playbackCheckInterval) return;
+        
+        this.playbackCheckInterval = setInterval(() => {
+          if (!this.isPlaying) {
+            this.stopPlaybackCheck();
+            return;
+          }
+          
+          // 计算实际总时长和当前播放位置
+          const totalActualDuration = this.totalDecodedDuration / 2;
+          const currentPlayedDuration = this.audioContext.currentTime - this.playbackStartTime;
+          
+          // 到达总时长的/2位置，播放完成
+          if (!this.hasCompleted && currentPlayedDuration >= totalActualDuration - 0.1) {
+            this.hasCompleted = true;
+            this.onPlaybackComplete();
+          }
+        }, 100);
+      }
+      
+      // 停止播放检查
+      stopPlaybackCheck() {
+        if (this.playbackCheckInterval) {
+          clearInterval(this.playbackCheckInterval);
+          this.playbackCheckInterval = null;
+        }
+      }
+      
+      // 播放完成回调
+      onPlaybackComplete() {
+        console.log(`[${this.agentId}] TTS 播放完成`);
+        this.stopPlaybackCheck();
+        this.showSpeakingIndicator(false);
+        // 关闭WebSocket
+        if (this.ws) {
+          try { this.ws.close(); } catch (e) {}
+          this.ws = null;
+          this.wsConnected = false;
+        }
+      }
+      
+      // 重置
+      reset() {
+        this.stopPlaybackCheck();
+        if (this.ws) {
+          try { this.ws.close(); } catch (e) {}
+          this.ws = null;
+        }
+        this.isPlaying = false;
+        this.wsConnected = false;
+        this.textBuffer = '';
+        this.hasStarted = false;
+        this.hasCompleted = false;
+        this.decodedChunks.clear();
+        this.totalDecodedDuration = 0;
+        this.playbackStartTime = 0;
+        this.nextStartTime = 0;
+        this.showSpeakingIndicator(false);
+      }
+    }
+    
+    // 初始化每个智能体的TTS管理器
+    AGENT_IDS.forEach(id => {
+      ttsManagers[id] = new TTSManager(id);
+    });
+    
+    // 初始化
+    AGENT_IDS.forEach(id => {
+      connections[id] = { ws: null, connected: false };
+      messageHistory[id] = [];
+      typingBuffers[id] = '';
+    });
+
+    // 初始化状态栏
+    function initStatusBar() {
+      const statusBar = document.getElementById('status-bar');
+      statusBar.innerHTML = AGENT_IDS.map(id => `
+        <div class="status-item">
+          <span class="status-dot disconnected" id="status-${id}"></span>
+          <span>${id.charAt(0).toUpperCase() + id.slice(1)}</span>
+        </div>
+      `).join('');
+    }
+
+    // WebSocket 重连配置
+    const WS_RECONNECT_CONFIG = {
+      initialDelay: 3000,    // 首次重连 3 秒
+      maxDelay: 30000,       // 最大重连间隔 30 秒
+      currentDelay: {}       // 每个 agent 的当前延迟
+    };
+    
+    function initConnection(agentId) {
+      // 初始化当前延迟
+      if (!WS_RECONNECT_CONFIG.currentDelay[agentId]) {
+        WS_RECONNECT_CONFIG.currentDelay[agentId] = WS_RECONNECT_CONFIG.initialDelay;
+      }
+      
+      const ws = new WebSocket(`ws://${window.location.host}/ws/${agentId}`);
+      connections[agentId].ws = ws;
+      updateStatus(agentId, 'connecting');
+
+      ws.onopen = () => {
+        connections[agentId].connected = true;
+        updateStatus(agentId, 'connected');
+        // 连接成功后重置延迟
+        WS_RECONNECT_CONFIG.currentDelay[agentId] = WS_RECONNECT_CONFIG.initialDelay;
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        handleMessage(agentId, data);
+      };
+
+      ws.onclose = () => {
+        connections[agentId].connected = false;
+        updateStatus(agentId, 'disconnected');
+        // 使用指数退避策略，逐渐增加重连间隔
+        const delay = WS_RECONNECT_CONFIG.currentDelay[agentId];
+        setTimeout(() => initConnection(agentId), delay);
+        // 增加下次重连延迟（最多到 maxDelay）
+        WS_RECONNECT_CONFIG.currentDelay[agentId] = Math.min(
+          delay * 1.5, 
+          WS_RECONNECT_CONFIG.maxDelay
+        );
+      };
+
+      ws.onerror = () => updateStatus(agentId, 'disconnected');
+    }
+
+    function updateStatus(agentId, status) {
+      const dot = document.getElementById(`status-${agentId}`);
+      if (dot) {
+        dot.className = 'status-dot';
+        if (status === 'disconnected') dot.classList.add('disconnected');
+      }
+    }
+
+    function handleMessage(agentId, data) {
+      switch (data.type) {
+        case 'system':
+          addMessage(agentId, data.content, 'system');
+          break;
+        case 'start':
+          typingBuffers[agentId] = '';
+          setLoading(agentId, true);
+          // 初始化TTS
+          ttsManagers[agentId].init();
+          ttsManagers[agentId].reset();
+          break;
+        case 'chunk':
+          typingBuffers[agentId] += data.content;
+          
+          // ===== 流式TTS：添加文本到TTS队列 =====
+          ttsManagers[agentId].appendText(data.content, false);
+          
+          if (typingTimeouts[agentId]) clearTimeout(typingTimeouts[agentId]);
+          typingTimeouts[agentId] = setTimeout(() => {
+            updateStreamingMessage(agentId, typingBuffers[agentId]);
+          }, 30);
+          break;
+        case 'end':
+          if (typingTimeouts[agentId]) clearTimeout(typingTimeouts[agentId]);
+          finalizeMessage(agentId, typingBuffers[agentId]);
+          
+          // ===== 流式TTS：发送剩余文本并结束 =====
+          ttsManagers[agentId].appendText('', true);
+          
+          typingBuffers[agentId] = '';
+          setLoading(agentId, false);
+          break;
+        case 'error':
+          addMessage(agentId, data.content, 'error');
+          setLoading(agentId, false);
+          ttsManagers[agentId].reset();
+          break;
+      }
+    }
+
+    function updateStreamingMessage(agentId, content) {
+      const messagesDiv = document.getElementById(`messages-${agentId}`);
+      let messageDiv = messagesDiv.querySelector('.message.assistant.streaming');
+      
+      if (!messageDiv) {
+        messageDiv = document.createElement('div');
+        messageDiv.className = 'message assistant streaming';
+        messagesDiv.appendChild(messageDiv);
+      }
+      
+      messageDiv.textContent = content;
+      scrollToBottom(agentId);
+    }
+
+    function finalizeMessage(agentId, content) {
+      const messagesDiv = document.getElementById(`messages-${agentId}`);
+      const messageDiv = messagesDiv.querySelector('.message.assistant.streaming');
+      if (messageDiv) {
+        messageDiv.classList.remove('streaming');
+        messageDiv.textContent = content;
+        messageHistory[agentId].push({ role: 'assistant', content });
+      }
+    }
+
+    function sendMessage(agentId) {
+      const input = document.getElementById(`input-${agentId}`);
+      const content = input.value.trim();
+      if (!content || !connections[agentId].connected) return;
+      
+      addMessage(agentId, content, 'user');
+      messageHistory[agentId].push({ role: 'user', content });
+      
+      connections[agentId].ws.send(JSON.stringify({ content }));
+      
+      input.value = '';
+    }
+
+    function addMessage(agentId, content, type) {
+      const messagesDiv = document.getElementById(`messages-${agentId}`);
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${type}`;
+      messageDiv.textContent = content;
+      messagesDiv.appendChild(messageDiv);
+      scrollToBottom(agentId);
+    }
+
+    function setLoading(agentId, loading) {
+      const btn = document.getElementById(`btn-${agentId}`);
+      btn.disabled = loading;
+      btn.textContent = loading ? '...' : '发送';
+    }
+
+    function scrollToBottom(agentId) {
+      const messagesDiv = document.getElementById(`messages-${agentId}`);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function clearChat(agentId) {
+      document.getElementById(`messages-${agentId}`).innerHTML = '';
+      messageHistory[agentId] = [];
+    }
+
+    window.onload = () => {
+      initStatusBar();
+      AGENT_IDS.forEach(id => initConnection(id));
+    };
+
+    window.onbeforeunload = () => {
+      AGENT_IDS.forEach(id => {
+        if (connections[id].ws) connections[id].ws.close();
+      });
+    };
+  </script>
+</body>
+</html>

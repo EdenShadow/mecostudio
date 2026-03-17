@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# X-Grok Skill Wrapper
+exec python3 ~/.openclaw/skills/x-grok/skill.py "$@"

@@ -1,0 +1,1573 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"/>
+    <title>Ask Master</title>
+    <link href="assets/css/fonts.css" rel="stylesheet"/>
+    <link href="assets/css/material-icons.css" rel="stylesheet"/>
+    <script src="assets/js/tailwindcss.js"></script>
+    <script src="assets/js/marked.min.js"></script>
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1fa2ad",
+                        "background-light": "#f3f2f2",
+                        "background-dark": "#121416",
+                        "metal-dark": "#1c1e21",
+                        "aqua-light": "#5ee7f2",
+                        "aqua-dark": "#16808a",
+                        "ipod-grey": "#e3e3e3",
+                        "ipod-screen-border": "#1a1a1a",
+                        "click-wheel": "#f2f2f2",
+                    },
+                    fontFamily: {
+                        "display": ["Newsreader", "serif"],
+                        "serif": ["EB Garamond", "serif"],
+                        "sans": ["Manrope", "sans-serif"],
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.5rem", "lg": "1rem", "xl": "1.5rem", "full": "9999px",
+                        "ipod": "2.5rem",
+                    },
+                    boxShadow: {
+                        'skeuo-inset': 'inset 0px 4px 8px rgba(0, 0, 0, 0.6), 0px 1px 0px rgba(255, 255, 255, 0.05)',
+                        'aqua-glow': '0 0 15px rgba(31, 162, 173, 0.5), inset 0 1px 0 rgba(255,255,255,0.4)',
+                        'halo': '0 0 60px rgba(255, 215, 0, 0.15)',
+                        'glass-emboss': 'inset 0 1px 0 rgba(255,255,255,0.3), 0 20px 40px rgba(0,0,0,0.4)',
+                        'device': '0 20px 50px -12px rgba(0, 0, 0, 0.5), inset 0 2px 4px rgba(255,255,255,0.9), inset 0 -4px 6px rgba(0,0,0,0.1)',
+                        'screen-inset': 'inset 0 4px 10px rgba(0,0,0,0.8), 0 1px 0 rgba(255,255,255,0.1)',
+                        'wheel-outer': '0 4px 10px rgba(0,0,0,0.15), inset 0 1px 2px rgba(255,255,255,1)',
+                        'wheel-inner': 'inset 0 2px 5px rgba(0,0,0,0.1), 0 1px 0 rgba(255,255,255,0.8)',
+                        'retro-card': '0 2px 5px rgba(0,0,0,0.4)',
+                    },
+                    animation: {
+                        'spin-slow': 'spin 1.5s linear infinite',
+                    }
+                },
+            },
+        }
+    </script>
+    <style>
+        /* Shared Styles */
+        body {
+            min-height: max(884px, 100dvh);
+            background-color: #121416;
+            overflow-x: hidden;
+        }
+
+        /* Home Page Styles */
+        .aqua-btn {
+            background: linear-gradient(180deg, #4fdbe8 0%, #1fa2ad 50%, #16808a 51%, #1fa2ad 100%);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 5px rgba(0,0,0,0.5);
+            position: relative;
+            overflow: hidden;
+            cursor: pointer;
+        }
+        .aqua-btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 5%; right: 5%; height: 45%;
+            background: linear-gradient(180deg, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0.1) 100%);
+            border-radius: 999px 999px 20px 20px;
+            opacity: 0.6;
+        }
+        .aqua-btn:active {
+            background: linear-gradient(180deg, #16808a 0%, #1fa2ad 100%);
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.4);
+        }
+        .nav-glass-btn {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.1) 50%, rgba(255, 255, 255, 0.05) 51%, rgba(255, 255, 255, 0.15) 100%);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            cursor: pointer;
+        }
+        .frosted-glass {
+            background: rgba(20, 20, 25, 0.55);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        /* iPod/Result Styles */
+        .glass-nav-button {
+            background: linear-gradient(to bottom, rgba(255,255,255,0.25) 0%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 51%, rgba(255,255,255,0.15) 100%);
+            border: 1px solid rgba(255,255,255,0.3);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.4);
+            backdrop-filter: blur(4px);
+            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+            cursor: pointer;
+        }
+        .frosted-panel {
+            background: rgba(22, 22, 26, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .metal-bezel {
+            background: linear-gradient(180deg, #f2f2f2 0%, #dcdcdc 50%, #a5a5a5 51%, #cecece 100%);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.9), 0 0 0 1px rgba(0,0,0,0.4);
+        }
+        .ipod-chassis {
+            background: linear-gradient(to right, #dcdcdc 0%, #f2f2f2 20%, #f2f2f2 80%, #dcdcdc 100%);
+        }
+        .click-wheel {
+            background: #fcfcfc;
+            border: 1px solid #d1d1d1;
+        }
+        .click-wheel:active { filter: brightness(0.95); }
+        .center-button {
+            background: linear-gradient(180deg, #ffffff 0%, #e0e0e0 100%);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .center-button:active {
+            background: #dcdcdc;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+        }
+        .ipod-scroll::-webkit-scrollbar { width: 6px; }
+        .ipod-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
+        .ipod-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.4); border-radius: 4px; }
+        .ipod-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.6); }
+        .ipod-scroll { transition: padding-bottom 0.5s ease; }
+        .beachball {
+            background: conic-gradient(#ff3b30 0deg 60deg, #ff9500 60deg 120deg, #ffcc00 120deg 180deg, #4cd964 180deg 240deg, #5ac8fa 240deg 300deg, #5856d6 300deg 360deg);
+        }
+        .typing-cursor { animation: blink 1s step-end infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        
+        /* Markdown Styles */
+        .markdown-body p { margin-bottom: 0.8em; }
+        .markdown-body strong { font-weight: 600; color: #fff; }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3 { margin-top: 1em; margin-bottom: 0.5em; font-weight: 600; color: #fff; }
+        .markdown-body ul { list-style-type: disc; padding-left: 1.2em; margin-bottom: 0.8em; }
+
+        /* Tab Styles */
+        .tab-btn {
+            padding: 8px 16px;
+            font-family: "Manrope", sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.6);
+            border-radius: 999px;
+            transition: all 0.3s;
+            background: transparent;
+            border: 1px solid transparent;
+        }
+        .tab-btn.active {
+            color: white;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.1);
+        }
+
+        /* Star Rating */
+        .star-icon {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 48;
+            color: #fbbf24;
+        }
+        .star-icon.empty {
+            font-variation-settings: 'FILL' 0;
+            color: rgba(255, 255, 255, 0.3);
+        }
+        .star-icon.half {
+            background: linear-gradient(90deg, #fbbf24 50%, rgba(255,255,255,0.3) 50%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-variation-settings: 'FILL' 1;
+        }
+
+        .liquid-btn {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(12px) saturate(150%);
+            -webkit-backdrop-filter: blur(12px) saturate(150%);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 
+                0 4px 15px rgba(0, 0, 0, 0.1), 
+                inset 0 0 20px rgba(255, 255, 255, 0.05),
+                inset 0 1px 0 rgba(255, 255, 255, 0.4);
+            border-radius: 999px;
+            color: white;
+            font-family: "Manrope", sans-serif;
+            font-weight: 600;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .liquid-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: 
+                0 6px 20px rgba(0, 0, 0, 0.15), 
+                inset 0 0 20px rgba(255, 255, 255, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.5);
+            transform: translateY(-1px);
+        }
+        .liquid-btn:active {
+            transform: translateY(1px);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .liquid-btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 50%;
+            background: linear-gradient(to bottom, rgba(255,255,255,0.1) 0%, transparent 100%);
+            border-radius: 999px 999px 0 0;
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        /* Danmaku Styles */
+        .danmaku-container {
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            width: 100%;
+            height: 160px;
+            overflow: hidden;
+            pointer-events: none;
+            mask-image: linear-gradient(to top, black 30%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to top, black 60%, transparent 100%);
+            z-index: 5;
+        }
+
+        .danmaku-row {
+            display: flex;
+            white-space: nowrap;
+            position: absolute;
+            left: 0;
+            width: max-content;
+            animation: scroll linear infinite;
+        }
+        
+        .row-1 { top: 10px; animation-duration: 90s; }
+        .row-2 { top: 60px; animation-duration: 110s; } 
+        .row-3 { top: 110px; animation-duration: 100s; } 
+
+        .danmaku-item {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 999px;
+            padding: 6px 16px;
+            margin-right: 16px;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 13px;
+            font-family: "Manrope", sans-serif;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: all 0.2s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            flex-shrink: 0;
+        }
+
+        .danmaku-item:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(1.05);
+            color: white;
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+
+        @keyframes scroll {
+            from { transform: translateX(0); }
+            to { transform: translateX(-50%); }
+        }
+
+        /* Camera UI Styles */
+        .pebbled-leather {
+            background-color: #111;
+            background-image: 
+                radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                radial-gradient(rgba(0,0,0,0.8) 1.5px, transparent 1.5px);
+            background-size: 6px 6px, 5px 5px;
+            background-position: 0 0, 3px 3px;
+            position: relative;
+        }
+        .pebbled-leather::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.25'/%3E%3C/svg%3E");
+            opacity: 0.6;
+            pointer-events: none;
+            mix-blend-mode: overlay;
+        }
+        .dark-metal-bg {
+            background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 100%);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.8);
+        }
+        .gold-text-static {
+            color: #ffd700;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+            transition: all 0.3s ease;
+        }
+        .gold-shutter-ring {
+            background: conic-gradient(from 0deg, #8a6e2f, #fceda3, #8a6e2f, #594518, #8a6e2f);
+            box-shadow: inset 0 1px 1px rgba(255,255,255,0.5), 0 5px 15px rgba(0,0,0,0.8);
+            border: 1px solid #4a3b19;
+        }
+        .gold-shutter-btn {
+            background: radial-gradient(circle at 30% 30%, #fceda3 0%, #d4af37 40%, #8a6e2f 80%, #4a3b19 100%);
+            box-shadow: inset 0 2px 4px rgba(255,255,255,0.6), 0 4px 8px rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.2);
+            position: relative;
+        }
+        .gold-shutter-btn::after {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60%; height: 60%;
+            border-radius: 50%;
+            background: radial-gradient(circle, #fceda3 0%, #d4af37 60%, #8a6e2f 100%);
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .aged-glass {
+            position: relative;
+            overflow: hidden;
+        }
+        .aged-glass::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 50%, transparent 80%, rgba(0,0,0,0.4) 100%);
+            pointer-events: none;
+            z-index: 10;
+        }
+        .aged-glass::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.08'/%3E%3C/svg%3E");
+            opacity: 0.3;
+            mix-blend-mode: overlay;
+            pointer-events: none;
+            z-index: 11;
+        }
+        .knurled-texture {
+            background-image: repeating-linear-gradient(90deg, #111 0px, #111 2px, #333 3px, #111 4px);
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.8);
+        }
+        .gold-border {
+            border: 1px solid rgba(212, 175, 55, 0.4);
+            box-shadow: 0 0 5px rgba(212, 175, 55, 0.1);
+        }
+        .gold-text-gradient {
+            background: linear-gradient(to right, #ffffff 0%, #ffd700 50%, #ffffff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-size: 200% auto;
+            animation: shine 2s linear infinite;
+        }
+
+        @keyframes shine {
+            to { background-position: 200% center; }
+        }
+
+        /* TTS Loading Indicator */
+        .tts-wave {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            height: 20px;
+        }
+        .tts-wave-bar {
+            width: 3px;
+            background: #1fa2ad;
+            border-radius: 2px;
+            animation: tts-wave 1s ease-in-out infinite;
+        }
+        .tts-wave-bar:nth-child(1) { animation-delay: 0s; height: 8px; }
+        .tts-wave-bar:nth-child(2) { animation-delay: 0.1s; height: 16px; }
+        .tts-wave-bar:nth-child(3) { animation-delay: 0.2s; height: 12px; }
+        .tts-wave-bar:nth-child(4) { animation-delay: 0.3s; height: 18px; }
+        .tts-wave-bar:nth-child(5) { animation-delay: 0.4s; height: 10px; }
+
+        @keyframes tts-wave {
+            0%, 100% { opacity: 0.4; transform: scaleY(0.5); }
+            50% { opacity: 1; transform: scaleY(1); }
+        }
+
+        /* TTS Speaking Indicator */
+        .tts-speaking {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: 8px;
+        }
+        .tts-speaking-dot {
+            width: 4px;
+            height: 4px;
+            background: #4fdbe8;
+            border-radius: 50%;
+            animation: tts-speaking 0.6s ease-in-out infinite;
+        }
+        .tts-speaking-dot:nth-child(2) { animation-delay: 0.15s; }
+        .tts-speaking-dot:nth-child(3) { animation-delay: 0.3s; }
+
+        @keyframes tts-speaking {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.5); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- HOME VIEW -->
+    <div id="home-view" class="fixed inset-0 w-full h-full flex flex-col text-white font-display overflow-hidden z-20 transition-opacity duration-700 ease-in-out">
+        <div id="bg-carousel" class="fixed inset-0 w-full h-full z-0 flex transition-transform duration-500 ease-out will-change-transform" style="width: 300%; transform: translateX(0);">
+            <div class="w-1/3 h-full bg-cover bg-center bg-no-repeat relative" style="background-image: url('assets/img/steve_halo.png');">
+                <div class="absolute inset-0 bg-black/20 backdrop-filter backdrop-grayscale backdrop-contrast-125"></div>
+            </div>
+            <div class="w-1/3 h-full bg-cover bg-center bg-no-repeat relative" style="background-image: url('assets/img/wittgenstein_halo.png');">
+                <div class="absolute inset-0 bg-black/20 backdrop-filter backdrop-grayscale backdrop-contrast-125"></div>
+            </div>
+            <div class="w-1/3 h-full bg-cover bg-center bg-no-repeat relative bg-black" style="background-image: url('assets/img/charlie_halo.png');">
+                <div class="absolute inset-0 bg-black/20 backdrop-filter backdrop-grayscale backdrop-contrast-125"></div>
+            </div>
+        </div>
+        
+        <div class="fixed inset-0 w-full h-full z-0 bg-gradient-to-b from-black/40 via-transparent to-black/80 pointer-events-none"></div>
+
+        <div class="h-10 w-full bg-transparent relative z-20"></div>
+        <header class="flex items-center justify-between px-6 py-4 z-20 relative">
+            <button class="nav-glass-btn w-10 h-10 rounded-full flex items-center justify-center text-white transition-transform active:scale-95 group">
+                <span class="material-symbols-outlined text-[20px] drop-shadow-sm pl-1 group-hover:text-white/90">arrow_back_ios</span>
+            </button>
+            <h2 id="persona-title" class="text-white/90 text-xl font-medium tracking-wide drop-shadow-md transition-opacity duration-300">Steve Jobs</h2>
+            <button class="nav-glass-btn w-10 h-10 rounded-full flex items-center justify-center text-white transition-transform active:scale-95 group">
+                <span class="material-symbols-outlined text-[24px] drop-shadow-sm group-hover:text-white/90">close</span>
+            </button>
+        </header>
+
+        <main class="flex-1 flex flex-col justify-end relative w-full max-w-md mx-auto px-6 pb-10 z-20">
+            <div class="w-full relative group mb-2">
+                <div id="danmaku-container" class="danmaku-container"></div>
+
+                <div class="flex justify-center gap-2 mb-4 relative z-30">
+                    <div id="dot-steve" class="w-1.5 h-1.5 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-300 transform scale-125"></div>
+                    <div id="dot-wittgenstein" class="w-1.5 h-1.5 rounded-full bg-white/30 backdrop-blur-md border border-white/10 shadow-sm transition-all duration-300"></div>
+                    <div id="dot-charlie" class="w-1.5 h-1.5 rounded-full bg-white/30 backdrop-blur-md border border-white/10 shadow-sm transition-all duration-300"></div>
+                </div>
+
+                <div class="relative frosted-glass rounded-2xl p-3 shadow-glass-emboss">
+                    <div class="absolute inset-0 rounded-2xl border border-white/5 pointer-events-none"></div>
+                    
+                    <div class="flex justify-between items-center mb-3 px-1 relative z-10">
+                        <div class="text-white/50 text-[10px] font-sans tracking-widest uppercase pl-1">Ask The Visionary</div>
+                        <label class="flex items-center gap-2 cursor-pointer group">
+                            <span class="text-white/50 text-[10px] font-sans group-hover:text-white/80 transition-colors tracking-wide">Deep Thinking</span>
+                            <div class="relative">
+                                <input type="checkbox" id="deep-think-toggle" class="peer sr-only" checked>
+                                <div class="w-7 h-3.5 bg-white/10 rounded-full border border-white/10 peer-checked:bg-aqua-light/80 peer-checked:border-aqua-light/50 transition-all shadow-inner"></div>
+                                <div class="absolute top-[2px] left-[2px] w-2.5 h-2.5 bg-white/80 rounded-full shadow-sm transition-all peer-checked:translate-x-3.5 peer-checked:bg-white"></div>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div id="image-preview-container" class="hidden mb-3 relative">
+                        <div class="relative inline-block">
+                            <img id="image-preview" class="h-24 rounded-lg border border-white/20 shadow-lg object-cover" />
+                            <button id="remove-image-btn" class="absolute -top-2 -right-2 bg-black/50 hover:bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center backdrop-blur-md border border-white/20 transition-colors shadow-md">
+                                <span class="material-symbols-outlined text-[14px] font-bold">close</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 relative z-10">
+                        <button id="home-camera-btn" class="aqua-btn h-14 w-14 rounded-xl flex items-center justify-center text-white shadow-lg transform transition active:scale-95 border border-black/20 flex-shrink-0 group">
+                            <span class="material-symbols-outlined text-[26px] drop-shadow-md group-hover:scale-105 transition-transform">photo_camera</span>
+                        </button>
+                        <div class="flex-1 relative">
+                            <input id="user-input" class="w-full bg-[#000000]/40 text-gray-100 font-sans text-base px-5 h-14 rounded-xl shadow-skeuo-inset border-b border-white/10 border-t border-black/60 focus:outline-none focus:ring-1 focus:ring-primary/40 placeholder:text-gray-400/80 transition-all backdrop-blur-sm" placeholder="What is on your mind?" type="text"/>
+                        </div>
+                        <button id="ask-btn" class="aqua-btn h-14 w-20 rounded-xl flex items-center justify-center text-white font-bold text-lg tracking-wide shadow-lg transform transition active:scale-95 border border-black/20">
+                            Ask
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- IPOD / RESULT VIEW -->
+    <div id="ipod-view" class="fixed inset-0 w-full h-full flex items-center justify-center p-4 bg-[#d1d5db] z-50 transition-opacity duration-700 ease-in-out opacity-0 pointer-events-none" style="background-image: radial-gradient(circle at center, #f3f4f6 0%, #9ca3af 100%);">
+        <div class="ipod-chassis relative w-full max-w-[360px] h-[90dvh] max-h-[720px] rounded-ipod shadow-device flex flex-col items-center p-6 border-2 border-white/50">
+            <div class="w-full h-[55%] bg-black rounded-lg shadow-screen-inset overflow-hidden border-4 border-black relative flex flex-col mb-4 sm:mb-8">
+                <div class="h-5 w-full bg-gradient-to-b from-[#3a3a3a] to-[#1a1a1a] flex justify-between items-center px-2 z-30 border-b border-white/10 shrink-0">
+                    <div class="flex items-center gap-1">
+                        <span class="material-symbols-outlined text-[10px] text-white/80">wifi</span>
+                        <span class="text-[9px] font-sans font-medium text-white/80 tracking-wide">iCloud</span>
+                    </div>
+                    <div class="text-[9px] font-sans font-bold text-white/90">9:41 AM</div>
+                    <div class="flex items-center gap-1">
+                        <span class="text-[9px] font-sans font-medium text-white/80">100%</span>
+                        <span class="material-symbols-outlined text-[12px] text-white rotate-90">battery_full</span>
+                    </div>
+                </div>
+
+                <div class="relative w-full flex-1 overflow-hidden">
+                    <div id="ipod-screen-bg" class="absolute inset-0 w-full h-full bg-cover bg-center bg-no-repeat z-0" style="background-image: url('assets/img/steve_halo.png'); filter: grayscale(100%) contrast(110%) brightness(0.6);"></div>
+                    <div class="absolute inset-0 w-full h-full z-0 bg-gradient-to-b from-black/60 via-transparent to-black/90 pointer-events-none"></div>
+
+                    <div class="absolute top-3 left-3 z-50">
+                        <button id="back-btn" class="glass-nav-button flex items-center gap-1 pl-2 pr-3 py-[4px] rounded-full text-white group transition-all">
+                            <span class="material-symbols-outlined text-[14px] leading-none" style="font-variation-settings: 'wght' 600;">arrow_back_ios</span>
+                            <span class="text-[10px] font-sans font-bold tracking-wide leading-none uppercase pt-[1px]">Back</span>
+                        </button>
+                    </div>
+                    <div class="absolute top-3 right-3 z-50">
+                        <button id="close-btn" class="glass-nav-button flex items-center justify-center w-[26px] h-[26px] rounded-full text-white transition-all">
+                            <span class="material-symbols-outlined text-[16px] leading-none" style="font-variation-settings: 'wght' 600;">close</span>
+                        </button>
+                    </div>
+                    
+                    <div class="relative z-10 w-full h-full flex flex-col ipod-scroll overflow-y-auto pt-10 px-4 pb-6">
+                        <div class="flex flex-col items-center shrink-0 mb-4">
+                            <div class="relative w-16 h-16 mb-4 rounded-full metal-bezel p-[3px] flex-shrink-0 shadow-lg">
+                                <div class="w-full h-full rounded-full bg-black shadow-[inset_0_2px_5px_rgba(0,0,0,0.8)] overflow-hidden relative border border-black/80">
+                                    <img alt="Steve Jobs" class="w-full h-full object-cover object-center opacity-90 filter contrast-125 brightness-110" src="assets/img/steve_av.png"/>
+                                    <div class="absolute inset-0 rounded-full shadow-[inset_0_0_8px_rgba(0,0,0,0.8)] pointer-events-none"></div>
+                                </div>
+                            </div>
+                            <div id="thinking-badge" class="flex items-center gap-2 px-3 py-1.5 bg-black/30 rounded-full border border-white/10 backdrop-blur-md shadow-lg">
+                                <div class="w-3.5 h-3.5 rounded-full animate-spin beachball shadow-sm"></div>
+                                <span class="text-[10px] text-white/90 font-medium tracking-wide font-sans shadow-black drop-shadow-sm" id="thinking-text">Steve is thinking...</span>
+                                <!-- TTS Speaking Indicator -->
+                                <span id="tts-speaking-indicator" class="tts-speaking hidden">
+                                    <span class="tts-speaking-dot"></span>
+                                    <span class="tts-speaking-dot"></span>
+                                    <span class="tts-speaking-dot"></span>
+                                </span>
+                            </div>
+                        </div>
+
+                        <div id="result-tabs" class="flex justify-center items-center gap-2 mb-4 hidden opacity-0 transition-opacity duration-500 bg-black/20 p-1 rounded-full border border-white/5 backdrop-blur-md">
+                            <button class="tab-btn active" onclick="switchTab('viewpoint')">Viewpoint</button>
+                            <button class="tab-btn" onclick="switchTab('score')">Score</button>
+                            <button class="tab-btn" onclick="switchTab('quote')">Quote</button>
+                        </div>
+
+                        <div class="frosted-panel w-full p-5 rounded-lg shadow-retro-card relative flex-grow flex-shrink-0 flex flex-col justify-start">
+                            <div class="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-white/30 to-transparent"></div>
+                            
+                            <div id="tab-viewpoint" class="font-display text-[15px] text-white/95 leading-relaxed drop-shadow-sm tracking-wide transition-opacity duration-300">
+                                <div id="result-content" class="markdown-body inline"></div>
+                                <span id="cursor" class="inline-block w-0.5 h-5 bg-aqua-light align-middle ml-0.5 mb-1 typing-cursor shadow-[0_0_8px_rgba(94,231,242,0.8)]"></span>
+                                <span id="tts-loading-indicator" class="hidden ml-2">
+                                    <span class="tts-wave">
+                                        <span class="tts-wave-bar"></span>
+                                        <span class="tts-wave-bar"></span>
+                                        <span class="tts-wave-bar"></span>
+                                        <span class="tts-wave-bar"></span>
+                                        <span class="tts-wave-bar"></span>
+                                    </span>
+                                </span>
+                            </div>
+
+                            <div id="tab-score" class="hidden flex flex-col items-center justify-center h-full min-h-[200px] text-center transition-opacity duration-300">
+                                <p class="text-white/60 text-xs font-sans mb-4 px-2 line-clamp-2" id="score-question"></p>
+                                <div class="text-6xl font-display font-bold text-white mb-2 drop-shadow-lg" id="score-number">0.0</div>
+                                <div class="flex gap-1 mb-6" id="score-stars"></div>
+                                <div class="text-white/80 text-sm font-sans tracking-wide">Master Rating</div>
+                            </div>
+
+                            <div id="tab-quote" class="hidden flex flex-col items-center justify-center h-full min-h-[200px] text-center transition-opacity duration-300">
+                                <span class="material-symbols-outlined text-4xl text-white/40 mb-4" style="font-variation-settings: 'FILL' 1;">format_quote</span>
+                                <p class="text-xl font-display font-medium text-white leading-relaxed italic px-2 drop-shadow-md" id="quote-text"></p>
+                                <div class="w-10 h-[1px] bg-white/30 my-6"></div>
+                                <p class="text-sm font-sans font-bold text-white/60 uppercase tracking-widest" id="quote-author">STEVE JOBS</p>
+                            </div>
+
+                        </div>
+                    </div>
+                    
+                    <div id="audio-player-ui" class="absolute bottom-0 left-0 right-0 bg-black/80 backdrop-blur-md border-t border-white/10 p-4 flex flex-col gap-2 translate-y-full transition-transform duration-500 z-40">
+                        <div class="flex justify-between items-end mb-1">
+                            <div class="flex flex-col">
+                                <span class="text-[10px] font-sans text-white/60 uppercase tracking-wider">Now Playing</span>
+                                <span class="text-xs font-display font-bold text-white tracking-wide">Master's Answer...</span>
+                            </div>
+                            <span class="text-[10px] font-sans text-aqua-light font-mono" id="audio-time">0:00</span>
+                        </div>
+                        <div class="w-full h-1 bg-white/10 rounded-full overflow-hidden relative">
+                            <div id="audio-progress" class="absolute top-0 left-0 h-full bg-aqua-light shadow-[0_0_10px_rgba(94,231,242,0.8)] w-0 transition-all duration-100 ease-linear"></div>
+                        </div>
+                        <div class="h-12 w-full flex items-center justify-center mt-1">
+                            <canvas id="spectrum-canvas" width="300" height="48" class="opacity-80"></canvas>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <div class="flex-1 w-full flex items-start justify-center pt-2 sm:pt-4 relative">
+                <div class="relative w-56 h-56 sm:w-64 sm:h-64">
+                    <div class="click-wheel w-full h-full rounded-full shadow-wheel-outer flex items-center justify-center cursor-pointer relative group select-none touch-callout-none" id="click-wheel">
+                        <span class="absolute top-4 text-[#9ca3af] font-bold text-[12px] sm:text-[13px] font-sans tracking-widest group-hover:text-gray-500 transition-colors select-none pointer-events-none">MENU</span>
+                        <div class="absolute bottom-4 flex justify-center w-full" id="wheel-play-btn">
+                            <span class="material-symbols-outlined text-[#9ca3af] text-[26px] sm:text-[28px] group-hover:text-gray-500 transition-colors select-none pointer-events-none">play_pause</span>
+                        </div>
+                        <div class="absolute left-4 flex items-center h-full" id="wheel-prev-btn">
+                            <span class="material-symbols-outlined text-[#9ca3af] text-[26px] sm:text-[28px] group-hover:text-gray-500 transition-colors select-none pointer-events-none">skip_previous</span>
+                        </div>
+                        <div class="absolute right-4 flex items-center h-full" id="wheel-next-btn">
+                            <span class="material-symbols-outlined text-[#9ca3af] text-[26px] sm:text-[28px] group-hover:text-gray-500 transition-colors select-none pointer-events-none">skip_next</span>
+                        </div>
+                        <div class="center-button w-20 h-20 sm:w-24 sm:h-24 rounded-full border border-gray-300 relative z-10 active:scale-95 transition-transform cursor-pointer" id="center-btn"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CAMERA VIEW -->
+    <div id="camera-view" class="fixed inset-0 w-full h-full flex flex-col overflow-hidden select-none font-sans text-gray-200 z-[70] hidden bg-[#0a0a0a] transition-opacity duration-500 opacity-0">
+        <header class="h-20 flex-none dark-metal-bg z-30 flex items-center justify-between px-6 relative">
+            <div class="absolute top-3 left-3 w-2 h-2 rounded-full bg-gradient-to-br from-[#555] to-[#222] shadow-[inset_0_1px_1px_rgba(255,255,255,0.2),0_1px_1px_rgba(0,0,0,0.5)] flex items-center justify-center">
+                <div class="w-full h-[1px] bg-[#111] rotate-45"></div>
+            </div>
+            <div class="absolute top-3 right-3 w-2 h-2 rounded-full bg-gradient-to-br from-[#555] to-[#222] shadow-[inset_0_1px_1px_rgba(255,255,255,0.2),0_1px_1px_rgba(0,0,0,0.5)] flex items-center justify-center">
+                <div class="w-full h-[1px] bg-[#111] rotate-12"></div>
+            </div>
+            <button id="camera-back-btn" class="w-10 h-10 rounded-full bg-gradient-to-b from-[#444] to-[#222] shadow-metal-emboss active:shadow-metal-pressed flex items-center justify-center group border border-[#555] transition-all">
+                <span class="material-symbols-outlined text-[#aaa] group-active:text-[#d4af37] transition-colors text-[20px] drop-shadow-md">arrow_back</span>
+            </button>
+            <div class="flex flex-col items-center justify-center pointer-events-none">
+                <div class="text-[10px] font-sans font-bold tracking-[0.3em] text-[#888] uppercase drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]">Meco Camera</div>
+                <div class="text-[8px] font-serif italic tracking-widest text-[#d4af37] opacity-80 mt-0.5">Golden Version</div>
+            </div>
+            <button id="camera-close-btn" class="w-10 h-10 rounded-full bg-gradient-to-b from-[#444] to-[#222] shadow-metal-emboss active:shadow-metal-pressed flex items-center justify-center group border border-[#555] transition-all">
+                <span class="material-symbols-outlined text-[#aaa] group-active:text-[#d4af37] transition-colors text-[20px] drop-shadow-md">close</span>
+            </button>
+        </header>
+        <main class="flex-1 relative bg-[#151515] w-full overflow-hidden flex flex-row">
+            <div class="flex-1 relative h-full flex items-center justify-center bg-[#080808] p-4">
+                <div class="relative w-full h-full max-w-lg max-h-[85vh] bg-[#000] border-4 border-[#222] rounded-sm shadow-2xl overflow-hidden aged-glass">
+                    <video id="camera-video" autoplay playsinline class="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" style="filter: contrast(1.1) sepia(0.2) saturate(0.8);"></video>
+                </div>
+            </div>
+        </main>
+        <footer class="h-48 flex-none pebbled-leather relative z-30 shadow-[0_-5px_25px_rgba(0,0,0,0.9)] border-t border-[#333] flex items-center justify-between px-8 pb-4 pt-2">
+            <button id="gallery-btn" class="w-16 h-20 flex flex-col items-center justify-center gap-2 group">
+                <div class="w-12 h-16 rounded border-2 border-[#d4af37]/40 bg-[#000] relative overflow-hidden shadow-[0_2px_10px_rgba(0,0,0,0.8)] group-active:scale-95 transition-transform">
+                    <div class="absolute inset-0 bg-cover bg-center opacity-60 group-hover:opacity-80 transition-opacity grayscale hover:grayscale-0" style="background-image: url('assets/img/steve_av.png');"></div>
+                </div>
+            </button>
+            <div class="relative -top-2 flex flex-col items-center">
+                <div class="w-24 h-24 rounded-full gold-shutter-ring flex items-center justify-center shadow-[0_10px_25px_rgba(0,0,0,0.9),0_2px_4px_rgba(0,0,0,0.5)] p-1">
+                    <button id="shutter-btn" class="w-16 h-16 rounded-full gold-shutter-btn active:scale-95 active:brightness-90 transition-all duration-75"></button>
+                </div>
+            </div>
+            <button id="switch-camera-btn" class="w-16 h-20 rounded-lg flex flex-col items-center justify-center gap-2 group relative">
+                <div class="w-16 h-16 rounded-lg bg-[#151515] border border-[#d4af37]/30 flex items-center justify-center">
+                    <span class="material-symbols-outlined text-[#666] group-active:text-[#d4af37] transition-colors text-[20px]">cached</span>
+                </div>
+            </button>
+        </footer>
+    </div>
+
+    <input type="file" id="camera-file-input" accept="image/*" class="hidden" style="display:none;">
+
+    <script>
+        // ==================== 流式TTS核心配置 ====================
+        const MINIMAX_API_KEY = "";
+        const MINIMAX_TTS_URL = "https://api.minimaxi.com/v1/t2a_v2";
+        
+        // TTS 状态管理
+        const StreamingTTS = {
+            audioContext: null,
+            analyser: null,
+            isPlaying: false,
+            isGenerating: false,
+            playbackQueue: [],      // 待播放的音频缓冲区队列
+            generatingQueue: [],    // 正在生成的文本队列
+            currentTextBuffer: "",  // 当前积累的文本
+            lastSentText: "",       // 上次已发送的文本
+            nextStartTime: 0,       // 下一个音频的开始时间
+            playbackStartTime: -1,  // 播放开始时间
+            totalDuration: 0,       // 总时长估算
+            onCompleteCallbacks: [], // 播放完成回调
+            streamReader: null,     // fetch reader
+            abortController: null,  // 用于取消请求
+            
+            // 配置
+            config: {
+                voiceId: "jobs_voice_20260115_v3",
+                speed: 1.0,
+                vol: 1.0,
+                pitch: 0,
+                sampleRate: 32000,
+                bitrate: 128000,
+                format: "mp3",
+                channel: 1,
+                // 流式触发阈值：积累多少字符或遇到句子结束符时触发
+                minChunkLength: 15,   
+                sentenceEndMarks: ['。', '！', '？', '.', '!', '?', '\n', '，', ',']
+            },
+
+            // 初始化音频上下文
+            init() {
+                if (!this.audioContext) {
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    this.analyser = this.audioContext.createAnalyser();
+                    this.analyser.fftSize = 64;
+                    this.analyser.connect(this.audioContext.destination);
+                }
+                if (this.audioContext.state === 'suspended') {
+                    this.audioContext.resume();
+                }
+                return this.audioContext;
+            },
+
+            // 设置声音ID
+            setVoiceId(personaId) {
+                const voiceMap = {
+                    'steve': 'jobs_voice_20260115_v3',
+                    'charlie': 'charles_munger_v1_hd',
+                    'wittgenstein': 'Chinese (Mandarin)_Sincere_Adult'
+                };
+                this.config.voiceId = voiceMap[personaId] || voiceMap['steve'];
+            },
+
+            // 添加文本到TTS队列（流式调用）
+            async appendText(text) {
+                if (!text || text.length === 0) return;
+                
+                this.currentTextBuffer += text;
+                
+                // 检查是否应该触发TTS生成
+                const shouldGenerate = this.checkShouldGenerate();
+                
+                if (shouldGenerate.should) {
+                    const textToSend = this.currentTextBuffer.substring(this.lastSentText.length);
+                    if (textToSend.trim().length > 0) {
+                        this.lastSentText = this.currentTextBuffer;
+                        await this.generateStream(textToSend, shouldGenerate.isFinal);
+                    }
+                }
+            },
+
+            // 检查是否应该生成
+            checkShouldGenerate() {
+                const unsent = this.currentTextBuffer.substring(this.lastSentText.length);
+                const isFinal = isStreamComplete; // 全局变量
+                
+                // 如果流已完成，立即生成剩余所有
+                if (isFinal && unsent.length > 0) {
+                    return { should: true, isFinal: true };
+                }
+                
+                // 检查是否达到最小长度或遇到句子结束符
+                if (unsent.length >= this.config.minChunkLength) {
+                    // 检查是否有句子结束符
+                    const hasEndMark = this.config.sentenceEndMarks.some(mark => unsent.includes(mark));
+                    if (hasEndMark || unsent.length > 50) { // 超过50字符也触发
+                        return { should: true, isFinal: false };
+                    }
+                }
+                
+                return { should: false, isFinal: false };
+            },
+
+            // 流式生成音频
+            async generateStream(text, isFinal = false) {
+                if (!text.trim()) return;
+                
+                try {
+                    this.isGenerating = true;
+                    
+                    const response = await fetch(MINIMAX_TTS_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${MINIMAX_API_KEY}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: "speech-2.6-hd",
+                            text: text,
+                            stream: true,
+                            voice_setting: {
+                                voice_id: this.config.voiceId,
+                                speed: this.config.speed,
+                                vol: this.config.vol,
+                                pitch: this.config.pitch
+                            },
+                            audio_setting: {
+                                sample_rate: this.config.sampleRate,
+                                bitrate: this.config.bitrate,
+                                format: this.config.format,
+                                channel: this.config.channel
+                            }
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`TTS API Error: ${response.status}`);
+                    }
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = "";
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split("\n");
+                        buffer = lines.pop();
+
+                        for (const line of lines) {
+                            if (line.trim().startsWith("data:")) {
+                                const dataStr = line.trim().slice(5).trim();
+                                if (dataStr) {
+                                    try {
+                                        const data = JSON.parse(dataStr);
+                                        if (data.data && data.data.audio) {
+                                            await this.decodeAndQueueAudio(data.data.audio);
+                                        }
+                                    } catch (e) {
+                                        console.error("TTS parse error:", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 如果是最终块，标记完成
+                    if (isFinal) {
+                        this.isGenerating = false;
+                        this.checkAllComplete();
+                    }
+
+                } catch (error) {
+                    console.error("TTS generation error:", error);
+                    this.isGenerating = false;
+                }
+            },
+
+            // 解码并排队音频
+            async decodeAndQueueAudio(hexString) {
+                try {
+                    const match = hexString.match(/.{1,2}/g);
+                    if (!match) return;
+                    
+                    const u8 = new Uint8Array(match.map(byte => parseInt(byte, 16)));
+                    const audioBuffer = await this.audioContext.decodeAudioData(u8.buffer.slice(0));
+                    
+                    this.playbackQueue.push(audioBuffer);
+                    this.totalDuration += audioBuffer.duration;
+                    
+                    // 如果还没有开始播放，开始播放
+                    if (!this.isPlaying && this.playbackQueue.length > 0) {
+                        this.startPlayback();
+                    }
+                    
+                    // 更新UI显示
+                    this.updateSpeakingIndicator(true);
+                    
+                } catch (e) {
+                    console.error("Audio decode error:", e);
+                }
+            },
+
+            // 开始播放队列
+            startPlayback() {
+                if (!this.audioContext) this.init();
+                
+                this.isPlaying = true;
+                this.nextStartTime = this.audioContext.currentTime;
+                this.playbackStartTime = this.nextStartTime;
+                
+                // 设置MediaSession
+                this.setupMediaSession();
+                
+                // 开始处理队列
+                this.processPlaybackQueue();
+                
+                // 开始可视化
+                this.startVisualizer();
+                
+                // 显示播放器UI
+                this.showPlayerUI();
+            },
+
+            // 处理播放队列
+            processPlaybackQueue() {
+                if (!this.isPlaying) return;
+                
+                // 播放所有已准备好的音频
+                while (this.playbackQueue.length > 0) {
+                    const buffer = this.playbackQueue.shift();
+                    this.playBuffer(buffer);
+                }
+                
+                // 检查是否全部完成
+                if (this.playbackQueue.length === 0 && !this.isGenerating && isStreamComplete) {
+                    // 延迟检查，确保最后的音频已经播放
+                    setTimeout(() => this.checkAllComplete(), 500);
+                } else {
+                    // 继续检查队列
+                    requestAnimationFrame(() => this.processPlaybackQueue());
+                }
+            },
+
+            // 播放单个缓冲区
+            playBuffer(buffer) {
+                const source = this.audioContext.createBufferSource();
+                source.buffer = buffer;
+                source.connect(this.analyser);
+                
+                // 计算开始时间
+                const currentTime = this.audioContext.currentTime;
+                if (this.nextStartTime < currentTime) {
+                    this.nextStartTime = currentTime;
+                }
+                
+                source.start(this.nextStartTime);
+                this.nextStartTime += buffer.duration;
+                
+                // 更新进度
+                this.updateProgress();
+            },
+
+            // 检查是否全部完成
+            checkAllComplete() {
+                const currentTime = this.audioContext.currentTime;
+                const remainingTime = this.nextStartTime - currentTime;
+                
+                if (remainingTime <= 0 && !this.isGenerating && isStreamComplete) {
+                    this.onPlaybackComplete();
+                }
+            },
+
+            // 播放完成回调
+            onPlaybackComplete() {
+                this.isPlaying = false;
+                this.updateSpeakingIndicator(false);
+                this.hidePlayerUI();
+                
+                // 执行所有回调
+                this.onCompleteCallbacks.forEach(callback => {
+                    try {
+                        callback();
+                    } catch (e) {
+                        console.error("TTS callback error:", e);
+                    }
+                });
+                
+                console.log("[TTS] Playback completed");
+            },
+
+            // 添加完成回调
+            onComplete(callback) {
+                if (typeof callback === 'function') {
+                    this.onCompleteCallbacks.push(callback);
+                }
+            },
+
+            // 清理回调
+            clearCallbacks() {
+                this.onCompleteCallbacks = [];
+            },
+
+            // 更新说话指示器
+            updateSpeakingIndicator(isSpeaking) {
+                const indicator = document.getElementById('tts-speaking-indicator');
+                if (indicator) {
+                    indicator.classList.toggle('hidden', !isSpeaking);
+                }
+            },
+
+            // 显示播放器UI
+            showPlayerUI() {
+                const ui = document.getElementById('audio-player-ui');
+                const scrollContainer = document.querySelector('.ipod-scroll');
+                if (ui) ui.classList.remove('translate-y-full');
+                if (scrollContainer) {
+                    scrollContainer.classList.remove('pb-6');
+                    scrollContainer.classList.add('pb-40');
+                }
+            },
+
+            // 隐藏播放器UI
+            hidePlayerUI() {
+                const ui = document.getElementById('audio-player-ui');
+                const scrollContainer = document.querySelector('.ipod-scroll');
+                if (ui) ui.classList.add('translate-y-full');
+                if (scrollContainer) {
+                    scrollContainer.classList.remove('pb-40');
+                    scrollContainer.classList.add('pb-6');
+                }
+            },
+
+            // 设置MediaSession
+            setupMediaSession() {
+                if ('mediaSession' in navigator) {
+                    const persona = PERSONAS[currentPersonaId];
+                    navigator.mediaSession.metadata = new MediaMetadata({
+                        title: persona.name,
+                        artist: 'Ask The Visionary',
+                        album: 'Wisdom Series',
+                        artwork: [
+                            { src: persona.avatarImage, sizes: '96x96', type: 'image/png' },
+                            { src: persona.avatarImage, sizes: '512x512', type: 'image/png' }
+                        ]
+                    });
+                }
+            },
+
+            // 开始可视化
+            startVisualizer() {
+                const canvas = document.getElementById('spectrum-canvas');
+                const ctx = canvas.getContext('2d');
+                
+                const draw = () => {
+                    if (!this.isPlaying) {
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        return;
+                    }
+                    
+                    const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+                    this.analyser.getByteFrequencyData(dataArray);
+                    
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    const usableBins = Math.floor(dataArray.length * 0.8);
+                    const barWidth = (canvas.width / 2) / usableBins;
+                    const centerX = canvas.width / 2;
+                    
+                    for (let i = 0; i < usableBins; i++) {
+                        const value = dataArray[i];
+                        const barHeight = (value / 255) * canvas.height;
+                        
+                        const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+                        gradient.addColorStop(0, `rgba(94, 231, 242, ${0.5 + (value/510)})`);
+                        gradient.addColorStop(1, 'rgba(94, 231, 242, 0.1)');
+                        
+                        ctx.fillStyle = gradient;
+                        ctx.fillRect(centerX + (i * barWidth), canvas.height - barHeight, barWidth - 1, barHeight);
+                        ctx.fillRect(centerX - ((i + 1) * barWidth), canvas.height - barHeight, barWidth - 1, barHeight);
+                    }
+                    
+                    requestAnimationFrame(draw);
+                };
+                
+                draw();
+            },
+
+            // 更新进度
+            updateProgress() {
+                const progressEl = document.getElementById('audio-progress');
+                const timeEl = document.getElementById('audio-time');
+                
+                if (!progressEl || !timeEl || !this.audioContext) return;
+                
+                const currentTime = this.audioContext.currentTime;
+                const playedDuration = currentTime - this.playbackStartTime;
+                const progress = Math.min(100, (playedDuration / this.totalDuration) * 100);
+                
+                progressEl.style.width = `${progress}%`;
+                
+                const mins = Math.floor(playedDuration / 60);
+                const secs = Math.floor(playedDuration % 60);
+                timeEl.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            },
+
+            // 重置
+            reset() {
+                this.isPlaying = false;
+                this.isGenerating = false;
+                this.playbackQueue = [];
+                this.currentTextBuffer = "";
+                this.lastSentText = "";
+                this.totalDuration = 0;
+                this.nextStartTime = 0;
+                this.playbackStartTime = -1;
+                this.updateSpeakingIndicator(false);
+                this.hidePlayerUI();
+                
+                if (this.abortController) {
+                    this.abortController.abort();
+                    this.abortController = null;
+                }
+            },
+
+            // 暂停/恢复
+            togglePause() {
+                if (!this.audioContext) return;
+                
+                if (this.audioContext.state === 'running') {
+                    this.audioContext.suspend();
+                } else if (this.audioContext.state === 'suspended') {
+                    this.audioContext.resume();
+                }
+            }
+        };
+
+        // ==================== 原有配置和变量 ====================
+        const IS_DEBUG = false;
+        const MODEL_ID = "google/gemini-3-flash-preview";
+
+        const DEBUG_CONFIG = {
+            base_url: "",
+            api_key: ""
+        };
+
+        // DOM Elements
+        const homeView = document.getElementById('home-view');
+        const ipodView = document.getElementById('ipod-view');
+        const askBtn = document.getElementById('ask-btn');
+        const backBtn = document.getElementById('back-btn');
+        const closeBtn = document.getElementById('close-btn');
+        const userInput = document.getElementById('user-input');
+        const resultContent = document.getElementById('result-content');
+        const thinkingBadge = document.getElementById('thinking-badge');
+        const cursor = document.getElementById('cursor');
+        const danmakuContainer = document.getElementById('danmaku-container');
+        
+        // 全局状态
+        let isStreamComplete = false;
+        let currentPersonaId = 'steve';
+        let rawStreamBuffer = "";
+        let currentViewpointText = "";
+        let currentDisplayedText = "";
+        let currentDisplayedTextRaw = "";
+        let typeWriterQueue = [];
+        let isTyping = false;
+
+        // Persona 配置
+        const steveQuestions = [
+            "产品设计的灵魂是什么？", "如何保持求知若饥，虚心若愚？", "我该如何改变世界？",
+            "对人工智能的看法？", "为什么简约如此重要？", "如何面对失败？"
+        ];
+        const wittgensteinQuestions = [
+            "语言的界限意味着什么？", "什么是语言游戏？", "哲学问题的本质是什么？"
+        ];
+        const charlieQuestions = [
+            "如何变得更聪明？", "什么是栅格思维模型？", "如何避免愚蠢的决定？"
+        ];
+
+        const PERSONAS = {
+            steve: {
+                id: 'steve', name: 'Steve Jobs', haloImage: 'assets/img/steve_halo.png',
+                avatarImage: 'assets/img/steve_av.png', questions: steveQuestions,
+                title: 'Think Different', subtitle: 'Ask The Visionary',
+                systemPrompt: `# Role: Steve Jobs...` // 省略完整prompt
+            },
+            wittgenstein: {
+                id: 'wittgenstein', name: 'Ludwig Wittgenstein',
+                haloImage: 'assets/img/wittgenstein_halo.png',
+                avatarImage: 'assets/img/wittgenstein_av.png',
+                questions: wittgensteinQuestions,
+                title: 'The Limits of Language', subtitle: 'Ask The Philosopher',
+                systemPrompt: `# Role: Ludwig Wittgenstein...`
+            },
+            charlie: {
+                id: 'charlie', name: 'Charlie Munger',
+                haloImage: 'assets/img/charlie_halo.png',
+                avatarImage: 'assets/img/charlie_av.png',
+                questions: charlieQuestions,
+                title: 'The Lollapalooza Effect', subtitle: 'Ask The Buffett\'s Partner',
+                systemPrompt: `# Role: Charlie Munger...`
+            }
+        };
+
+        // ==================== 核心函数 ====================
+
+        // 修改后的 addToTypeQueue - 同时触发TTS
+        function addToTypeQueue(chunk) {
+            rawStreamBuffer += chunk;
+            
+            const viewpointMatch = rawStreamBuffer.match(/<viewpoint>([\s\S]*?)(?:<\/viewpoint>|$)/);
+            if (viewpointMatch) {
+                const fullViewpoint = viewpointMatch[1];
+                const newContent = fullViewpoint.substring(currentDisplayedTextRaw.length);
+                
+                if (newContent.length > 0) {
+                    currentDisplayedTextRaw = fullViewpoint;
+                    currentViewpointText = fullViewpoint;
+                    
+                    // 添加到打字队列
+                    const chars = newContent.split('');
+                    typeWriterQueue.push(...chars);
+                    
+                    // ===== 关键：同步发送到TTS =====
+                    // 清理特殊字符后发送
+                    const cleanText = newContent.replace(/[*#`\[\]]/g, '');
+                    if (cleanText.trim().length > 0) {
+                        StreamingTTS.appendText(cleanText);
+                    }
+                    
+                    if (!isTyping) {
+                        isTyping = true;
+                        processTypeQueue();
+                    }
+                }
+            }
+            
+            parseMetadata();
+        }
+
+        function processTypeQueue() {
+            if (typeWriterQueue.length > 0) {
+                const chunk = typeWriterQueue.shift();
+                currentDisplayedText += chunk;
+                resultContent.innerHTML = marked.parse(currentDisplayedText);
+                
+                const scrollContainer = document.querySelector('.ipod-scroll');
+                scrollContainer.scrollTop = scrollContainer.scrollHeight;
+
+                requestAnimationFrame(processTypeQueue);
+            } else {
+                isTyping = false;
+                if (isStreamComplete) {
+                    onInferenceComplete();
+                }
+            }
+        }
+
+        function parseMetadata() {
+            const scoreMatch = rawStreamBuffer.match(/<score>([\s\S]*?)<\/score>/);
+            if (scoreMatch) renderScore(scoreMatch[1].trim());
+            
+            const quoteMatch = rawStreamBuffer.match(/<quote>([\s\S]*?)<\/quote>/);
+            if (quoteMatch) renderQuote(quoteMatch[1].trim());
+        }
+
+        function renderScore(scoreStr) {
+            const score = parseFloat(scoreStr);
+            if (isNaN(score)) return;
+            document.getElementById('score-number').innerText = score.toFixed(1);
+            
+            let starsHtml = '';
+            for (let i = 1; i <= 5; i++) {
+                if (score >= i) {
+                    starsHtml += '<span class="material-symbols-outlined star-icon">star</span>';
+                } else if (score >= i - 0.5) {
+                    starsHtml += '<span class="material-symbols-outlined star-icon half">star</span>';
+                } else {
+                    starsHtml += '<span class="material-symbols-outlined star-icon empty">star</span>';
+                }
+            }
+            document.getElementById('score-stars').innerHTML = starsHtml;
+        }
+        
+        function renderQuote(quote) {
+            document.getElementById('quote-text').innerText = quote;
+            const authorMap = { steve: 'STEVE JOBS', wittgenstein: 'LUDWIG WITTGENSTEIN', charlie: 'CHARLIE MUNGER' };
+            document.getElementById('quote-author').textContent = authorMap[currentPersonaId];
+        }
+
+        window.switchTab = function(tabName) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            ['viewpoint', 'score', 'quote'].forEach(t => {
+                document.getElementById(`tab-${t}`).classList.add('hidden');
+            });
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+        }
+
+        // ==================== 流式响应 ====================
+        async function streamResponse(question) {
+            try {
+                // 重置TTS和状态
+                StreamingTTS.reset();
+                StreamingTTS.init();
+                StreamingTTS.setVoiceId(currentPersonaId);
+                
+                // ===== 关键：注册TTS完成回调 =====
+                StreamingTTS.clearCallbacks();
+                StreamingTTS.onComplete(() => {
+                    console.log("[Callback] TTS播放完成！可以执行后续操作");
+                    // 在这里添加播放完成后的回调逻辑
+                    // 例如：显示评分、解锁按钮、发送通知等
+                    onTTSPlaybackComplete();
+                });
+                
+                isStreamComplete = false;
+                
+                const config = await getConfig();
+                if (!config.base_url || !config.api_key) {
+                    throw new Error('No LLM provider configured for this legacy page');
+                }
+                const isDeepThinking = document.getElementById('deep-think-toggle').checked;
+                
+                const response = await fetch(`${config.base_url}/chat/completions`, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${config.api_key}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        "model": getActiveModelId(),
+                        ...(isDeepThinking ? { "reasoning": { "enabled": true } } : {}),
+                        "messages": [
+                            { "role": "system", "content": PERSONAS[currentPersonaId].systemPrompt },
+                            { "role": "user", "content": question }
+                        ],
+                        "stream": true
+                    })
+                });
+
+                if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop();
+                    
+                    for (const line of lines) {
+                        const trimmedLine = line.trim();
+                        if (trimmedLine.startsWith("data: ")) {
+                            const dataStr = trimmedLine.slice(6);
+                            if (dataStr === "[DONE]") continue;
+                            try {
+                                const data = JSON.parse(dataStr);
+                                const content = data.choices[0]?.delta?.content || "";
+                                if (content) addToTypeQueue(content);
+                            } catch (e) {}
+                        }
+                    }
+                }
+                
+                isStreamComplete = true;
+                
+                // 触发最终的TTS生成（发送剩余文本）
+                StreamingTTS.appendText(" "); // 触发最终检查
+                
+                if (!isTyping && typeWriterQueue.length === 0) {
+                    onInferenceComplete();
+                }
+
+            } catch (error) {
+                console.error(error);
+                resultContent.innerHTML = `<p class="text-red-400">Error: ${error.message}</p>`;
+                thinkingBadge.style.display = 'none';
+            }
+        }
+
+        function onInferenceComplete() {
+            currentViewpointText = removeCitations(currentViewpointText);
+            resultContent.innerHTML = marked.parse(currentViewpointText);
+            
+            thinkingBadge.style.display = 'none';
+            cursor.style.display = 'none';
+            
+            const resultTabs = document.getElementById('result-tabs');
+            resultTabs.classList.remove('hidden');
+            setTimeout(() => resultTabs.style.opacity = '1', 50);
+
+            // TTS继续播放，不需要在这里触发，因为已经在流式过程中开始了
+        }
+
+        // TTS播放完成后的回调
+        function onTTSPlaybackComplete() {
+            // 在这里执行播放完成后的操作
+            console.log("[onTTSPlaybackComplete] 所有音频播放完成！");
+            
+            // 示例：切换到评分标签
+            // switchTab('score');
+            
+            // 示例：显示完成提示
+            // alert("语音播放完成！");
+        }
+
+        function removeCitations(text) {
+            return text
+                .replace(/\[[^\]]+\]\((https?:\/\/[^\)]+)\)/g, '')
+                .replace(/https?:\/\/[^\s\)]+/g, '')
+                .replace(/\[\d+\]/g, '')
+                .replace(/\[[^\]]+\]/g, (match) => {
+                    if (match.includes('.') || match.toLowerCase().includes('source') || match.length < 30) {
+                        return '';
+                    }
+                    return match;
+                })
+                .replace(/\s\s+/g, ' ')
+                .replace(/\s+\./g, '.');
+        }
+
+        async function getConfig() {
+            if (IS_DEBUG && DEBUG_CONFIG.base_url && DEBUG_CONFIG.api_key) return DEBUG_CONFIG;
+            return new Promise((resolve) => {
+                if (window.FlutterJavascriptBridge) {
+                    window.FlutterJavascriptBridge.callHandler('getuserinfo', {}, (result) => {
+                        resolve({ base_url: result.openai_base_url, api_key: result.openai_key });
+                    });
+                } else {
+                    resolve({ base_url: "", api_key: "" });
+                }
+            });
+        }
+
+        function getActiveModelId() {
+            const isDeepThinking = document.getElementById('deep-think-toggle').checked;
+            return isDeepThinking ? "google/gemini-3-flash-preview:online" : "google/gemini-3-flash-preview";
+        }
+
+        // ==================== UI 函数 ====================
+        function showIpodView() {
+            const persona = PERSONAS[currentPersonaId];
+            document.getElementById('ipod-screen-bg').style.backgroundImage = `url('${persona.haloImage}')`;
+            document.querySelector('#ipod-view img').src = persona.avatarImage;
+            
+            homeView.style.opacity = '0';
+            homeView.classList.add('pointer-events-none');
+            ipodView.classList.remove('pointer-events-none');
+            ipodView.style.opacity = '1';
+        }
+
+        function showHomeView() {
+            StreamingTTS.reset(); // 停止TTS
+            
+            homeView.classList.remove('pointer-events-none');
+            ipodView.classList.add('pointer-events-none');
+            homeView.style.opacity = '1';
+            ipodView.style.opacity = '0';
+
+            setTimeout(() => {
+                resultContent.innerHTML = '';
+                currentDisplayedText = '';
+                currentDisplayedTextRaw = '';
+                typeWriterQueue = [];
+                isTyping = false;
+                rawStreamBuffer = "";
+                currentViewpointText = "";
+                isStreamComplete = false;
+                
+                document.getElementById('result-tabs').classList.add('hidden');
+                document.getElementById('result-tabs').style.opacity = '0';
+                switchTab('viewpoint');
+                thinkingBadge.style.display = 'flex';
+                cursor.style.display = 'inline-block';
+            }, 700);
+        }
+
+        function initDanmaku(questions) {
+            danmakuContainer.innerHTML = '';
+            const shuffled = [...questions].sort(() => 0.5 - Math.random());
+            const rows = [[], [], []];
+            shuffled.forEach((q, i) => rows[i % 3].push(q));
+
+            rows.forEach((rowItems, index) => {
+                const rowDiv = document.createElement('div');
+                rowDiv.className = `danmaku-row row-${index + 1}`;
+                const content = [...rowItems, ...rowItems].map(text => 
+                    `<span class="danmaku-item" onclick="fillInput('${text}')">${text}</span>`
+                ).join('');
+                rowDiv.innerHTML = content;
+                danmakuContainer.appendChild(rowDiv);
+            });
+        }
+
+        function fillInput(text) {
+            userInput.value = text;
+            userInput.focus();
+        }
+
+        function switchPersona(personaId) {
+            if (currentPersonaId === personaId) return;
+            currentPersonaId = personaId;
+            const persona = PERSONAS[personaId];
+            
+            localStorage.setItem('ask_steve_last_persona', personaId);
+            
+            document.getElementById('persona-title').textContent = persona.name;
+            
+            const dots = ['dot-steve', 'dot-wittgenstein', 'dot-charlie'];
+            dots.forEach(id => document.getElementById(id).className = 
+                "w-1.5 h-1.5 rounded-full bg-white/30 backdrop-blur-md border border-white/10 shadow-sm transition-all duration-300");
+            
+            const activeClass = "w-1.5 h-1.5 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.8)] transition-all duration-300 transform scale-125";
+            if (personaId === 'steve') document.getElementById('dot-steve').className = activeClass;
+            else if (personaId === 'wittgenstein') document.getElementById('dot-wittgenstein').className = activeClass;
+            else if (personaId === 'charlie') document.getElementById('dot-charlie').className = activeClass;
+
+            const bgCarousel = document.getElementById('bg-carousel');
+            let translate = '0%';
+            if (personaId === 'steve') translate = '0%';
+            else if (personaId === 'wittgenstein') translate = '-33.33%';
+            else if (personaId === 'charlie') translate = '-66.66%';
+            bgCarousel.style.transform = `translateX(${translate})`;
+            
+            danmakuContainer.innerHTML = '';
+            initDanmaku(persona.questions);
+        }
+
+        // ==================== 事件监听 ====================
+        askBtn.addEventListener('click', () => {
+            StreamingTTS.init();
+            const question = userInput.value.trim();
+            if (!question) return;
+            showIpodView();
+            streamResponse(question);
+        });
+
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') askBtn.click();
+        });
+        
+        backBtn.addEventListener('click', showHomeView);
+        closeBtn.addEventListener('click', showHomeView);
+
+        // 轮盘控制
+        const centerBtn = document.getElementById('center-btn');
+        centerBtn.addEventListener('click', () => {
+            if (StreamingTTS.isPlaying || StreamingTTS.isGenerating) {
+                StreamingTTS.togglePause();
+            }
+        });
+
+        // 滑动切换
+        let touchStartX = 0;
+        homeView.addEventListener('touchstart', e => {
+            touchStartX = e.changedTouches[0].screenX;
+        }, {passive: true});
+
+        homeView.addEventListener('touchend', e => {
+            const diff = e.changedTouches[0].screenX - touchStartX;
+            const threshold = 50;
+            
+            if (diff < -threshold) {
+                if (currentPersonaId === 'steve') switchPersona('wittgenstein');
+                else if (currentPersonaId === 'wittgenstein') switchPersona('charlie');
+            } else if (diff > threshold) {
+                if (currentPersonaId === 'charlie') switchPersona('wittgenstein');
+                else if (currentPersonaId === 'wittgenstein') switchPersona('steve');
+            }
+        }, {passive: true});
+
+        // 初始化
+        const savedPersona = localStorage.getItem('ask_steve_last_persona');
+        if (savedPersona && PERSONAS[savedPersona]) {
+            switchPersona(savedPersona);
+        } else {
+            initDanmaku(PERSONAS['steve'].questions);
+        }
+    </script>
+</body>
+</html>

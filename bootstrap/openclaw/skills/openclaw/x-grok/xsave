@@ -1,0 +1,12 @@
+#!/bin/bash
+# X-Grok Save - Quick Command
+# 
+# Usage:
+#   xsave "答案" "问题"
+#
+# 设置自定义智能体名称:
+#   export X_GROK_AGENT="我的助手"
+#   xsave "答案" "问题"
+
+export X_GROK_AGENT="${X_GROK_AGENT:-我的助手}"
+exec ~/.openclaw/skills/x-grok/x-grok-save "$@"

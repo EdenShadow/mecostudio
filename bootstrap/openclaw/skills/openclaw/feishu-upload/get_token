@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Feishu Token
+
+curl -s -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token" \
+    -H "Content-Type: application/json" \
+    -d '{"app_id":"cli_a900506216cb2","app_secret":"Ma7i5O239TuL8MO843wnmdpYQtR6WJ"}'

@@ -1,0 +1,23 @@
+{
+  "name": "media-downloader",
+  "version": "1.0.0",
+  "description": "使用哼哼猫 API 下载视频和图片",
+  "main": "download_media",
+  "bin": {
+    "download_media": "./download_media"
+  },
+  "scripts": {
+    "test": "echo \"No tests specified\""
+  },
+  "keywords": [
+    "download",
+    "video",
+    "image",
+    "meowload"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

@@ -1,0 +1,12 @@
+#!/bin/bash
+# X-Grok Fully Automated
+# 
+# Usage:
+#   xgrok_auto "your question"
+#
+# Examples:
+#   xgrok_auto "帮我找一些x上知名的科技博主"
+#   xgrok_auto "What are the latest AI trends"
+
+export X_GROK_AGENT="${X_GROK_AGENT:-我的助手}"
+exec python3 ~/.openclaw/skills/x-grok/xgrok_auto.py "$@"

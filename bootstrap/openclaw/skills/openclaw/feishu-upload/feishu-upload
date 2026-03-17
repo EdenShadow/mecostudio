@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""
+Feishu File Upload & Send Script
+Usage: feishu-upload <file_path> [--name "文件名"]
+"""
+
+import subprocess
+import json
+import argparse
+import os
+import sys
+
+# 飞书配置
+APP_ID = os.environ.get("FEISHU_APP_ID", "")
+APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
+
+def get_token():
+    """获取 tenant_access_token"""
+    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+    data = json.dumps({"app_id": APP_ID, "app_secret": APP_SECRET})
+    
+    result = subprocess.run(
+        ["curl", "-s", "-X", "POST", url, "-H", "Content-Type: application/json", "-d", data],
+        capture_output=True, text=True
+    )
+    
+    if result.returncode == 0:
+        response = json.loads(result.stdout)
+        if response.get("code") == 0:
+            return response.get("tenant_access_token")
+    return None
+
+def upload_file(file_path):
+    """上传文件到飞书"""
+    if not os.path.exists(file_path):
+        print(f"❌ 文件不存在: {file_path}")
+        return None
+    
+    token = get_token()
+    if not token:
+        print("❌ 获取 token 失败")
+        return None
+    
+    # 上传文件
+    url = "https://open.feishu.cn/open-apis/im/v1/files"
+    cmd = [
+        "curl", "-s", url,
+        "-H", f"Authorization: Bearer {token}",
+        "-F", f"file=@{file_path}",
+        "-F", "file_type=mp4"
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    if result.returncode == 0:
+        response = json.loads(result.stdout)
+        if response.get("code") == 0:
+            file_key = response.get("data", {}).get("file_key")
+            print(f"✅ 文件已上传: {file_key}")
+            return file_key
+        else:
+            print(f"❌ 上传失败: {response.get('msg')}")
+    else:
+        print(f"❌ 请求失败: {result.stderr}")
+    
+    return None
+
+def main():
+    if len(sys.argv) < 2:
+        print("用法: feishu-upload <文件路径>")
+        sys.exit(1)
+    
+    file_path = sys.argv[1]
+    file_key = upload_file(file_path)
+    
+    if file_key:
+        print(f"\n📤 文件已准备好发送！")
+        print(f"🔑 File Key: {file_key}")
+    
+    sys.exit(0 if file_key else 1)
+
+if __name__ == "__main__":
+    main()

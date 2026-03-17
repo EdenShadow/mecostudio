@@ -1,0 +1,16 @@
+{
+  "name": "twitter-scraper",
+  "version": "1.0.0",
+  "description": "OpenClaw skill for scraping X/Twitter via twitterapi.io",
+  "main": "cli.js",
+  "type": "module",
+  "bin": {
+    "twitter-scraper": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

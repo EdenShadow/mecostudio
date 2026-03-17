@@ -1,0 +1,6 @@
+{
+  "fileId": 123,
+  "voiceId": "jobs_voice_20260115_v3",
+  "status": "mock_success_fallback",
+  "error": "Voice cloning failed: input new_sensitive"
+}

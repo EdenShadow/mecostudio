@@ -1,0 +1,2184 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>Meco Studio - Futuristic Dashboard</title>
+    <script src="lib/js/tailwindcss.js"></script>
+    <script src="lib/js/three.min.js"></script>
+    <script src="lib/js/OrbitControls.js"></script>
+    <script src="js/playgen.js"></script>
+    <link href="lib/css/inter.css" rel="stylesheet"/>
+    <link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
+    <link href="lib/css/material-icons-round.css" rel="stylesheet"/>
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#c084fc", // Lighter Neon Purple
+                        primaryHover: "#d8b4fe",
+                        "dark-bg": "#050505", // Deepest Black
+                        "glass-border": "rgba(255, 255, 255, 0.08)",
+                        "glass-surface": "rgba(20, 20, 20, 0.6)",
+                        "glass-surface-hover": "rgba(30, 30, 30, 0.8)",
+                    },
+                    fontFamily: {
+                        sans: ["Inter", "sans-serif"],
+                        display: ["Inter", "sans-serif"],
+                    },
+                    borderRadius: {
+                        'xl': '1rem',
+                        '2xl': '1.5rem',
+                        '3xl': '2rem',
+                    },
+                    boxShadow: {
+                        'neon': '0 0 20px rgba(192, 132, 252, 0.15)',
+                        'neon-strong': '0 0 25px rgba(192, 132, 252, 0.3)',
+                        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+                    }
+                },
+            },
+        };
+    </script>
+    <style>
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        .glass-panel {
+            background: rgba(18, 18, 18, 0.65);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-card {
+            background: linear-gradient(145deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.2);
+        }
+        .glass-card:hover {
+            border-color: rgba(192, 132, 252, 0.3);
+            background: linear-gradient(145deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
+        }
+        @keyframes float {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(30px, -50px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+        }
+        .ambient-blob {
+            animation: float 10s ease-in-out infinite;
+        }
+        @keyframes scaleIn {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .animate-scale-in {
+            animation: scaleIn 0.2s ease-out forwards;
+        }
+    </style>
+    <script>
+        console.log("Meco Studio script initializing...");
+        
+        // Define switchView immediately to be safe
+        window.switchView = function(viewName) {
+            console.log("switchView called with:", viewName);
+            const dashboard = document.getElementById('dashboard-view');
+            const playgen = document.getElementById('playgen-view');
+            const context = document.getElementById('context-view');
+            const atView = document.getElementById('agenttools-view');
+            
+            const navDash = document.getElementById('nav-dashboard');
+            const navPlay = document.getElementById('nav-playgen');
+            const navContext = document.getElementById('nav-context');
+            const navAgentTools = document.getElementById('nav-agenttools');
+
+            // Reset all views
+            if (dashboard) dashboard.classList.add('hidden');
+            if (playgen) playgen.classList.add('hidden');
+            if (context) context.classList.add('hidden');
+            if (atView) atView.classList.add('hidden');
+
+            // Reset all nav styles (Default Style)
+            const defaultStyle = "flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer";
+            const playDefaultStyle = "flex items-center justify-between gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer";
+            
+            if (navDash) {
+                navDash.className = defaultStyle;
+                navDash.innerHTML = `
+                    <span class="material-icons-round group-hover:text-primary transition-colors">dashboard</span>
+                    <span class="text-sm font-medium">Dashboard</span>
+                `;
+            }
+
+            if (navPlay) {
+                navPlay.className = playDefaultStyle;
+                navPlay.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="material-icons-outlined group-hover:text-blue-400 transition-colors">videogame_asset</span>
+                        <span class="text-sm font-medium">Playgen</span>
+                    </div>
+                    <span class="text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500">BETA</span>
+                `;
+            }
+
+            if (navContext) {
+                navContext.className = defaultStyle;
+                navContext.innerHTML = `
+                    <span class="material-icons-outlined group-hover:text-pink-400 transition-colors">movie_creation</span>
+                    <span class="text-sm font-medium">Context</span>
+                `;
+            }
+            
+            if (navAgentTools) {
+                navAgentTools.className = defaultStyle;
+                navAgentTools.innerHTML = `
+                    <span class="material-icons-outlined group-hover:text-green-400 transition-colors">construction</span>
+                    <span class="text-sm font-medium">Agent Tools</span>
+                `;
+            }
+
+            // Active Style Template
+            const activeStyle = "flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer";
+            
+            // Handle 3D Dispose safely
+            if (viewName !== 'playgen' && window.Playgen && typeof window.Playgen.dispose === 'function') {
+                try { window.Playgen.dispose(); } catch(e) { console.warn('Playgen dispose error', e); }
+            }
+
+            if (viewName === 'playgen') {
+                window.location.hash = 'playgen';
+                if (playgen) playgen.classList.remove('hidden');
+                
+                if (navPlay) {
+                    navPlay.className = "flex items-center justify-between gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer";
+                    navPlay.innerHTML = `
+                        <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <div class="flex items-center gap-3 relative z-10">
+                            <span class="material-icons-outlined text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">videogame_asset</span>
+                            <span class="text-sm">Playgen</span>
+                        </div>
+                        <span class="text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500 relative z-10">BETA</span>
+                    `;
+                }
+
+                // Init 3D
+                if (window.Playgen) {
+                    setTimeout(() => {
+                        try {
+                            window.Playgen.init(
+                                document.getElementById('playgen-canvas'),
+                                document.getElementById('playgen-ui')
+                            );
+                        } catch(e) { console.error('Playgen init error', e); }
+                    }, 50);
+                }
+
+            } else if (viewName === 'context') {
+                window.location.hash = 'context';
+                if (context) context.classList.remove('hidden');
+                
+                if (navContext) {
+                    navContext.className = activeStyle;
+                    navContext.innerHTML = `
+                        <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <span class="material-icons-outlined relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">movie_creation</span>
+                        <span class="text-sm relative z-10">Context</span>
+                    `;
+                }
+                
+                // Render selection list
+                if (typeof renderContextSelection === 'function') renderContextSelection();
+
+            } else if (viewName === 'agenttools') {
+                window.location.hash = 'agenttools';
+                if (atView) atView.classList.remove('hidden');
+                
+                if (navAgentTools) {
+                    navAgentTools.className = activeStyle;
+                    navAgentTools.innerHTML = `
+                        <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <span class="material-icons-outlined relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">construction</span>
+                        <span class="text-sm relative z-10">Agent Tools</span>
+                    `;
+                }
+                
+                // Populate Agent Select
+                if (typeof populateAgentToolsSelect === 'function') populateAgentToolsSelect();
+
+            } else {
+                // Dashboard
+                window.location.hash = '';
+                if (dashboard) dashboard.classList.remove('hidden');
+
+                if (navDash) {
+                    navDash.className = activeStyle;
+                    navDash.innerHTML = `
+                        <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <span class="material-icons-round relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">dashboard</span>
+                        <span class="text-sm relative z-10">Dashboard</span>
+                    `;
+                }
+            }
+        };
+
+        // Global Variables
+        let allAgents = []; 
+        let agentToDeleteId = null;
+        let currentAgentToolId = null;
+        let atSocket = null;
+        let atAudioContext = null;
+        let atAudioQueue = [];
+        let atIsPlaying = false;
+        let currentMessageDiv = null;
+        let currentAgentAvatarUrl = null;
+        let appRuntimeSettings = null;
+
+        function closeProfileMenu() {
+            const menu = document.getElementById('profile-dropdown');
+            if (menu) menu.classList.add('hidden');
+        }
+
+        function toggleProfileMenu() {
+            const menu = document.getElementById('profile-dropdown');
+            if (!menu) return;
+            menu.classList.toggle('hidden');
+        }
+
+        function openApiSettingsModal() {
+            closeProfileMenu();
+            const modal = document.getElementById('api-settings-modal');
+            if (modal) modal.classList.remove('hidden');
+            loadApiSettings();
+        }
+
+        function closeApiSettingsModal() {
+            const modal = document.getElementById('api-settings-modal');
+            if (modal) modal.classList.add('hidden');
+        }
+
+        async function loadApiSettings() {
+            try {
+                const res = await fetch('/api/settings');
+                const data = await res.json();
+                appRuntimeSettings = data.settings || {};
+
+                const setValue = (id, value) => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = value || '';
+                };
+
+                setValue('cfg-openclaw-http-url', appRuntimeSettings.openclawHttpUrl);
+                setValue('cfg-openclaw-ws-url', appRuntimeSettings.openclawWsUrl);
+                setValue('cfg-openclaw-token', appRuntimeSettings.openclawGatewayToken);
+                setValue('cfg-openclaw-model', appRuntimeSettings.openclawModel);
+                setValue('cfg-minimax-key', appRuntimeSettings.minimaxApiKey);
+                setValue('cfg-minimax-ws-url', appRuntimeSettings.minimaxWsUrl);
+                setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
+                setValue('cfg-kimi-key', appRuntimeSettings.kimiApiKey);
+                setValue('cfg-kimi-command', appRuntimeSettings.kimiCliCommand);
+                setValue('cfg-hot-topics-kb', appRuntimeSettings.hotTopicsKbPath);
+                setValue('cfg-openai-key', appRuntimeSettings.openaiApiKey);
+            } catch (e) {
+                console.error('Load settings failed', e);
+                alert('加载设置失败: ' + e.message);
+            }
+        }
+
+        async function saveApiSettings() {
+            const saveBtn = document.getElementById('save-api-settings-btn');
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerText = '保存中...';
+            }
+
+            const settings = {
+                openclawHttpUrl: document.getElementById('cfg-openclaw-http-url')?.value || '',
+                openclawWsUrl: document.getElementById('cfg-openclaw-ws-url')?.value || '',
+                openclawGatewayToken: document.getElementById('cfg-openclaw-token')?.value || '',
+                openclawModel: document.getElementById('cfg-openclaw-model')?.value || '',
+                minimaxApiKey: document.getElementById('cfg-minimax-key')?.value || '',
+                minimaxWsUrl: document.getElementById('cfg-minimax-ws-url')?.value || '',
+                tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
+                kimiApiKey: document.getElementById('cfg-kimi-key')?.value || '',
+                kimiCliCommand: document.getElementById('cfg-kimi-command')?.value || '',
+                hotTopicsKbPath: document.getElementById('cfg-hot-topics-kb')?.value || '',
+                openaiApiKey: document.getElementById('cfg-openai-key')?.value || ''
+            };
+
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        settings,
+                        applyIntegrations: true
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'save failed');
+
+                const logs = (data.integration && Array.isArray(data.integration.logs))
+                    ? data.integration.logs.join('\n')
+                    : '已保存';
+                alert('配置已保存并自动安装/激活完成:\n' + logs);
+                closeApiSettingsModal();
+            } catch (e) {
+                console.error('Save settings failed', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.innerText = '确定并自动安装/激活';
+                }
+            }
+        }
+
+        // Modal Logic
+        function openCreateModal() {
+            const modal = document.getElementById('create-modal');
+            const content = modal.querySelector('.relative');
+            
+            modal.classList.remove('hidden');
+            // Force reflow
+            void modal.offsetWidth;
+            
+            // Start animation
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            content.classList.remove('scale-95', 'opacity-0');
+            content.classList.add('scale-100', 'opacity-100');
+            
+            // Reload iframe to reset form
+            const iframe = modal.querySelector('iframe');
+            iframe.src = '/create';
+        }
+
+        function closeCreateModal() {
+            const modal = document.getElementById('create-modal');
+            const content = modal.querySelector('.relative');
+            
+            // Start exit animation
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            content.classList.remove('scale-100', 'opacity-100');
+            content.classList.add('scale-95', 'opacity-0');
+            
+            // Wait for animation to finish before hiding
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                fetchAgents(); // Refresh list on close
+            }, 300);
+        }
+
+        // Expose to window for iframe access
+        window.closeCreateModal = closeCreateModal;
+
+        // Delete Logic
+        function deleteAgent(id) {
+            agentToDeleteId = id;
+            document.getElementById('delete-modal').classList.remove('hidden');
+        }
+
+        function closeDeleteModal() {
+            document.getElementById('delete-modal').classList.add('hidden');
+            agentToDeleteId = null;
+        }
+
+        async function confirmDelete() {
+            if (!agentToDeleteId) return;
+
+            // Hide delete modal
+            document.getElementById('delete-modal').classList.add('hidden');
+
+            // Show loading overlay
+            const loading = document.getElementById('loading-overlay');
+            const loadingText = loading.querySelector('h3');
+            const loadingDesc = loading.querySelector('p');
+            loadingText.textContent = 'Deleting Agent...';
+            loadingDesc.textContent = 'Syncing with Podcast API & cleaning up';
+            loading.classList.remove('hidden');
+
+            try {
+                const res = await fetch(`/api/agents/${agentToDeleteId}`, { method: 'DELETE' });
+                if (res.ok) {
+                    const data = await res.json();
+                    loadingText.textContent = 'Deleted!';
+                    loadingDesc.textContent = data.podcastDeleted ? 'Podcast API synced' : 'Local cleanup complete';
+                    setTimeout(() => {
+                        loading.classList.add('hidden');
+                        fetchAgents();
+                        agentToDeleteId = null;
+                    }, 800);
+                } else {
+                    throw new Error('Delete failed');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Failed to delete agent');
+                loading.classList.add('hidden');
+                agentToDeleteId = null;
+            }
+        }
+
+        // Data Fetching
+        async function fetchAgents() {
+            console.log("Fetching agents...");
+            try {
+                const response = await fetch('/api/agents');
+                const data = await response.json();
+                
+                // Store as array
+                allAgents = Object.values(data.agents);
+                console.log("Agents loaded:", allAgents.length);
+                
+                // Check for search param on load
+                const urlParams = new URLSearchParams(window.location.search);
+                const query = urlParams.get('q');
+                
+                if (query) {
+                    const input = document.getElementById('search-input');
+                    if (input) {
+                        input.value = query;
+                        filterAgents(query);
+                        // Clear param from URL without reload
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                    } else {
+                        renderAgents(allAgents);
+                    }
+                } else {
+                    renderAgents(allAgents);
+                }
+                
+                // Check hash for view
+                if (window.location.hash === '#playgen') {
+                    switchView('playgen');
+                } else if (window.location.hash === '#context') {
+                    switchView('context');
+                } else if (window.location.hash === '#agenttools') {
+                    switchView('agenttools');
+                }
+            } catch (e) {
+                console.error('Failed to fetch agents', e);
+            }
+        }
+
+        function filterAgents(query) {
+            if (!query || query.trim() === '') {
+                renderAgents(allAgents);
+                return;
+            }
+            
+            const lowerQ = query.toLowerCase().trim();
+            const filtered = allAgents.filter(agent => {
+                const name = (agent.displayName || agent.name || '').toLowerCase();
+                const id = (agent.id || '').toLowerCase();
+                const desc = (agent.description || '').toLowerCase();
+                return name.includes(lowerQ) || id.includes(lowerQ) || desc.includes(lowerQ);
+            });
+            
+            renderAgents(filtered);
+        }
+
+        function getRandomColor(name) {
+            const colors = [
+                'bg-red-600', 'bg-orange-600', 'bg-amber-600', 
+                'bg-yellow-600', 'bg-lime-600', 'bg-green-600', 
+                'bg-emerald-600', 'bg-teal-600', 'bg-cyan-600', 
+                'bg-sky-600', 'bg-blue-600', 'bg-indigo-600', 
+                'bg-violet-600', 'bg-purple-600', 'bg-fuchsia-600', 
+                'bg-pink-600', 'bg-rose-600'
+            ];
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) {
+                hash = name.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return colors[Math.abs(hash) % colors.length];
+        }
+
+        window.handleAvatarError = function(img, name) {
+            const colorClass = getRandomColor(name || 'A');
+            const initial = (name || 'A').charAt(0).toUpperCase();
+            
+            const div = document.createElement('div');
+            div.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-6xl font-bold shadow-inner group-hover:scale-110 transition-transform duration-700 ease-out`;
+            div.innerText = initial;
+            
+            if (img && img.parentNode) {
+                img.parentNode.replaceChild(div, img);
+            }
+        };
+
+        window.handleSidebarAvatarError = function(img, name) {
+            const colorClass = getRandomColor(name || 'A');
+            const initial = (name || 'A').charAt(0).toUpperCase();
+            
+            const div = document.createElement('div');
+            div.className = `w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100`;
+            div.innerText = initial;
+            
+            if (img && img.parentNode) {
+                img.parentNode.replaceChild(div, img);
+            }
+        };
+
+        function renderAgents(agents) {
+            const grid = document.getElementById('agent-grid');
+            const sidebarList = document.getElementById('sidebar-agent-list');
+            
+            if (!grid || !sidebarList) {
+                console.error("Grid or Sidebar not found");
+                return;
+            }
+
+            // Clear existing agents (keep first child which is Create button if present, or rebuild)
+            // Safer to rebuild entirely but keep the Create button logic
+            grid.innerHTML = `
+                <button class="group relative flex flex-col items-center justify-center h-[380px] rounded-3xl border border-dashed border-white/20 bg-white/[0.02] hover:bg-white/[0.05] hover:border-primary/50 transition-all duration-300" onclick="openCreateModal()">
+                    <div class="absolute inset-0 bg-primary/5 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl"></div>
+                    <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-gray-800 to-black border border-white/10 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:border-primary/50 group-hover:shadow-neon transition-all duration-300 relative z-10">
+                        <span class="material-icons-round text-4xl text-primary drop-shadow-[0_0_10px_rgba(192,132,252,0.6)]">add</span>
+                    </div>
+                    <h3 class="text-xl font-semibold text-white relative z-10">Create New</h3>
+                    <p class="text-sm text-gray-500 mt-2 relative z-10 group-hover:text-primary/80 transition-colors">Design a new persona</p>
+                </button>
+            `;
+            
+            sidebarList.innerHTML = '';
+
+            Object.values(agents).forEach(agent => {
+                const displayName = agent.displayName || agent.name;
+                const hasCustomAvatar = agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com');
+                
+                // Render Card
+                const card = document.createElement('div');
+                card.className = 'glass-card rounded-3xl overflow-hidden flex flex-col h-[380px] group relative cursor-pointer hover:z-20';
+                card.style.transition = 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+                card.style.transformOrigin = 'center center';
+                
+                card.classList.add('hover:scale-110', 'hover:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.6)]', 'hover:shadow-primary/30');
+
+                card.onclick = (e) => {
+                    if (e.target.closest('button')) return;
+                    window.location.href = `/edit?id=${agent.id}`;
+                };
+                
+                let avatarHtml;
+                if (hasCustomAvatar) {
+                    avatarHtml = `
+                        <img alt="${displayName}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out" 
+                             src="${agent.avatarUrl}" 
+                             onerror="handleAvatarError(this, '${displayName}')">
+                    `;
+                } else {
+                    const colorClass = getRandomColor(displayName);
+                    const initial = displayName.charAt(0).toUpperCase();
+                    avatarHtml = `
+                        <div class="w-full h-full flex items-center justify-center ${colorClass} text-white text-6xl font-bold shadow-inner group-hover:scale-110 transition-transform duration-700 ease-out">
+                            ${initial}
+                        </div>
+                    `;
+                }
+
+                card.innerHTML = `
+                    <div class="relative h-56 overflow-hidden bg-gray-900">
+                        ${avatarHtml}
+                        <div class="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-transparent to-transparent opacity-90 pointer-events-none group-hover:scale-110 transition-transform duration-700 ease-out"></div>
+                        
+                        <div class="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0 z-30 scale-90 group-hover:scale-100">
+                            <button class="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/10 flex items-center justify-center text-white/70 hover:bg-red-500/80 hover:text-white hover:border-red-500/50 transition-all shadow-lg hover:shadow-red-500/30" 
+                                    onclick="event.stopPropagation(); deleteAgent('${agent.id}')"
+                                    title="Delete Agent">
+                                <span class="material-icons-outlined text-lg">delete</span>
+                            </button>
+                        </div>
+
+                        <div class="absolute bottom-4 left-5 pointer-events-none">
+                            <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-500/10 border border-green-500/20 backdrop-blur-md">
+                                <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>
+                                <span class="text-green-400 text-[10px] font-bold uppercase tracking-wide">Active</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="p-6 flex flex-col flex-1 relative">
+                        <div class="flex justify-between items-start mb-2">
+                            <h3 class="text-xl font-bold text-white group-hover:text-primary transition-colors">${displayName}</h3>
+                        </div>
+                        <p class="text-sm text-gray-400 line-clamp-2 mb-6 font-light leading-relaxed">${agent.description || 'AI Agent'}</p>
+                        <div class="mt-auto pt-4 border-t border-white/5 flex items-center justify-between text-xs text-gray-500">
+                            <div class="flex items-center gap-1.5">
+                                <span class="material-icons-outlined text-[16px] text-gray-600">history</span>
+                                <span>Just now</span>
+                            </div>
+                            <div class="flex -space-x-2">
+                                ${agent.videoUrl ? `
+                                <div class="w-7 h-7 rounded-full bg-gray-900 border border-gray-700 flex items-center justify-center shadow-lg relative z-10 group-hover:border-primary/30 transition-colors">
+                                    <span class="material-icons-round text-blue-400 text-xs">videocam</span>
+                                </div>` : ''}
+                                ${(agent.voiceId && agent.voiceId !== 'default') || agent.voiceUrl ? `
+                                <div class="w-7 h-7 rounded-full bg-gray-900 border border-gray-700 flex items-center justify-center shadow-lg relative z-0 group-hover:border-primary/30 transition-colors" title="Voice ID: ${agent.voiceId || 'Custom'}">
+                                    <span class="material-icons-round text-purple-400 text-xs">mic</span>
+                                </div>` : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+
+                // Render Sidebar Item
+                let sidebarAvatarHtml;
+                if (hasCustomAvatar) {
+                    sidebarAvatarHtml = `
+                        <img alt="${displayName}" class="w-8 h-8 rounded-full object-cover ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100" 
+                             src="${agent.avatarUrl}" 
+                             onerror="handleSidebarAvatarError(this, '${displayName}')">
+                    `;
+                } else {
+                    const colorClass = getRandomColor(displayName);
+                    const initial = displayName.charAt(0).toUpperCase();
+                    sidebarAvatarHtml = `
+                        <div class="w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100">
+                            ${initial}
+                        </div>
+                    `;
+                }
+
+                const sidebarItem = document.createElement('div');
+                sidebarItem.className = 'flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors group cursor-pointer';
+                const emoji = agent.emoji || displayName.charAt(0).toUpperCase();
+
+                sidebarItem.onclick = () => {
+                    const hash = window.location.hash;
+
+                    if (hash === '#context') {
+                        const checkbox = document.querySelector(`.agent-select-cb[value="${agent.id}"]`);
+                        if (checkbox) checkbox.checked = !checkbox.checked;
+                        return;
+                    }
+
+                    if (hash === '#agenttools') {
+                        const select = document.getElementById('at-agent-select');
+                        if (select) {
+                            select.value = agent.id;
+                            loadAgentTools(agent.id);
+                        }
+                        return;
+                    }
+
+                    if (!hash || hash === '#' || hash === '') {
+                        window.location.href = `/edit?id=${agent.id}`;
+                        return;
+                    }
+
+                    switchView('playgen');
+                    setTimeout(() => {
+                        const avatarUrl = agent.avatarUrl || null;
+                        if (window.Playgen && window.Playgen.openChat) {
+                            window.Playgen.openChat(agent.id, displayName, emoji, avatarUrl);
+                        }
+                    }, 100);
+                };
+                sidebarItem.innerHTML = `
+                    ${sidebarAvatarHtml}
+                    <span class="text-sm truncate font-medium">${displayName}</span>
+                `;
+                sidebarList.appendChild(sidebarItem);
+            });
+        }
+
+        function renderContextSelection() {
+            const grid = document.getElementById('context-agent-grid');
+            if (!grid) return;
+            grid.innerHTML = '';
+
+            if (!allAgents || allAgents.length === 0) {
+                grid.innerHTML = '<p class="text-gray-500 col-span-full text-center">No agents found. Please create one first.</p>';
+                return;
+            }
+
+            allAgents.forEach(agent => {
+                const displayName = agent.displayName || agent.name;
+                const hasCustomAvatar = agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com');
+                const voiceId = agent.voiceId || 'jobs_voice_20260115_v3';
+
+                const card = document.createElement('div');
+                card.className = 'glass-card rounded-2xl p-4 flex items-center gap-4 cursor-pointer hover:bg-white/5 transition-all group relative';
+                card.onclick = (e) => {
+                    if (e.target.type !== 'checkbox') {
+                        const cb = card.querySelector('input[type="checkbox"]');
+                        cb.checked = !cb.checked;
+                    }
+                };
+
+                let avatarHtml;
+                if (hasCustomAvatar) {
+                    avatarHtml = `
+                        <img alt="${displayName}" class="w-12 h-12 rounded-full object-cover ring-2 ring-transparent group-hover:ring-primary/50 transition-all" 
+                             src="${agent.avatarUrl}" 
+                             onerror="handleSidebarAvatarError(this, '${displayName}')">
+                    `;
+                } else {
+                    const colorClass = getRandomColor(displayName);
+                    const initial = displayName.charAt(0).toUpperCase();
+                    avatarHtml = `
+                        <div class="w-12 h-12 rounded-full flex items-center justify-center ${colorClass} text-white text-lg font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all">
+                            ${initial}
+                        </div>
+                    `;
+                }
+
+                card.innerHTML = `
+                    <div class="relative">
+                        ${avatarHtml}
+                        <div class="absolute -bottom-1 -right-1 bg-black rounded-full p-0.5">
+                            <input type="checkbox" class="w-4 h-4 rounded border-gray-600 text-primary focus:ring-primary bg-gray-800 cursor-pointer agent-select-cb" 
+                                   value="${agent.id}" 
+                                   data-voice="${voiceId}"
+                                   onclick="event.stopPropagation()">
+                        </div>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="text-white font-medium truncate">${displayName}</h3>
+                        <p class="text-xs text-gray-500 truncate">${agent.description || 'No description'}</p>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        // Context tab switching
+        function switchContextTab(tab) {
+            const tabAgents = document.getElementById('context-tab-agents');
+            const tabRooms = document.getElementById('context-tab-rooms');
+            const btnAgents = document.getElementById('tab-agents');
+            const btnRooms = document.getElementById('tab-rooms');
+            const fab = document.getElementById('context-fab');
+            const activeClass = 'bg-primary/20 text-primary border border-primary/30';
+            const inactiveClass = 'text-gray-400 hover:text-white hover:bg-white/5';
+
+            if (tab === 'agents') {
+                tabAgents.classList.remove('hidden');
+                tabRooms.classList.add('hidden');
+                fab.classList.remove('hidden');
+                btnAgents.className = `px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeClass}`;
+                btnRooms.className = `px-5 py-2 rounded-lg text-sm font-medium transition-all ${inactiveClass}`;
+            } else {
+                tabAgents.classList.add('hidden');
+                tabRooms.classList.remove('hidden');
+                fab.classList.add('hidden');
+                btnRooms.className = `px-5 py-2 rounded-lg text-sm font-medium transition-all ${activeClass}`;
+                btnAgents.className = `px-5 py-2 rounded-lg text-sm font-medium transition-all ${inactiveClass}`;
+                fetchRooms();
+            }
+        }
+
+        const CATEGORY_LABELS = {
+            technology: 'Technology', science: 'Science', economy: 'Economy',
+            military: 'Military', sports: 'Sports', entertainment: 'Entertainment',
+            politics: 'Politics', society: 'Society', culture: 'Culture', history: 'History'
+        };
+
+        async function fetchRooms() {
+            try {
+                const res = await fetch('/api/podcast/rooms');
+                const rooms = await res.json();
+                // 按创建时间降序排列，最新的在前
+                rooms.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                const grid = document.getElementById('rooms-grid');
+                const empty = document.getElementById('rooms-empty');
+
+                if (!rooms || rooms.length === 0) {
+                    grid.innerHTML = '';
+                    grid.classList.add('hidden');
+                    empty.classList.remove('hidden');
+                    return;
+                }
+
+                empty.classList.add('hidden');
+                grid.classList.remove('hidden');
+                grid.innerHTML = rooms.map(r => {
+                    const coverSrc = r.coverLocal || r.coverUrl;
+                    const cover = coverSrc
+                        ? `<img src="${coverSrc}" class="w-full h-36 object-cover" />`
+                        : `<div class="w-full h-36 bg-gradient-to-br from-primary/20 to-purple-900/30 flex items-center justify-center"><span class="material-icons-round text-4xl text-primary/40">podcasts</span></div>`;
+                    const catLabel = CATEGORY_LABELS[r.category] || r.category;
+                    const date = new Date(r.createdAt).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    return `
+                    <div class="glass-card rounded-2xl overflow-hidden cursor-pointer group hover:border-primary/30 transition-all relative"
+                         data-room-id="${r.roomId}"
+                         onclick="window.open('${r.roundtableUrl}', '_blank')">
+                        <div class="relative overflow-hidden">
+                            ${cover}
+                            <div class="absolute top-2 right-2 flex items-center gap-1.5">
+                                <div class="bg-black/60 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] text-gray-300 border border-white/10 flex items-center gap-1">
+                                    <span class="material-icons-round text-xs">group</span> ${r.maxAgents}
+                                </div>
+                                <button onclick="event.stopPropagation(); deleteRoom('${r.roomId}')"
+                                    class="bg-black/60 backdrop-blur-sm w-6 h-6 rounded-full flex items-center justify-center border border-white/10 hover:bg-red-500/80 transition-all"
+                                    title="Delete room">
+                                    <span class="material-icons-round text-xs text-white">close</span>
+                                </button>
+                            </div>
+                            <div class="absolute top-2 left-2 bg-primary/80 backdrop-blur-sm px-2 py-0.5 rounded-full text-[10px] text-black font-bold">
+                                ${catLabel}
+                            </div>
+                        </div>
+                        <div class="p-4">
+                            <h3 class="text-white font-semibold text-sm truncate group-hover:text-primary transition-colors">${r.name}</h3>
+                            <p class="text-gray-500 text-xs mt-1 line-clamp-2">${r.description || 'No description'}</p>
+                            <div class="flex items-center justify-between mt-3">
+                                <span class="text-[10px] text-gray-600">${date}</span>
+                                <span class="text-[10px] text-gray-600 font-mono">${r.roomId}</span>
+                            </div>
+                        </div>
+                    </div>`;
+                }).join('');
+            } catch (e) {
+                console.error('Failed to fetch rooms:', e);
+            }
+        }
+
+
+        async function deleteRoom(roomId) {
+            if (!confirm('Are you sure you want to delete this room?')) return;
+            // 在卡片上显示 loading
+            const card = document.querySelector(`[data-room-id="${roomId}"]`);
+            if (card) {
+                card.style.opacity = '0.5';
+                card.style.pointerEvents = 'none';
+            }
+            try {
+                const res = await fetch(`/api/podcast/rooms/${roomId}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete room');
+                fetchRooms();
+            } catch(e) {
+                console.error(e);
+                alert('Failed to delete room: ' + e.message);
+                if (card) {
+                    card.style.opacity = '1';
+                    card.style.pointerEvents = '';
+                }
+            }
+        }
+
+        // Roundtable room creation state
+        let pendingRoundtableAgents = [];
+        let pendingRoundtableVoices = [];
+
+        function generateRoundtable() {
+            const checkboxes = document.querySelectorAll('.agent-select-cb:checked');
+            if (checkboxes.length < 2) {
+                alert('Please select at least 2 characters.');
+                return;
+            }
+
+            pendingRoundtableAgents = [];
+            pendingRoundtableVoices = [];
+            checkboxes.forEach(cb => {
+                pendingRoundtableAgents.push(cb.value);
+                let v = cb.getAttribute('data-voice');
+                if (!v || v === 'default' || v === 'null') v = 'jobs_voice_20260115_v3';
+                pendingRoundtableVoices.push(v);
+            });
+
+            // Fill modal defaults
+            document.getElementById('room-name').value = '';
+            document.getElementById('room-desc').value = '';
+            document.getElementById('room-max-agents').value = pendingRoundtableAgents.length;
+            document.getElementById('room-category').value = 'technology';
+            document.getElementById('room-cover-input').value = '';
+            document.getElementById('room-cover-preview').classList.add('hidden');
+            document.getElementById('room-create-error').classList.add('hidden');
+
+            // Show modal
+            document.getElementById('room-create-modal').classList.remove('hidden');
+        }
+
+        function closeRoomCreateModal() {
+            document.getElementById('room-create-modal').classList.add('hidden');
+        }
+
+        function previewRoomCover(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const preview = document.getElementById('room-cover-preview');
+            const img = document.getElementById('room-cover-img');
+            img.src = URL.createObjectURL(file);
+            preview.classList.remove('hidden');
+        }
+
+        async function confirmCreateRoom() {
+            const name = document.getElementById('room-name').value.trim();
+            const description = document.getElementById('room-desc').value.trim();
+            const category = document.getElementById('room-category').value;
+            const coverFile = document.getElementById('room-cover-input').files[0];
+            const errorEl = document.getElementById('room-create-error');
+
+            if (!name) {
+                errorEl.textContent = 'Please enter a room name';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            // Show loading
+            const btn = document.getElementById('room-create-btn');
+            const btnText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<svg class="animate-spin h-5 w-5 inline mr-2" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>Creating Room...';
+            errorEl.classList.add('hidden');
+
+            try {
+                const formData = new FormData();
+                formData.append('name', name);
+                formData.append('description', description);
+                formData.append('category', category);
+                formData.append('agentIds', JSON.stringify(pendingRoundtableAgents));
+                if (coverFile) formData.append('cover', coverFile);
+
+                const res = await fetch('/api/podcast/room/create', { method: 'POST', body: formData });
+                const data = await res.json();
+
+                if (!res.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to create room');
+                }
+
+                console.log('[Room] Created:', data.roomId, 'Join results:', data.joinResults);
+
+                // 有智能体加入失败时提示用户
+                if (!data.allJoined && data.failedAgents && data.failedAgents.length > 0) {
+                    alert(`Warning: The following agents failed to join the room:\n${data.failedAgents.join(', ')}\n\nThe room has been created but may not work correctly.`);
+                }
+
+                // Close modal, switch to My Rooms tab
+                closeRoomCreateModal();
+                switchContextTab('rooms');
+            } catch (e) {
+                console.error(e);
+                errorEl.textContent = e.message;
+                errorEl.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = btnText;
+            }
+        }
+
+        // Agent Tools Logic
+        function populateAgentToolsSelect() {
+            const select = document.getElementById('at-agent-select');
+            if (!select) return;
+            select.innerHTML = '';
+            
+            if (allAgents.length === 0) {
+                select.innerHTML = '<option value="" disabled selected>No agents found</option>';
+                return;
+            }
+
+            allAgents.forEach((agent, index) => {
+                const option = document.createElement('option');
+                option.value = agent.id;
+                option.text = agent.displayName || agent.name;
+                if (index === 0) option.selected = true;
+                select.appendChild(option);
+            });
+
+            if (allAgents.length > 0) {
+                loadAgentTools(allAgents[0].id);
+            }
+        }
+
+        async function loadAgentTools(agentId) {
+            if (!agentId) return;
+            currentAgentToolId = agentId;
+            
+            const avatarImg = document.getElementById('at-avatar-img');
+            const avatarPlaceholder = document.getElementById('at-avatar-placeholder');
+            
+            // Optimistic UI update from cache
+            const cachedAgent = allAgents.find(a => a.id === agentId);
+            if (cachedAgent) {
+                const hasCustom = cachedAgent.avatarUrl && !cachedAgent.avatarUrl.includes('googleusercontent.com');
+                if (hasCustom) {
+                    if (avatarImg) {
+                        avatarImg.src = cachedAgent.avatarUrl;
+                        avatarImg.style.display = 'block';
+                    }
+                    if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                    currentAgentAvatarUrl = cachedAgent.avatarUrl;
+                } else {
+                    if (avatarImg) avatarImg.style.display = 'none';
+                    if (avatarPlaceholder) {
+                        const name = cachedAgent.displayName || cachedAgent.name || 'Agent';
+                        const colorClass = getRandomColor(name);
+                        const initial = name.charAt(0).toUpperCase();
+                        avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                        avatarPlaceholder.innerText = initial;
+                        avatarPlaceholder.style.display = 'flex';
+                    }
+                    currentAgentAvatarUrl = null;
+                }
+            } else {
+                // Fallback reset
+                if (avatarImg) avatarImg.style.display = 'none';
+                if (avatarPlaceholder) {
+                    avatarPlaceholder.className = 'w-full h-full flex items-center justify-center text-gray-700 text-6xl font-bold bg-black/50';
+                    avatarPlaceholder.innerText = '?';
+                    avatarPlaceholder.style.display = 'flex';
+                }
+            }
+            
+            const promptEl = document.getElementById('at-system-prompt');
+            if (promptEl) promptEl.value = 'Loading...';
+            
+            const skillsList = document.getElementById('at-skills-list');
+            if (skillsList) skillsList.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">Loading skills...</div>';
+            
+            const chatMsgs = document.getElementById('at-chat-messages');
+            if (chatMsgs) chatMsgs.innerHTML = '';
+            currentMessageDiv = null;
+            
+            const chatInput = document.getElementById('at-chat-input');
+            if (chatInput) chatInput.disabled = false;
+            
+            const sendBtn = document.getElementById('at-send-btn');
+            if (sendBtn) sendBtn.disabled = false;
+
+            try {
+                const res = await fetch(`/api/agents/${agentId}`);
+                const data = await res.json();
+                const agent = data.agent;
+                
+                if (promptEl) promptEl.value = agent.systemPrompt || agent.prompt || 'No system prompt defined.';
+                
+                if (agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com')) {
+                    currentAgentAvatarUrl = agent.avatarUrl;
+                    if (avatarImg) {
+                        avatarImg.src = agent.avatarUrl;
+                        avatarImg.style.display = 'block';
+                    }
+                    if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                } else {
+                    currentAgentAvatarUrl = null;
+                    if (avatarImg) avatarImg.style.display = 'none';
+                    
+                    if (avatarPlaceholder) {
+                        const name = agent.displayName || agent.name || 'Agent';
+                        const colorClass = getRandomColor(name);
+                        const initial = name.charAt(0).toUpperCase();
+                        
+                        // Update placeholder with dynamic color and initial
+                        avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                        avatarPlaceholder.innerText = initial;
+                        avatarPlaceholder.style.display = 'flex';
+                    }
+                }
+                
+                refreshAgentSkills();
+                connectAgentToolsSocket(agentId);
+                
+                // Load History
+                try {
+                    const historyRes = await fetch(`/api/agents/${agentId}/history`);
+                    const historyData = await historyRes.json();
+                    if (historyData.history && Array.isArray(historyData.history)) {
+                         // Sort or just append? Usually history is chronological.
+                         historyData.history.forEach(msg => {
+                             if (msg.role && msg.content) {
+                                 appendMessage(msg.role, msg.content);
+                             }
+                         });
+                         // Scroll to bottom with a slight delay to allow layout
+                         setTimeout(() => {
+                             if (chatMsgs) chatMsgs.scrollTop = chatMsgs.scrollHeight;
+                         }, 100);
+                         // Double tap for image loading
+                         setTimeout(() => {
+                             if (chatMsgs) chatMsgs.scrollTop = chatMsgs.scrollHeight;
+                         }, 500);
+                    }
+                } catch (e) {
+                    console.error('Failed to load history', e);
+                }
+                
+            } catch (e) {
+                console.error('Failed to load agent details', e);
+                if (promptEl) promptEl.value = 'Error loading details.';
+            }
+        }
+
+        async function refreshAgentSkills() {
+            if (!currentAgentToolId) return;
+            const list = document.getElementById('at-skills-list');
+            if (!list) return;
+            
+            // Don't clear list immediately to avoid flickering, maybe just show a small spinner?
+            // list.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">Refreshing...</div>';
+            
+            try {
+                const res = await fetch(`/api/agents/${currentAgentToolId}/skills`);
+                const data = await res.json();
+                
+                list.innerHTML = '';
+                if (data.skills && data.skills.length > 0) {
+                    
+                    // Group skills by source
+                    const installedSkills = data.skills.filter(s => s.source && s.source.includes('managed'));
+                    const extraSkills = data.skills.filter(s => !s.source || !s.source.includes('managed'));
+                    
+                    const renderSkillItem = (skill) => {
+                        const item = document.createElement('div');
+                        item.className = 'flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors mb-2';
+                        
+                        const isEnabled = skill.enabled; 
+                        const safeName = (skill.name || '').replace(/'/g, "\\'");
+                        
+                        // Use emoji if available, otherwise use initials
+                        const iconContent = skill.emoji 
+                            ? `<span class="text-xl">${skill.emoji}</span>`
+                            : `<span class="text-xs font-mono font-bold text-gray-400 border border-white/20 rounded px-1">${(skill.name || 'SK').substring(0,2).toUpperCase()}</span>`;
+                        
+                        // Use skill name for display if displayName is fallback
+                        const displayTitle = (skill.displayName && skill.displayName !== 'Unknown Skill') 
+                            ? skill.displayName 
+                            : (skill.name || 'Unknown Skill');
+
+                        item.innerHTML = `
+                            <div class="flex items-center gap-3 overflow-hidden">
+                                <div class="w-8 h-8 flex items-center justify-center flex-shrink-0">
+                                    ${iconContent}
+                                </div>
+                                <div class="flex flex-col min-w-0">
+                                    <span class="text-sm font-medium truncate text-white" title="${skill.name}">${displayTitle}</span>
+                                    <span class="text-[10px] text-gray-500 truncate" title="${skill.description}">${skill.description || ''}</span>
+                                </div>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" class="sr-only peer" ${isEnabled ? 'checked' : ''} onchange="toggleSkill('${safeName}', this.checked)">
+                                <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                            </label>
+                        `;
+                        return item;
+                    };
+
+                    if (installedSkills.length > 0) {
+                        const installedHeader = document.createElement('div');
+                        installedHeader.className = 'text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 mt-4 first:mt-0';
+                        installedHeader.textContent = 'Installed Skills';
+                        list.appendChild(installedHeader);
+                        installedSkills.forEach(skill => list.appendChild(renderSkillItem(skill)));
+                    }
+
+                    if (extraSkills.length > 0) {
+                        const extraHeader = document.createElement('div');
+                        extraHeader.className = 'text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 mt-4';
+                        extraHeader.textContent = 'Extra Skills';
+                        list.appendChild(extraHeader);
+                        extraSkills.forEach(skill => list.appendChild(renderSkillItem(skill)));
+                    }
+                    
+                } else {
+                    list.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">No skills found.</div>';
+                }
+            } catch (e) {
+                console.error('Failed to fetch skills', e);
+                list.innerHTML = '<div class="p-4 text-center text-red-500 text-sm">Error loading skills.</div>';
+            }
+        }
+
+        async function refreshSystemPrompt() {
+            if (!currentAgentToolId) return;
+            const promptEl = document.getElementById('at-system-prompt');
+            if (!promptEl) return;
+            
+            try {
+                const res = await fetch(`/api/agents/${currentAgentToolId}`);
+                const data = await res.json();
+                if (data.agent && (data.agent.systemPrompt || data.agent.prompt)) {
+                    // Only update if changed to avoid cursor jumps if user is editing (though user shouldn't edit read-only field)
+                    const newPrompt = data.agent.systemPrompt || data.agent.prompt;
+                    if (promptEl.value !== newPrompt) {
+                        promptEl.value = newPrompt;
+                        // Visual feedback
+                        promptEl.parentElement.classList.add('ring-2', 'ring-primary/50');
+                        setTimeout(() => promptEl.parentElement.classList.remove('ring-2', 'ring-primary/50'), 500);
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to refresh system prompt', e);
+            }
+        }
+
+        window.toggleSkill = async function(skillName, enabled) {
+            if (!currentAgentToolId) return;
+            try {
+                await fetch(`/api/agents/${currentAgentToolId}/skills/toggle`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ skillName, enabled })
+                });
+            } catch (e) {
+                console.error('Failed to toggle skill', e);
+                alert('Failed to toggle skill');
+            }
+        };
+
+        function connectAgentToolsSocket(agentId) {
+            if (atSocket) {
+                atSocket.close();
+            }
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            atSocket = new WebSocket(`${protocol}//${window.location.host}/agent-tools?agentId=${agentId}`);
+            
+            atSocket.onmessage = async (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'text_stream') {
+                    appendAgentText(data.content, data.isNew);
+                } else if (data.type === 'reasoning_stream' || data.type === 'thinking_stream') {
+                    appendAgentReasoning(data.content, data.isNew);
+                } else if (data.type === 'audio_stream') {
+                    playAudioChunk(data.audio);
+                } else if (data.type === 'skills_updated' || data.type === 'state_updated') {
+                    refreshAgentSkills();
+                    refreshSystemPrompt();
+                }
+            };
+            
+            atSocket.onopen = () => {
+                console.log('Agent Tools Socket Connected');
+            };
+        }
+
+        function appendMessage(role, text, files = []) {
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return;
+            
+            const isUser = role === 'user';
+            const div = document.createElement('div');
+            // Remove mb-6 to avoid large gaps, add specific margins
+            div.className = `flex gap-4 max-w-[90%] ${isUser ? 'ml-auto flex-row-reverse' : ''} mb-4 animate-scale-in group`;
+            
+            let avatarHtml = '';
+            if (isUser) {
+                avatarHtml = `
+                    <div class="w-10 h-10 rounded-full bg-white/10 flex-shrink-0 flex items-center justify-center text-white text-xs border border-white/10 shadow-lg ring-2 ring-transparent group-hover:ring-primary/20 transition-all">
+                        <span class="material-icons-round text-lg">person</span>
+                    </div>`;
+            } else {
+                 if (currentAgentAvatarUrl) {
+                     avatarHtml = `<img src="${currentAgentAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent group-hover:ring-primary/20 transition-all">`;
+                 } else {
+                     avatarHtml = `
+                        <div class="w-10 h-10 rounded-full bg-primary/20 flex-shrink-0 flex items-center justify-center text-primary text-xs border border-primary/20 shadow-neon ring-2 ring-transparent group-hover:ring-primary/20 transition-all">
+                            <span class="material-icons-round text-lg">smart_toy</span>
+                        </div>`;
+                 }
+            }
+            
+            div.innerHTML = `
+                ${avatarHtml}
+                <div class="${isUser ? 'bg-primary text-black shadow-neon' : 'bg-white/10 text-gray-200 border border-white/5 shadow-glass'} p-5 rounded-3xl ${isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'} text-sm leading-relaxed backdrop-blur-md group relative hover:shadow-xl transition-all duration-300 min-w-[60px]">
+                    <div class="message-content whitespace-pre-wrap" style="word-break: break-word;"></div>
+                    ${isUser ? '' : `
+                    <div class="reasoning-container hidden mt-3 p-3 rounded-2xl bg-black/20 border border-white/10">
+                        <div class="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Thinking / 推理</div>
+                        <div class="reasoning-content whitespace-pre-wrap text-xs text-gray-300 leading-relaxed" style="word-break: break-word;"></div>
+                    </div>
+                    `}
+                </div>
+            `;
+            
+            const contentDiv = div.querySelector('.message-content');
+            contentDiv.textContent = text;
+
+            if (files && files.length > 0) {
+                 const filesContainer = document.createElement('div');
+                 filesContainer.className = 'flex flex-wrap gap-2 mt-3';
+                 
+                 Array.from(files).forEach(file => {
+                     // Check if it's a File object or has type property
+                     const fileType = file.type || '';
+                     const isImage = fileType.startsWith('image/');
+                     
+                     if (isImage) {
+                         const img = document.createElement('img');
+                         img.className = 'max-w-full rounded-xl border border-black/10 dark:border-white/10 max-h-60 object-cover cursor-pointer hover:opacity-90 transition-opacity';
+                         img.onclick = () => window.open(img.src, '_blank');
+                         
+                         if (file instanceof File) {
+                            img.src = URL.createObjectURL(file);
+                            img.onload = () => {
+                                URL.revokeObjectURL(img.src);
+                                const chatContainer = document.getElementById('at-chat-messages');
+                                if (chatContainer) {
+                                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                                    // Double check scroll after a tiny delay for layout reflow
+                                    setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 50);
+                                }
+                            };
+                        } else if (file.data) {
+                             // If file has data (base64)
+                             img.src = file.data;
+                             // Scroll when image loads
+                             img.onload = () => {
+                                 const chatContainer = document.getElementById('at-chat-messages');
+                                 if (chatContainer) {
+                                     chatContainer.scrollTop = chatContainer.scrollHeight;
+                                     setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 50);
+                                 }
+                             };
+                         }
+                          filesContainer.appendChild(img);
+                      } else {
+                          const fileDiv = document.createElement('div');
+                          fileDiv.className = 'flex items-center gap-2 p-3 bg-black/10 dark:bg-white/10 rounded-xl text-xs font-mono border border-black/5 dark:border-white/5';
+                          fileDiv.innerHTML = `<svg class="w-4 h-4 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> <span class="truncate max-w-[150px]">${file.name}</span>`;
+                          filesContainer.appendChild(fileDiv);
+                      }
+                  });
+                  
+                  // Append files container inside the bubble, after the text content
+                  const bubble = div.querySelector('.p-5'); 
+                  if (bubble) {
+                      bubble.appendChild(filesContainer);
+                  }
+              }
+
+            chatContainer.appendChild(div);
+            // Use requestAnimationFrame for scroll
+            requestAnimationFrame(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                // Double check for images
+                setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 100);
+            });
+            
+            if (!isUser) {
+                currentMessageDiv = div;
+            }
+        }
+
+        function appendAgentText(text, isNew) {
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return;
+            
+            // Remove loading indicator if exists
+            const loadingIndicator = document.getElementById('at-loading-indicator');
+            if (loadingIndicator) {
+                loadingIndicator.remove();
+            }
+            
+            if (isNew || !currentMessageDiv) {
+                appendMessage('assistant', '');
+            }
+
+            if (!currentMessageDiv) return;
+
+            const contentDiv = currentMessageDiv.querySelector('.message-content');
+            if (contentDiv) {
+                contentDiv.textContent += text;
+            }
+            // Use requestAnimationFrame to ensure scroll happens after layout update
+            requestAnimationFrame(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            });
+        }
+
+        function appendAgentReasoning(text, isNew) {
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return;
+
+            const loadingIndicator = document.getElementById('at-loading-indicator');
+            if (loadingIndicator) {
+                loadingIndicator.remove();
+            }
+
+            if (isNew || !currentMessageDiv) {
+                appendMessage('assistant', '');
+            }
+            if (!currentMessageDiv) return;
+
+            const reasoningContainer = currentMessageDiv.querySelector('.reasoning-container');
+            const reasoningDiv = currentMessageDiv.querySelector('.reasoning-content');
+            if (reasoningContainer) reasoningContainer.classList.remove('hidden');
+            if (reasoningDiv) reasoningDiv.textContent += text;
+
+            requestAnimationFrame(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            });
+        }
+
+        function showLoadingIndicator() {
+             const chatContainer = document.getElementById('at-chat-messages');
+             if (!chatContainer) return;
+             
+             // Check if already exists
+             if (document.getElementById('at-loading-indicator')) return;
+             
+             const div = document.createElement('div');
+             div.id = 'at-loading-indicator';
+             div.className = 'flex gap-4 max-w-[90%] mb-6 animate-pulse';
+             
+             // ... avatar code ...
+             
+             let avatarHtml = '';
+             if (currentAgentAvatarUrl) {
+                 avatarHtml = `<img src="${currentAgentAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent transition-all opacity-80">`;
+             } else {
+                 avatarHtml = `
+                    <div class="w-10 h-10 rounded-full bg-primary/20 flex-shrink-0 flex items-center justify-center text-primary text-xs border border-primary/20 shadow-neon ring-2 ring-transparent transition-all opacity-80">
+                        <span class="material-icons-round text-lg">smart_toy</span>
+                    </div>`;
+             }
+             
+             div.innerHTML = `
+                ${avatarHtml}
+                <div class="bg-white/5 text-gray-400 border border-white/5 p-4 rounded-3xl rounded-tl-sm backdrop-blur-md min-w-[60px] flex items-center gap-2">
+                    <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0s"></span>
+                    <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></span>
+                    <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></span>
+                </div>
+             `;
+             
+             chatContainer.appendChild(div);
+             requestAnimationFrame(() => {
+                 chatContainer.scrollTop = chatContainer.scrollHeight;
+             });
+        }
+
+        let atPendingFiles = [];
+
+        function handleFileUpload(files) {
+            if (!files || files.length === 0) return;
+            
+            const previewArea = document.getElementById('file-preview-area');
+            if (!previewArea) return;
+            
+            Array.from(files).forEach(file => {
+                atPendingFiles.push(file);
+                
+                const isImage = file.type.startsWith('image/');
+                const reader = new FileReader();
+                
+                const item = document.createElement('div');
+                item.className = 'relative group w-16 h-16 rounded-xl overflow-hidden border border-white/10 bg-black/20';
+                
+                if (isImage) {
+                    reader.onload = (e) => {
+                        item.innerHTML = `
+                            <img src="${e.target.result}" class="w-full h-full object-cover">
+                            <button onclick="removeFile('${file.name}')" class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <span class="material-icons-round text-white text-sm">close</span>
+                            </button>
+                        `;
+                    };
+                    reader.readAsDataURL(file);
+                } else {
+                    item.innerHTML = `
+                        <div class="w-full h-full flex items-center justify-center flex-col">
+                            <svg class="w-5 h-5 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                        </div>
+                        <button onclick="removeFile('${file.name}')" class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                    `;
+                }
+                previewArea.appendChild(item);
+            });
+        }
+
+        window.removeFile = function(fileName) {
+            atPendingFiles = atPendingFiles.filter(f => f.name !== fileName);
+            // Re-render preview is lazy but safe
+            const previewArea = document.getElementById('file-preview-area');
+            if (previewArea) {
+                previewArea.innerHTML = '';
+                // Since we don't keep the FileList, we can't easily re-render thumbnails without re-reading
+                // Ideally we store the blob url. For now, let's just clear and user re-adds or we implement better state management
+                // Simplified: Just remove the element from DOM in a real app, but here we need to map DOM to file
+                // Let's just clear for now to keep it simple or fix logic
+                 // Better logic:
+                 // We need to keep track of file -> element.
+                 // For this demo, let's just clear all and alert user (or implement better later)
+                 // Actually, let's just hide the specific element? No, we need to rebuild.
+            }
+            // Re-render from pending files
+            if (atPendingFiles.length > 0) {
+                 // Re-trigger render logic (simplified)
+                 const dt = new DataTransfer();
+                 atPendingFiles.forEach(f => dt.items.add(f));
+                 handleFileUpload(dt.files);
+            }
+        };
+
+        // Improved removeFile to actually remove the specific DOM element
+        window.removeFile = function(fileName) {
+            const idx = atPendingFiles.findIndex(f => f.name === fileName);
+            if (idx > -1) {
+                atPendingFiles.splice(idx, 1);
+                // Remove from DOM
+                // We need a way to identify the DOM element. 
+                // Let's rebuild the preview area from scratch using atPendingFiles
+                const previewArea = document.getElementById('file-preview-area');
+                previewArea.innerHTML = '';
+                
+                // Re-add remaining
+                if (atPendingFiles.length > 0) {
+                    // We need to re-read or cache the data URL. 
+                    // For speed, let's just re-read (it's local)
+                     atPendingFiles.forEach(file => {
+                        const isImage = file.type.startsWith('image/');
+                        const reader = new FileReader();
+                        const item = document.createElement('div');
+                        item.className = 'relative group w-16 h-16 rounded-xl overflow-hidden border border-white/10 bg-black/20';
+                        
+                        if (isImage) {
+                            reader.onload = (e) => {
+                                item.innerHTML = `
+                                    <img src="${e.target.result}" class="w-full h-full object-cover">
+                                    <button onclick="removeFile('${file.name}')" class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <span class="material-icons-round text-white text-sm">close</span>
+                                    </button>
+                                `;
+                            };
+                            reader.readAsDataURL(file);
+                        } else {
+                             item.innerHTML = `
+                                <div class="w-full h-full flex items-center justify-center flex-col">
+                                    <svg class="w-5 h-5 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                                </div>
+                                <button onclick="removeFile('${file.name}')" class="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <svg class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                                </button>
+                            `;
+                        }
+                        previewArea.appendChild(item);
+                     });
+                }
+            }
+        };
+
+        window.sendAgentToolsMessage = async function() {
+            const input = document.getElementById('at-chat-input');
+            const text = input.value.trim();
+            
+            if ((!text && atPendingFiles.length === 0) || !atSocket || atSocket.readyState !== WebSocket.OPEN) return;
+            
+            // Append User Message using shared function
+            appendMessage('user', text, atPendingFiles);
+            
+            // Prepare payload
+            const payload = { type: 'message', content: text, files: [] };
+            
+            if (atPendingFiles.length > 0) {
+                const filePromises = atPendingFiles.map(file => {
+                    return new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => resolve({
+                            name: file.name,
+                            type: file.type,
+                            data: e.target.result // Base64
+                        });
+                        reader.readAsDataURL(file);
+                    });
+                });
+                
+                payload.files = await Promise.all(filePromises);
+            }
+            
+            atSocket.send(JSON.stringify(payload));
+            
+            // Show loading indicator
+            showLoadingIndicator();
+            
+            // Reset
+            input.value = '';
+            input.style.height = '';
+            atPendingFiles = [];
+            const previewArea = document.getElementById('file-preview-area');
+            if (previewArea) previewArea.innerHTML = '';
+            currentMessageDiv = null; 
+        };
+
+        function playAudioChunk(hexData) {
+            if (!atAudioContext) {
+                atAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            const view = new Uint8Array(hexData.match(/[\da-f]{2}/gi).map(h => parseInt(h, 16)));
+            const buffer = view.buffer;
+            
+            atAudioContext.decodeAudioData(buffer, (decodedBuffer) => {
+                atAudioQueue.push(decodedBuffer);
+                if (!atIsPlaying) playNextChunk();
+            }, (e) => console.error("Error decoding audio", e));
+        }
+
+        function playNextChunk() {
+            if (atAudioQueue.length === 0) {
+                atIsPlaying = false;
+                return;
+            }
+            atIsPlaying = true;
+            const buffer = atAudioQueue.shift();
+            const source = atAudioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(atAudioContext.destination);
+            source.onended = playNextChunk;
+            source.start(0);
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            const input = document.getElementById('search-input');
+            if (input) {
+                input.addEventListener('input', (e) => {
+                    filterAgents(e.target.value);
+                });
+            }
+            document.addEventListener('click', (e) => {
+                const root = document.getElementById('profile-menu-root');
+                const menu = document.getElementById('profile-dropdown');
+                if (!root || !menu) return;
+                if (!root.contains(e.target)) {
+                    menu.classList.add('hidden');
+                }
+            });
+            fetchAgents();
+        });
+    </script>
+</head>
+<body class="bg-dark-bg text-gray-200 font-sans antialiased h-screen overflow-hidden flex flex-col selection:bg-primary/30">
+<div class="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+    <div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-purple-900/20 rounded-full blur-[120px] ambient-blob"></div>
+    <div class="absolute bottom-[10%] right-[-5%] w-[600px] h-[600px] bg-blue-900/10 rounded-full blur-[130px] ambient-blob" style="animation-delay: -2s;"></div>
+    <div class="absolute top-[40%] left-[30%] w-[300px] h-[300px] bg-indigo-900/20 rounded-full blur-[100px] ambient-blob" style="animation-delay: -5s;"></div>
+</div>
+<header class="h-16 flex items-center justify-between px-6 glass-panel border-b-0 z-20 shrink-0 relative">
+    <div class="flex items-center gap-5">
+        <button class="p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
+            <span class="material-icons-outlined">menu</span>
+        </button>
+        <div class="flex items-center gap-3 cursor-pointer group" onclick="switchView('dashboard')">
+            <div class="relative w-9 h-9">
+                <div class="absolute inset-0 bg-primary/40 blur-md rounded-xl group-hover:bg-primary/60 transition-colors"></div>
+                <div class="relative w-full h-full bg-gradient-to-br from-gray-800 to-black rounded-xl flex items-center justify-center border border-white/10 ring-1 ring-white/5">
+                    <span class="material-icons-round text-xl text-primary bg-clip-text">auto_awesome</span>
+                </div>
+            </div>
+            <span class="text-lg font-bold tracking-wide text-white group-hover:text-primary transition-colors duration-300">Meco<span class="font-light text-gray-400">Studio</span></span>
+        </div>
+    </div>
+    <div class="hidden md:flex flex-1 max-w-lg mx-8">
+        <div class="relative w-full group">
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <span class="material-icons-outlined text-gray-500 group-focus-within:text-primary transition-colors">search</span>
+            </div>
+            <input id="search-input" class="w-full h-10 pl-10 pr-4 rounded-xl bg-white/5 border border-white/5 focus:border-primary/50 focus:bg-white/10 focus:ring-1 focus:ring-primary/50 text-sm transition-all text-gray-200 placeholder-gray-600 backdrop-blur-sm" placeholder="Search characters..." type="text"/>
+        </div>
+    </div>
+    <div class="flex items-center gap-4">
+        <button class="hidden sm:flex items-center gap-2 bg-white text-black hover:bg-gray-200 px-5 py-2 rounded-full text-sm font-bold transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)] hover:shadow-[0_0_20px_rgba(255,255,255,0.3)]" onclick="openCreateModal()">
+            <span class="material-icons-round text-lg">add</span>
+            Create
+        </button>
+        <button class="p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-colors relative">
+            <span class="material-icons-outlined">notifications</span>
+            <span class="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full shadow-[0_0_8px_rgba(239,68,68,0.6)]"></span>
+        </button>
+        <div id="profile-menu-root" class="relative">
+            <button type="button" onclick="toggleProfileMenu()" class="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center cursor-pointer hover:bg-white/10 transition-colors">
+                <span class="material-icons-round text-gray-400 text-lg">person</span>
+            </button>
+            <div id="profile-dropdown" class="hidden absolute right-0 mt-2 w-52 glass-panel rounded-xl border border-white/10 shadow-2xl overflow-hidden z-50">
+                <button type="button" onclick="openApiSettingsModal()" class="w-full px-4 py-3 text-left text-sm text-gray-200 hover:bg-white/10 transition-colors flex items-center gap-2">
+                    <span class="material-icons-outlined text-base">vpn_key</span>
+                    <span>API Keys</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</header>
+<div class="flex flex-1 overflow-hidden relative z-10">
+    <aside class="w-72 glass-panel border-r-0 border-t-0 flex-col hidden md:flex overflow-y-auto pb-6">
+        <div class="px-4 py-8 space-y-2">
+            <a id="nav-dashboard" class="flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer" onclick="switchView('dashboard')">
+                <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                <span class="material-icons-round relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">dashboard</span>
+                <span class="text-sm relative z-10">Dashboard</span>
+            </a>
+            <a id="nav-playgen" class="flex items-center justify-between gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" onclick="switchView('playgen')">
+                <div class="flex items-center gap-3">
+                    <span class="material-icons-outlined group-hover:text-blue-400 transition-colors">videogame_asset</span>
+                    <span class="text-sm font-medium">Playgen</span>
+                </div>
+                <span class="text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500">BETA</span>
+            </a>
+            <a id="nav-context" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" onclick="switchView('context')">
+                <span class="material-icons-outlined group-hover:text-pink-400 transition-colors">movie_creation</span>
+                <span class="text-sm font-medium">Context</span>
+            </a>
+            <a id="nav-agenttools" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" onclick="switchView('agenttools')">
+                <span class="material-icons-outlined group-hover:text-green-400 transition-colors">construction</span>
+                <span class="text-sm font-medium">Agent Tools</span>
+            </a>
+        </div>
+        <div class="border-t border-white/5 my-2 mx-6"></div>
+        <div class="px-6 py-4 flex items-center justify-between">
+            <span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Character Library</span>
+            <span class="material-icons-outlined text-gray-500 text-sm cursor-pointer hover:text-primary transition-colors" onclick="openCreateModal()">add</span>
+        </div>
+        <div id="sidebar-agent-list" class="px-4 space-y-1">
+            <!-- Dynamic Agent List -->
+        </div>
+        <div class="mt-auto px-4 py-6">
+            <a class="flex items-center gap-3 px-4 py-3 text-gray-600 cursor-not-allowed rounded-xl transition-colors opacity-50 pointer-events-none" href="javascript:void(0)">
+                <span class="material-icons-outlined">settings</span>
+                <span class="text-sm font-medium">Settings</span>
+            </a>
+        </div>
+    </aside>
+    <main class="flex-1 relative overflow-hidden">
+        <div id="dashboard-view" class="absolute inset-0 overflow-y-auto p-6 md:p-10 scroll-smooth">
+            <div class="max-w-7xl mx-auto space-y-10">
+                <div class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                    <div>
+                        <h1 class="text-4xl font-bold text-white tracking-tight drop-shadow-md">Characters</h1>
+                        <p class="text-gray-400 mt-2 font-light text-lg">Manage your digital humans and AI agents.</p>
+                    </div>
+                    <div class="flex items-center gap-3 bg-white/5 rounded-lg p-1 pr-3 border border-white/5 backdrop-blur-sm">
+                        <span class="text-xs text-gray-500 px-2 font-semibold uppercase tracking-wider">Sort by</span>
+                        <select class="bg-transparent border-none text-sm font-medium text-white focus:ring-0 cursor-pointer p-0">
+                            <option class="bg-gray-900 text-gray-300">Last Edited</option>
+                            <option class="bg-gray-900 text-gray-300">Date Created</option>
+                            <option class="bg-gray-900 text-gray-300">Name</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="agent-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                    <!-- Create Button -->
+                    <button class="group relative flex flex-col items-center justify-center h-[380px] rounded-3xl border border-dashed border-white/20 bg-white/[0.02] hover:bg-white/[0.05] hover:border-primary/50 transition-all duration-300" onclick="openCreateModal()">
+                        <div class="absolute inset-0 bg-primary/5 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl"></div>
+                        <div class="w-20 h-20 rounded-2xl bg-gradient-to-br from-gray-800 to-black border border-white/10 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:border-primary/50 group-hover:shadow-neon transition-all duration-300 relative z-10">
+                            <span class="material-icons-round text-4xl text-primary drop-shadow-[0_0_10px_rgba(192,132,252,0.6)]">add</span>
+                        </div>
+                        <h3 class="text-xl font-semibold text-white relative z-10">Create New</h3>
+                        <p class="text-sm text-gray-500 mt-2 relative z-10 group-hover:text-primary/80 transition-colors">Design a new persona</p>
+                    </button>
+                    <!-- Dynamic Agents will be inserted here -->
+                </div>
+            </div>
+        </div>
+        <!-- Playgen View -->
+        <div id="playgen-view" class="absolute inset-0 z-10 hidden bg-black">
+            <div id="playgen-canvas" class="w-full h-full"></div>
+            <div id="playgen-ui" class="absolute inset-0 pointer-events-none"></div>
+        </div>
+
+        <!-- Context View -->
+        <div id="context-view" class="absolute inset-0 overflow-y-auto p-6 md:p-10 scroll-smooth hidden bg-dark-bg z-20">
+            <div class="max-w-7xl mx-auto space-y-6 pb-24">
+                <div>
+                    <h1 class="text-4xl font-bold text-white tracking-tight drop-shadow-md">Roundtable Context</h1>
+                    <p class="text-gray-400 mt-2 font-light text-lg">Create and manage podcast rooms.</p>
+                </div>
+
+                <!-- Tabs -->
+                <div class="flex gap-1 bg-white/5 rounded-xl p-1 w-fit border border-white/5">
+                    <button id="tab-agents" onclick="switchContextTab('agents')" class="px-5 py-2 rounded-lg text-sm font-medium transition-all bg-primary/20 text-primary border border-primary/30">
+                        <span class="material-icons-round text-sm align-middle mr-1">group</span> Select Agents
+                    </button>
+                    <button id="tab-rooms" onclick="switchContextTab('rooms')" class="px-5 py-2 rounded-lg text-sm font-medium transition-all text-gray-400 hover:text-white hover:bg-white/5">
+                        <span class="material-icons-round text-sm align-middle mr-1">meeting_room</span> My Rooms
+                    </button>
+                </div>
+
+                <!-- Tab: Agent Selection -->
+                <div id="context-tab-agents">
+                    <div id="context-agent-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                        <!-- Dynamic Selection List -->
+                    </div>
+                </div>
+
+                <!-- Tab: Rooms List -->
+                <div id="context-tab-rooms" class="hidden">
+                    <div id="rooms-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <!-- Dynamic rooms list -->
+                    </div>
+                    <div id="rooms-empty" class="hidden text-center py-20">
+                        <span class="material-icons-round text-5xl text-gray-700 mb-4 block">meeting_room</span>
+                        <p class="text-gray-500 text-lg">No rooms created yet</p>
+                        <p class="text-gray-600 text-sm mt-1">Select agents and start a roundtable to create one</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="context-fab" class="fixed bottom-10 right-10 z-50">
+                <button onclick="generateRoundtable()" class="bg-primary hover:bg-primaryHover text-black font-bold py-4 px-8 rounded-full shadow-neon-strong transition-all transform hover:scale-105 flex items-center gap-3 text-lg">
+                    <span class="material-icons-round">play_arrow</span>
+                    Start Roundtable
+                </button>
+            </div>
+        </div>
+
+        <!-- Agent Tools View -->
+        <div id="agenttools-view" class="absolute inset-0 overflow-hidden hidden bg-dark-bg z-20 flex">
+            <!-- Column 1: Brain & Logic -->
+            <div class="w-1/4 border-r border-white/5 p-6 flex flex-col gap-6 overflow-y-auto glass-panel border-t-0 border-b-0 border-l-0">
+                <h2 class="text-xl font-bold text-primary flex items-center gap-2 mb-2">
+                    <span class="material-icons-round">psychology</span> Brain & Logic
+                </h2>
+                <!-- Agent Selector -->
+                <div class="space-y-2">
+                     <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Select Agent</label>
+                     <select id="at-agent-select" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:border-primary/50 outline-none appearance-none cursor-pointer hover:bg-white/10 transition-colors" onchange="loadAgentTools(this.value)">
+                         <!-- Options populated dynamically -->
+                     </select>
+                </div>
+                
+                <!-- System Prompt -->
+                <div class="space-y-2 flex-1 flex flex-col min-h-0">
+                     <label class="text-xs font-semibold text-gray-500 uppercase tracking-wider">System Prompt</label>
+                     <textarea id="at-system-prompt" class="w-full flex-1 bg-black/40 border border-white/10 rounded-xl p-4 text-sm text-gray-300 focus:border-primary/50 outline-none resize-none font-mono leading-relaxed" readonly placeholder="Select an agent to view prompt..."></textarea>
+                </div>
+            </div>
+
+            <!-- Column 2: Avatar & Chat -->
+            <div class="w-2/4 border-r border-white/5 flex flex-col relative bg-gradient-to-b from-gray-900 to-black">
+                <!-- Avatar Display -->
+                <div class="flex-1 relative overflow-hidden flex items-center justify-center p-8">
+                    <div id="at-avatar-container" class="relative w-full h-full max-w-lg max-h-[700px] rounded-[2rem] overflow-hidden shadow-2xl border border-white/10 group bg-black/50">
+                         <img id="at-avatar-img" src="" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 opacity-50" alt="Agent Avatar" style="display:none;">
+                         <div id="at-avatar-placeholder" class="w-full h-full flex items-center justify-center text-gray-700 text-6xl font-bold bg-black/50">?</div>
+                         
+                         <div class="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-90"></div>
+                         
+                         <!-- Chat Overlay -->
+                         <div id="at-chat-messages" class="absolute inset-x-0 bottom-0 top-0 p-6 overflow-y-auto space-y-4 scroll-smooth pt-20">
+                             <!-- Messages go here -->
+                             <div class="text-center text-gray-500 mt-20">Select an agent to start chatting</div>
+                         </div>
+                    </div>
+                </div>
+
+                <!-- Chat Input -->
+                <div class="p-6 bg-black/80 backdrop-blur-md border-t border-white/5 z-10">
+                     <div class="relative max-w-3xl mx-auto flex items-end gap-3">
+                         <!-- File Upload Button -->
+                         <button class="w-14 h-14 flex items-center justify-center flex-shrink-0 bg-white/5 hover:bg-white/10 rounded-full transition-colors text-gray-400 hover:text-white border border-transparent hover:border-white/10" onclick="document.getElementById('at-file-input').click()" title="Upload files">
+                             <span class="material-icons-round text-xl">attach_file</span>
+                         </button>
+                         <input type="file" id="at-file-input" multiple class="hidden" onchange="handleFileUpload(this.files)">
+
+                         <div class="flex-1 relative bg-white/5 border border-white/10 rounded-[28px] focus-within:bg-white/10 focus-within:border-primary/50 transition-all shadow-lg flex flex-col justify-center"
+                              ondragover="event.preventDefault(); this.classList.add('border-primary', 'bg-white/10')"
+                              ondragleave="this.classList.remove('border-primary', 'bg-white/10')"
+                              ondrop="event.preventDefault(); this.classList.remove('border-primary', 'bg-white/10'); handleFileUpload(event.dataTransfer.files)">
+                             <div id="file-preview-area" class="flex flex-wrap gap-2 p-3 pb-0 empty:hidden"></div>
+                             <textarea id="at-chat-input" 
+                                    class="w-full bg-transparent border-none px-6 py-4 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none max-h-32 min-h-[56px] leading-normal"
+                                    placeholder="Message agent..."
+                                    rows="1"
+                                    disabled
+                                    oninput="this.style.height = ''; this.style.height = this.scrollHeight + 'px'"
+                                    onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendAgentToolsMessage(); }"></textarea>
+                         </div>
+                         
+                         <button id="at-send-btn" class="w-14 h-14 flex items-center justify-center flex-shrink-0 bg-primary hover:bg-primaryHover text-black rounded-full transition-all shadow-neon hover:shadow-neon-strong disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105 active:scale-95" onclick="sendAgentToolsMessage()" disabled>
+                             <span class="material-icons-round text-xl">arrow_upward</span>
+                         </button>
+                     </div>
+                </div>
+            </div>
+
+            <!-- Column 3: Connectivity -->
+            <div class="w-1/4 p-6 flex flex-col gap-8 overflow-y-auto glass-panel border-t-0 border-b-0 border-r-0 bg-gray-900/30">
+                <!-- Social Channels -->
+                <div class="space-y-4 flex flex-col max-h-[40%]">
+                    <h2 class="text-xl font-bold text-blue-400 flex items-center gap-2 mb-2 shrink-0">
+                        <span class="material-icons-round">hub</span> Connectivity
+                    </h2>
+                    <div class="space-y-3 overflow-y-auto pr-2">
+                         <!-- X -->
+                         <div class="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                             <div class="flex items-center gap-3">
+                                 <div class="w-8 h-8 rounded-full bg-black flex items-center justify-center border border-white/10 text-white font-bold">𝕏</div>
+                                 <span class="text-sm font-medium">Twitter / X</span>
+                             </div>
+                             <span class="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded">Unbound</span>
+                         </div>
+                         <!-- Youtube -->
+                         <div class="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                             <div class="flex items-center gap-3">
+                                 <div class="w-8 h-8 rounded-full bg-red-600 flex items-center justify-center text-white font-bold text-xs shadow-md">
+                                     <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+                                 </div>
+                                 <span class="text-sm font-medium">YouTube</span>
+                             </div>
+                             <span class="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded">Unbound</span>
+                         </div>
+                         <!-- Tiktok -->
+                         <div class="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                             <div class="flex items-center gap-3">
+                                 <div class="w-8 h-8 rounded-full bg-black flex items-center justify-center text-white font-bold text-xs border border-white/20 shadow-md">
+                                     <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
+                                 </div>
+                                 <span class="text-sm font-medium">TikTok</span>
+                             </div>
+                             <span class="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded">Unbound</span>
+                         </div>
+                         <!-- Discord -->
+                         <div class="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                             <div class="flex items-center gap-3">
+                                 <div class="w-8 h-8 rounded-full bg-[#5865F2] flex items-center justify-center text-white shadow-md">
+                                    <i class="material-icons-round text-sm">discord</i>
+                                 </div>
+                                 <span class="text-sm font-medium">Discord</span>
+                             </div>
+                             <span class="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded">Unbound</span>
+                         </div>
+                         <!-- Instagram -->
+                         <div class="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                             <div class="flex items-center gap-3">
+                                 <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-500 flex items-center justify-center text-white font-bold text-xs shadow-md">
+                                     <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+                                 </div>
+                                 <span class="text-sm font-medium">Instagram</span>
+                             </div>
+                             <span class="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded">Unbound</span>
+                         </div>
+                         <!-- Reddit -->
+                         <div class="flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors">
+                             <div class="flex items-center gap-3">
+                                 <div class="w-8 h-8 rounded-full bg-[#FF4500] flex items-center justify-center text-white shadow-md">
+                                     <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 0 0-.232-.095z"/></svg>
+                                 </div>
+                                 <span class="text-sm font-medium">Reddit</span>
+                             </div>
+                             <span class="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded">Unbound</span>
+                         </div>
+                    </div>
+                </div>
+
+                <!-- Skills -->
+                <div class="space-y-4 flex-1 flex flex-col min-h-0">
+                    <h2 class="text-xl font-bold text-green-400 flex items-center gap-2 justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="material-icons-round">extension</span> Skills
+                        </div>
+                        <button class="text-xs bg-white/5 hover:bg-white/10 px-2 py-1 rounded border border-white/5 transition-colors flex items-center gap-1" onclick="refreshAgentSkills()">
+                            <span class="material-icons-round text-sm">refresh</span> Refresh
+                        </button>
+                    </h2>
+                    <div id="at-skills-list" class="space-y-3 flex-1 overflow-y-auto pr-2">
+                        <!-- Dynamic Skills -->
+                        <div class="p-4 text-center text-gray-500 text-sm">Select an agent to view skills</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- API Settings Modal -->
+<div id="api-settings-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeApiSettingsModal()"></div>
+    <div class="relative w-full max-w-3xl mx-4 glass-panel rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-white/10 flex items-center justify-between">
+            <div>
+                <h3 class="text-lg font-bold text-white">API Keys & Integrations</h3>
+                <p class="text-xs text-gray-400 mt-1">保存后自动安装 Kimi CLI、安装 hot-topics 并激活配置</p>
+            </div>
+            <button type="button" class="text-gray-400 hover:text-white" onclick="closeApiSettingsModal()">
+                <span class="material-icons-round">close</span>
+            </button>
+        </div>
+        <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">OpenClaw HTTP URL</label>
+                <input id="cfg-openclaw-http-url" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="http://127.0.0.1:18789/v1/chat/completions">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">OpenClaw WS URL</label>
+                <input id="cfg-openclaw-ws-url" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="ws://127.0.0.1:18789">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">OpenClaw Gateway Token</label>
+                <input id="cfg-openclaw-token" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="gateway token">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">OpenClaw Model</label>
+                <input id="cfg-openclaw-model" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="kimi-openai/kimi-k2.5">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">MiniMax WS URL</label>
+                <input id="cfg-minimax-ws-url" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="wss://api.minimaxi.com/ws/v1/t2a_v2">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">MiniMax API Key</label>
+                <input id="cfg-minimax-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="MiniMax key">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">TikHub API Key (hot-topics)</label>
+                <input id="cfg-tikhub-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="TikHub key">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Kimi API Key</label>
+                <input id="cfg-kimi-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Moonshot API key">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Kimi CLI Command</label>
+                <input id="cfg-kimi-command" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="kimi">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Hot Topics KB Path</label>
+                <input id="cfg-hot-topics-kb" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="~/Documents/知识库/热门话题">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">OpenAI API Key (Whisper, optional)</label>
+                <input id="cfg-openai-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="OpenAI key">
+            </div>
+        </div>
+        <div class="px-6 py-4 border-t border-white/10 flex items-center justify-end gap-3">
+            <button type="button" class="px-4 py-2 rounded-lg border border-white/10 text-sm text-gray-300 hover:bg-white/5" onclick="closeApiSettingsModal()">取消</button>
+            <button id="save-api-settings-btn" type="button" class="px-4 py-2 rounded-lg bg-primary text-black text-sm font-semibold hover:bg-primaryHover" onclick="saveApiSettings()">确定并自动安装/激活</button>
+        </div>
+    </div>
+</div>
+
+<!-- Create Modal -->
+<div id="create-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center transition-opacity duration-300 opacity-0 pointer-events-none">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm transition-opacity duration-300" onclick="closeCreateModal()"></div>
+    <div class="relative w-full max-w-4xl h-[90vh] rounded-3xl overflow-hidden shadow-2xl mx-4 transform transition-all duration-300 scale-95 opacity-0">
+        <iframe src="/create" class="w-full h-full border-0 bg-transparent"></iframe>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeDeleteModal()"></div>
+    <div class="relative w-full max-w-md bg-[#0a0a0a] rounded-3xl p-8 border border-white/10 shadow-2xl animate-scale-in mx-4 flex flex-col items-center text-center">
+        <div class="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mb-6">
+            <span class="material-icons-round text-3xl text-red-500">warning</span>
+        </div>
+        <h3 class="text-2xl font-bold text-white mb-2">Delete Agent?</h3>
+        <p class="text-gray-400 mb-8 leading-relaxed">
+            Are you sure you want to delete this agent? 
+            This action cannot be undone and will remove all associated files.
+        </p>
+        <div class="flex gap-4 w-full">
+            <button onclick="closeDeleteModal()" class="flex-1 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-colors border border-white/5">
+                Cancel
+            </button>
+            <button onclick="confirmDelete()" class="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium transition-colors shadow-lg shadow-red-600/20">
+                Delete
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Room Create Modal -->
+<div id="room-create-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeRoomCreateModal()"></div>
+    <div class="relative w-full max-w-lg bg-[#0a0a0a] rounded-3xl p-8 border border-white/10 shadow-2xl mx-4 animate-scale-in">
+        <div class="flex items-center gap-3 mb-6">
+            <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                <span class="material-icons-round text-primary">meeting_room</span>
+            </div>
+            <h3 class="text-xl font-bold text-white">Create Podcast Room</h3>
+        </div>
+
+        <div class="space-y-4">
+            <!-- Room Name -->
+            <div>
+                <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block mb-1">Room Name *</label>
+                <input id="room-name" type="text" maxlength="128" placeholder="Enter room name..."
+                    class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 outline-none transition-colors" />
+            </div>
+
+            <!-- Room Description -->
+            <div>
+                <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block mb-1">Description</label>
+                <textarea id="room-desc" rows="2" maxlength="500" placeholder="Describe the room topic..."
+                    class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 outline-none resize-none transition-colors"></textarea>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <!-- Max Agents (readonly) -->
+                <div>
+                    <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block mb-1">Max Agents</label>
+                    <input id="room-max-agents" type="number" readonly
+                        class="w-full bg-white/5 border border-white/5 rounded-xl px-4 py-2.5 text-sm text-gray-400 cursor-not-allowed" />
+                </div>
+
+                <!-- Category -->
+                <div>
+                    <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block mb-1">Category *</label>
+                    <select id="room-category"
+                        class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:border-primary/50 outline-none appearance-none cursor-pointer transition-colors">
+                        <option value="technology">Technology</option>
+                        <option value="science">Science</option>
+                        <option value="economy">Economy</option>
+                        <option value="military">Military</option>
+                        <option value="sports">Sports</option>
+                        <option value="entertainment">Entertainment</option>
+                        <option value="politics">Politics</option>
+                        <option value="society">Society</option>
+                        <option value="culture">Culture</option>
+                        <option value="history">History</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Cover Image -->
+            <div>
+                <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block mb-1">Cover Image</label>
+                <div class="flex items-center gap-3">
+                    <button onclick="document.getElementById('room-cover-input').click()"
+                        class="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-medium text-gray-300 hover:bg-white/10 hover:text-white transition-all flex items-center gap-2">
+                        <span class="material-icons-outlined text-sm">image</span> Choose Image
+                    </button>
+                    <input id="room-cover-input" type="file" accept="image/*" class="hidden" onchange="previewRoomCover(this)" />
+                    <div id="room-cover-preview" class="hidden">
+                        <img id="room-cover-img" class="h-10 w-16 object-cover rounded-lg border border-white/10" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Error message -->
+            <p id="room-create-error" class="text-red-400 text-sm hidden"></p>
+        </div>
+
+        <!-- Actions -->
+        <div class="flex gap-4 mt-6">
+            <button onclick="closeRoomCreateModal()" class="flex-1 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-colors border border-white/5">
+                Cancel
+            </button>
+            <button id="room-create-btn" onclick="confirmCreateRoom()" class="flex-1 py-3 rounded-xl bg-primary hover:bg-primaryHover text-black font-bold transition-colors shadow-lg shadow-primary/20">
+                Create Room
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Loading Overlay -->
+<div id="loading-overlay" class="fixed inset-0 z-[60] hidden flex flex-col items-center justify-center bg-black/90 backdrop-blur-md">
+    <div class="relative w-20 h-20 mb-8">
+        <div class="absolute inset-0 rounded-full border-4 border-primary/20"></div>
+        <div class="absolute inset-0 rounded-full border-4 border-t-primary animate-spin"></div>
+        <div class="absolute inset-0 rounded-full border-4 border-b-primary/50 animate-spin" style="animation-direction: reverse; animation-duration: 1.5s;"></div>
+    </div>
+    <h3 class="text-xl font-medium text-white tracking-wide animate-pulse">Deleting Agent...</h3>
+    <p class="text-sm text-gray-500 mt-2">Please wait while we clean up the workspace</p>
+</div>
+</body>
+</html>

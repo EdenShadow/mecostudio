@@ -1,0 +1,12 @@
+#!/bin/bash
+# X-Grok Save Answer
+#
+# Usage:
+#   x-grok-save "answer"
+#   x-grok-save "answer" "question"
+#
+# Examples:
+#   x-grok-save "以下是x上知名的财经博主..."
+#   x-grok-save "Here are popular accounts..." "帮我找一些x上知名的财经博主"
+
+cd ~/.openclaw/skills/x-grok && node x-grok-save.mjs "$@"

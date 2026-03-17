@@ -1,0 +1,11 @@
+#!/bin/bash
+# X.com Grok Query
+#
+# Usage:
+#   x-grok "your question"
+#
+# Examples:
+#   x-grok 帮我找一些x上知名的财经博主
+#   x-grok What are the latest AI trends
+
+cd ~/.openclaw/skills/x-grok && node skill.mjs "$@"

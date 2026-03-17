@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(openclaw:*)",
+      "Bash(node:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "WebSearch",
+      "WebFetch(domain:platform.minimax.io)",
+      "WebFetch(domain:www.minimax.io)",
+      "WebFetch(domain:apidog.com)",
+      "mcp__ide__getDiagnostics"
+    ]
+  }
+}

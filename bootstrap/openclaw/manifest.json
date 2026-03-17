@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "createdAt": "2026-03-17T13:01:41.076Z",
+  "agents": [
+    {
+      "id": "gates",
+      "displayName": "Bill Gates",
+      "workspaceDirName": "workspace-gates"
+    },
+    {
+      "id": "hawking",
+      "displayName": "Stephen Hawking",
+      "workspaceDirName": "workspace-hawking"
+    },
+    {
+      "id": "jobs",
+      "displayName": "Steve Jobs",
+      "workspaceDirName": "workspace-Jobs"
+    },
+    {
+      "id": "kobe",
+      "displayName": "Kobe Bryant",
+      "workspaceDirName": "workspace-kobe"
+    },
+    {
+      "id": "main",
+      "displayName": "Main",
+      "workspaceDirName": "workspace"
+    },
+    {
+      "id": "munger",
+      "displayName": "Charlie Munger",
+      "workspaceDirName": "workspace-munger"
+    }
+  ],
+  "skills": {
+    "openclaw": [
+      "feishu-send-media",
+      "feishu-upload",
+      "hot-topics",
+      "kimi-search",
+      "media-downloader",
+      "persona-manager",
+      "secret-notes",
+      "tikhub-api",
+      "twitter-scraper",
+      "x-grok"
+    ],
+    "config": [
+      "hot-topics",
+      "notebooklm-mcp-cli",
+      "tikhub-tiktok"
+    ]
+  }
+}

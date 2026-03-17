@@ -1,0 +1,18 @@
+node_modules
+uploads/
+*.log
+*.txt
+.DS_Store
+.env
+temp_uploads/
+data/app-settings.json
+.kimi-queue-cache.json
+.roundtable-topic-memory.json
+data/room-covers/
+
+# 调试/临时脚本
+debug-openclaw.js
+temp_check.js
+retrain-voice.js
+update_agent_souls.js
+public/js/playgen1

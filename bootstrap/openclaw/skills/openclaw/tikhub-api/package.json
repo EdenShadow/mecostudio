@@ -1,0 +1,19 @@
+{
+  "name": "tikhub-api",
+  "version": "1.0.0",
+  "description": "使用 TikHub API 查询 TikTok、Reddit、Twitter/X、Instagram、YouTube 的数据",
+  "main": "tikhub",
+  "scripts": {},
+  "keywords": [
+    "tikhub",
+    "tiktok",
+    "twitter",
+    "instagram",
+    "youtube",
+    "reddit",
+    "api",
+    "social-media"
+  ],
+  "author": "",
+  "license": "MIT"
+}

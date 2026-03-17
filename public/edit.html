@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport"/>
+<title>Meco Studio - Unified Character Settings</title>
+<style>
+    /* Prevent FOUC: Hide everything initially */
+    body { opacity: 0; transition: opacity 0.5s ease-in; -webkit-user-select: none; user-select: none; }
+    
+    /* Allow selection in inputs */
+    input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
+
+    /* When loaded class is added, show body */
+    body.loaded { opacity: 1; }
+    
+    /* Ensure loading overlay is visible even when body is opacity 0? 
+       No, opacity 0 on body hides everything including fixed children.
+       We need to NOT hide body, but hide content.
+    */
+    body:not(.loaded) > *:not(#loadingOverlay) {
+        opacity: 0;
+    }
+    body:not(.loaded) {
+        /* Keep body visible so overlay shows, but hide scrollbars/overflow */
+        opacity: 1;
+        overflow: hidden;
+    }
+</style>
+<script src="lib/js/tailwindcss.js"></script>
+<link href="lib/css/inter.css" rel="stylesheet"/>
+<link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
+<link href="lib/css/material-icons-round.css" rel="stylesheet"/>
+<link href="lib/css/material-symbols-outlined.css" rel="stylesheet"/>
+<script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#c084fc", // Lighter Neon Purple
+                        primaryHover: "#d8b4fe",
+                        "dark-bg": "#050505", // Deepest Black
+                        "glass-border": "rgba(255, 255, 255, 0.08)",
+                        "glass-surface": "rgba(20, 20, 20, 0.6)",
+                        "glass-surface-hover": "rgba(30, 30, 30, 0.8)",
+                    },
+                    fontFamily: {
+                        sans: ["Inter", "sans-serif"],
+                        display: ["Inter", "sans-serif"],
+                    },
+                    borderRadius: {
+                        'xl': '1rem',
+                        '2xl': '1.5rem',
+                        '3xl': '2rem',
+                    },
+                    boxShadow: {
+                        'neon': '0 0 20px rgba(192, 132, 252, 0.15)',
+                        'neon-strong': '0 0 25px rgba(192, 132, 252, 0.3)',
+                        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+                    }
+                },
+            },
+        };
+    </script>
+<style>
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        .glass-panel {
+            background: rgba(18, 18, 18, 0.65);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-card {
+            background: linear-gradient(145deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.2);
+        }
+        .glass-card:hover {
+            border-color: rgba(192, 132, 252, 0.3);
+            background: linear-gradient(145deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
+        }
+        @keyframes float {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(30px, -50px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+        }
+        .ambient-blob {
+            animation: float 10s ease-in-out infinite;
+        }.toggle-checkbox:checked {
+            right: 0;
+            border-color: #c084fc;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #c084fc;
+        }
+        .glow-text {
+            text-shadow: 0 0 10px rgba(192, 132, 252, 0.5);
+        }
+        @keyframes voiceWave {
+            0%, 100% { height: 4px; opacity: 0.4; }
+            50% { height: var(--max-h, 24px); opacity: 1; }
+        }
+        .voice-bar {
+            height: 4px;
+            animation: voiceWave 1.2s ease-in-out infinite;
+            animation-delay: calc(var(--i) * 0.12s);
+            box-shadow: 0 0 6px rgba(192, 132, 252, 0.3);
+        }
+        .voice-bar:nth-child(1) { --max-h: 12px; }
+        .voice-bar:nth-child(2) { --max-h: 20px; }
+        .voice-bar:nth-child(3) { --max-h: 28px; }
+        .voice-bar:nth-child(4) { --max-h: 32px; }
+        .voice-bar:nth-child(5) { --max-h: 24px; }
+        .voice-bar:nth-child(6) { --max-h: 16px; }
+        .voice-bar:nth-child(7) { --max-h: 10px; }
+    </style>
+</head>
+<body class="bg-dark-bg text-gray-200 font-sans antialiased h-screen overflow-hidden flex flex-col selection:bg-primary/30">
+<div class="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+<div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-purple-900/20 rounded-full blur-[120px] ambient-blob"></div>
+<div class="absolute bottom-[10%] right-[-5%] w-[600px] h-[600px] bg-blue-900/10 rounded-full blur-[130px] ambient-blob" style="animation-delay: -2s;"></div>
+<div class="absolute top-[40%] left-[30%] w-[300px] h-[300px] bg-indigo-900/20 rounded-full blur-[100px] ambient-blob" style="animation-delay: -5s;"></div>
+</div>
+
+<!-- File Viewer / Editor Modal -->
+<div id="fileViewerModal" class="fixed inset-0 z-50 hidden opacity-0 transition-opacity duration-300">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeFileViewer()"></div>
+    <div class="absolute inset-4 md:inset-10 bg-[#1e1e1e] rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden animate-[scale-in_0.2s_ease-out]">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-[#252526]">
+            <div class="flex items-center gap-3">
+                <span class="material-icons-outlined text-blue-400">description</span>
+                <h3 id="fileViewerTitle" class="text-white font-mono text-sm">filename.md</h3>
+            </div>
+            <div class="flex items-center gap-2">
+                <button id="fileSaveBtn" onclick="saveFileContent()" class="hidden px-4 py-1.5 rounded-lg bg-primary hover:bg-primaryHover text-white text-xs font-bold transition-all flex items-center gap-1.5">
+                    <span class="material-icons-round text-sm">save</span> Save
+                </button>
+                <button onclick="closeFileViewer()" class="text-gray-400 hover:text-white transition-colors">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+        </div>
+        <!-- Read-only view -->
+        <div id="fileViewerReadonly" class="flex-1 overflow-auto bg-[#1e1e1e] p-0 relative">
+            <pre class="m-0 p-6 text-sm font-mono text-gray-300 leading-relaxed"><code id="fileViewerContent">Loading...</code></pre>
+        </div>
+        <!-- Editable view (for .md files) -->
+        <div id="fileViewerEditable" class="flex-1 overflow-auto bg-[#1e1e1e] p-0 relative hidden">
+            <textarea id="fileEditorContent" class="w-full h-full bg-transparent text-sm font-mono text-gray-300 leading-relaxed p-6 resize-none focus:outline-none" style="-webkit-user-select: text; user-select: text;" spellcheck="false"></textarea>
+        </div>
+    </div>
+</div>
+
+<!-- Execute Command Modal -->
+<div id="executeModal" class="fixed inset-0 z-50 hidden opacity-0 transition-opacity duration-300">
+    <div class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-6">
+        <div class="w-full max-w-2xl bg-[#121212] rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden max-h-[80vh]">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-white/5 bg-[#1a1a1a]">
+                <div class="flex items-center gap-3">
+                    <div id="executeSpinner" class="w-5 h-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>
+                    <h3 id="executeTitle" class="text-white text-sm font-medium">Agent is thinking...</h3>
+                </div>
+            </div>
+            <div class="flex-1 overflow-y-auto p-6 min-h-[200px]" style="-webkit-user-select: text; user-select: text;">
+                <pre id="executeContent" class="m-0 text-sm text-gray-300 leading-relaxed whitespace-pre-wrap font-sans break-words" style="-webkit-user-select: text; user-select: text; cursor: text;"></pre>
+            </div>
+            <div id="executeFooter" class="px-6 py-4 border-t border-white/5 hidden">
+                <button onclick="confirmExecuteModal()" class="w-full py-2.5 rounded-xl bg-primary hover:bg-primaryHover text-white text-sm font-bold transition-all shadow-neon">
+                    OK
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<header class="h-16 flex items-center justify-between px-6 glass-panel border-b-0 z-20 shrink-0 relative">
+<div class="flex items-center gap-5">
+<button class="p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
+<span class="material-icons-outlined">menu</span>
+</button>
+<a href="index.html" class="flex items-center gap-3 cursor-pointer group no-underline">
+<div class="relative w-9 h-9">
+<div class="absolute inset-0 bg-primary/40 blur-md rounded-xl group-hover:bg-primary/60 transition-colors"></div>
+<div class="relative w-full h-full bg-gradient-to-br from-gray-800 to-black rounded-xl flex items-center justify-center border border-white/10 ring-1 ring-white/5">
+<span class="material-icons-round text-xl text-primary bg-clip-text">auto_awesome</span>
+</div>
+</div>
+<span class="text-lg font-bold tracking-wide text-white group-hover:text-primary transition-colors duration-300">Meco<span class="font-light text-gray-400">Studio</span></span>
+</a>
+</div>
+<div class="hidden md:flex flex-1 max-w-lg mx-8">
+<div class="relative w-full group">
+<div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+<span class="material-icons-outlined text-gray-500 group-focus-within:text-primary transition-colors">search</span>
+</div>
+<input id="header-search" class="w-full h-10 pl-10 pr-4 rounded-xl bg-white/5 border border-white/5 focus:border-primary/50 focus:bg-white/10 focus:ring-1 focus:ring-primary/50 text-sm transition-all text-gray-200 placeholder-gray-600 backdrop-blur-sm" placeholder="Search characters..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<a href="create.html" class="hidden sm:flex items-center gap-2 bg-white text-black hover:bg-gray-200 px-5 py-2 rounded-full text-sm font-bold transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)] hover:shadow-[0_0_20px_rgba(255,255,255,0.3)]">
+<span class="material-icons-round text-lg">add</span>
+                Create
+            </a>
+<button class="p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-colors relative">
+<span class="material-icons-outlined">notifications</span>
+<span class="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full shadow-[0_0_8px_rgba(239,68,68,0.6)]"></span>
+</button>
+<div class="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center cursor-pointer hover:bg-white/10 transition-colors">
+<span class="material-icons-round text-gray-400 text-lg">person</span>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden relative z-10">
+<aside class="w-72 glass-panel border-r-0 border-t-0 flex-col hidden md:flex overflow-y-auto pb-6">
+<div class="px-4 py-8 space-y-2">
+    <!-- Dashboard (Active) -->
+    <a href="index.html" class="flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group">
+        <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+        <span class="material-icons-round relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">dashboard</span>
+        <span class="text-sm relative z-10">Dashboard</span>
+    </a>
+
+    <!-- Playgen -->
+    <a href="index.html#playgen" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl font-medium transition-all group">
+        <span class="material-icons-round group-hover:text-primary transition-colors">videogame_asset</span>
+        <span class="text-sm">Playgen</span>
+        <span class="ml-auto text-[10px] font-bold bg-white/10 text-gray-400 px-1.5 py-0.5 rounded border border-white/5">BETA</span>
+    </a>
+
+    <!-- Context -->
+    <a href="index.html#context" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl font-medium transition-all group">
+        <span class="material-icons-round group-hover:text-primary transition-colors">dataset</span>
+        <span class="text-sm">Context</span>
+    </a>
+
+    <!-- Agent Tools -->
+    <a href="index.html#agenttools" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl font-medium transition-all group">
+        <span class="material-icons-round group-hover:text-primary transition-colors">construction</span>
+        <span class="text-sm">Agent Tools</span>
+    </a>
+</div>
+<div class="border-t border-white/5 my-2 mx-6"></div>
+<div class="px-6 py-4 flex items-center justify-between">
+<span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Character Library</span>
+<a href="create.html" class="material-icons-outlined text-gray-500 text-sm cursor-pointer hover:text-primary transition-colors">add</a>
+</div>
+<div id="sidebar-list" class="px-4 space-y-1">
+<!-- Dynamic list -->
+</div>
+</aside>
+
+<main class="flex-1 overflow-y-auto p-6 md:p-8 relative scroll-smooth">
+<div class="max-w-[1600px] mx-auto space-y-6">
+<div class="flex items-center justify-between mb-8">
+<div class="flex items-center gap-4">
+<a href="index.html" class="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 transition-colors border border-white/5">
+<span class="material-icons-outlined text-lg">arrow_back</span>
+</a>
+<div>
+<h1 id="agent-name-display" class="text-2xl font-bold text-white tracking-tight flex items-center gap-2" style="-webkit-user-select: text; user-select: text; cursor: text;">
+                               Loading...
+                               <span class="px-2 py-0.5 rounded text-[10px] bg-green-500/10 text-green-400 border border-green-500/20 uppercase tracking-widest font-bold">Active</span>
+</h1>
+<p class="text-gray-400 text-sm font-light">Last edited just now</p>
+</div>
+</div>
+<div class="flex gap-3">
+<button class="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm font-medium hover:bg-white/10 transition-colors">Discard</button>
+<button id="save-btn" class="px-6 py-2 rounded-xl bg-primary text-black text-sm font-bold hover:bg-primaryHover shadow-neon transition-all flex items-center gap-2">
+<span class="material-icons-round text-sm">save</span> Save Changes
+</button>
+</div>
+</div>
+
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-6 h-full pb-10">
+<!-- Left Column: Identity -->
+<div class="glass-card rounded-3xl p-6 flex flex-col gap-6 relative overflow-hidden group">
+    <div class="flex items-center gap-3 mb-2">
+        <div class="p-2 rounded-lg bg-blue-500/10 text-blue-400">
+            <span class="material-icons-round">face</span>
+        </div>
+        <h2 class="text-lg font-semibold text-white">Persona &amp; Identity</h2>
+    </div>
+    
+    <div class="relative group/avatar">
+        <div class="w-full h-64 rounded-2xl overflow-hidden border border-white/10 relative bg-black">
+            <img id="agent-avatar" alt="Avatar" class="w-full h-full object-cover transition-transform duration-700 group-hover/avatar:scale-105" src=""/>
+            <div class="absolute top-3 right-3 bg-black/60 px-2 py-1 rounded text-xs text-white backdrop-blur-md border border-white/10 flex items-center gap-1">
+                <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span> 4K Ready
+            </div>
+        </div>
+        <!-- Upload buttons could be here, but we are simplifying to just show info as per prompt "edit page... modify avatar, video" -->
+        <div class="flex gap-2 mt-3">
+             <button onclick="document.getElementById('avatar-file-input').click()" class="flex-1 py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-medium text-gray-300 hover:bg-white/10 hover:text-white transition-all flex items-center justify-center gap-2">
+                <span class="material-icons-outlined text-sm">add_a_photo</span> Update Photo
+            </button>
+            <button onclick="document.getElementById('video-file-input').click()" class="flex-1 py-2 rounded-xl bg-white/5 border border-white/10 text-xs font-medium text-gray-300 hover:bg-white/10 hover:text-white transition-all flex items-center justify-center gap-2">
+                <span class="material-icons-outlined text-sm">videocam</span> Upload Video
+            </button>
+        </div>
+    </div>
+
+    <!-- Video Player (only shown if video exists) -->
+    <div id="video-section" class="hidden mt-3">
+        <label class="text-xs uppercase text-gray-500 font-bold tracking-wider mb-2 block">Video Preview</label>
+        <div class="w-full rounded-2xl overflow-hidden border border-white/10 bg-black">
+            <video id="agent-video" class="w-full" controls preload="metadata"
+                   style="max-height: 240px; object-fit: contain;">
+            </video>
+        </div>
+    </div>
+
+    <div class="space-y-2">
+        <label class="text-xs uppercase text-gray-500 font-bold tracking-wider flex items-center gap-2">
+            SOUL.md
+            <span id="soul-save-status" class="text-[10px] text-gray-600 font-normal normal-case tracking-normal hidden">Saved</span>
+        </label>
+        <textarea id="agent-prompt" class="w-full h-64 bg-black/20 border border-white/10 rounded-xl p-3 text-sm text-gray-300 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 resize-none placeholder-gray-600 transition-colors" placeholder="Edit SOUL.md content here..."></textarea>
+    </div>
+
+    <!-- Voice Info (Read Only) -->
+    <div class="space-y-3 mt-2 pt-4 border-t border-white/5">
+        <div class="flex justify-between items-center">
+            <label class="text-xs uppercase text-gray-500 font-bold tracking-wider">Voice Identity (Fixed)</label>
+        </div>
+        <div class="bg-white/5 rounded-xl p-3 flex items-center justify-between border border-white/5">
+            <div class="flex items-center gap-3">
+                <button id="voice-play-btn" onclick="playVoiceSample()" class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center hover:bg-primary/30 transition-colors">
+                    <span id="voice-play-icon" class="material-icons-round text-sm">play_arrow</span>
+                </button>
+                <div>
+                    <div class="text-sm font-medium text-white">Custom Voice Model</div>
+                    <div id="voice-id-display" class="text-xs text-gray-500 select-all cursor-text" style="-webkit-user-select: text; user-select: all;">ID: Loading...</div>
+                </div>
+            </div>
+            <div id="voice-bars" class="h-8 w-20 flex items-end justify-center gap-[3px]">
+                <div class="voice-bar w-[3px] rounded-full bg-gradient-to-t from-primary/40 to-primary" style="--i:0"></div>
+                <div class="voice-bar w-[3px] rounded-full bg-gradient-to-t from-primary/40 to-primary" style="--i:1"></div>
+                <div class="voice-bar w-[3px] rounded-full bg-gradient-to-t from-primary/40 to-primary" style="--i:2"></div>
+                <div class="voice-bar w-[3px] rounded-full bg-gradient-to-t from-primary/40 to-primary" style="--i:3"></div>
+                <div class="voice-bar w-[3px] rounded-full bg-gradient-to-t from-primary/40 to-primary" style="--i:4"></div>
+                <div class="voice-bar w-[3px] rounded-full bg-gradient-to-t from-primary/40 to-primary" style="--i:5"></div>
+                <div class="voice-bar w-[3px] rounded-full bg-gradient-to-t from-primary/40 to-primary" style="--i:6"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Right Column: Knowledge & Studio -->
+<div class="glass-card rounded-3xl p-6 flex flex-col xl:col-span-2 relative overflow-hidden">
+    <div class="flex items-center gap-3 mb-6">
+        <div class="p-2 rounded-lg bg-gradient-to-br from-purple-500/20 to-amber-500/20 text-white border border-white/10">
+            <span class="material-icons-round text-primary">auto_graph</span>
+        </div>
+        <h2 class="text-lg font-semibold text-white">Intelligence &amp; Knowledge</h2>
+    </div>
+
+        <!-- Search & Add Bar (Spanning across columns) -->
+        <div class="relative mb-6 z-10 group">
+            <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <span class="material-icons-outlined text-gray-500 group-focus-within:text-primary text-base transition-colors">edit_note</span>
+            </div>
+            <input id="knowledge-input" type="text" class="w-full h-12 pl-11 pr-32 rounded-2xl bg-white/5 border border-white/5 focus:border-primary/50 focus:bg-white/10 focus:ring-1 focus:ring-primary/50 text-sm transition-all text-gray-200 placeholder-gray-500 shadow-lg backdrop-blur-sm" placeholder="Enter information to add to knowledge base..." />
+            <button onclick="executeCommand()" class="absolute right-1.5 top-1/2 -translate-y-1/2 px-5 h-9 rounded-xl bg-primary hover:bg-primaryHover text-white text-sm font-medium transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-primary/20 hover:scale-105 active:scale-95">
+                <span class="material-icons-round text-sm">bolt</span>
+                <span>Execute</span>
+            </button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 h-full min-h-0">
+            <!-- Studio / Workspace Files -->
+            <div class="lg:col-span-5 flex flex-col gap-6 h-full min-h-0 border-r border-white/5 pr-8">
+                <label class="text-xs uppercase text-gray-500 font-bold tracking-wider flex justify-between items-center h-8 mb-2">
+                    Workspace (Agent Directory)
+                </label>
+                <div id="workspace-list" class="flex-1 overflow-y-auto pr-2 space-y-2 custom-scrollbar">
+                     <!-- Dynamic Workspace Files -->
+                </div>
+            </div>
+
+            <!-- Knowledge Library -->
+            <div class="lg:col-span-7 flex flex-col gap-6 h-full min-h-0 pl-0">
+                <div class="flex items-center justify-between h-8 mb-2">
+                    <label class="text-xs uppercase text-gray-500 font-bold tracking-wider flex items-center gap-2">
+                        <span class="material-icons-outlined text-sm">library_books</span>
+                        Knowledge Library
+                    </label>
+                    <div class="flex gap-2">
+                        <button class="p-1.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-white transition-colors" title="Filter">
+                            <span class="material-icons-outlined text-sm">filter_list</span>
+                        </button>
+                        <button class="p-1.5 rounded-lg hover:bg-white/5 text-gray-500 hover:text-white transition-colors" title="Sort">
+                            <span class="material-icons-outlined text-sm">sort</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="knowledge-list" class="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                     <!-- Dynamic Knowledge Files -->
+                </div>
+            </div>
+        </div>
+</div>
+
+</div>
+</div>
+</main>
+</div>
+
+<!-- Hidden file inputs for upload -->
+<input type="file" id="avatar-file-input" accept="image/*" class="hidden" />
+<input type="file" id="video-file-input" accept="video/*" class="hidden" />
+
+<script>
+    const params = new URLSearchParams(window.location.search);
+    // Prefer ID, fallback to name (for backward compatibility if user refreshed old URL)
+    const agentIdParam = params.get('id');
+    const agentNameParam = params.get('name');
+
+    // Show body content when ready
+    document.addEventListener('DOMContentLoaded', () => {
+        // Wait a tiny bit for Tailwind to process
+        setTimeout(() => {
+            document.body.classList.add('loaded');
+            loadAgentData();
+        }, 100);
+    });
+
+    // Track current file being edited
+    window.currentEditFile = null;
+
+    // --- Avatar Helper Functions ---
+    function getRandomColor(name) {
+        const colors = [
+            'bg-red-600', 'bg-orange-600', 'bg-amber-600', 
+            'bg-yellow-600', 'bg-lime-600', 'bg-green-600', 
+            'bg-emerald-600', 'bg-teal-600', 'bg-cyan-600', 
+            'bg-sky-600', 'bg-blue-600', 'bg-indigo-600', 
+            'bg-violet-600', 'bg-purple-600', 'bg-fuchsia-600', 
+            'bg-pink-600', 'bg-rose-600'
+        ];
+        let hash = 0;
+        for (let i = 0; i < name.length; i++) {
+            hash = name.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return colors[Math.abs(hash) % colors.length];
+    }
+
+    function handleSidebarAvatarError(img, name) {
+        const colorClass = getRandomColor(name || 'A');
+        const initial = (name || 'A').charAt(0).toUpperCase();
+        
+        const div = document.createElement('div');
+        div.className = `w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100`;
+        div.innerText = initial;
+        
+        img.parentNode.replaceChild(div, img);
+    }
+    // --------------------------------
+
+    function openFileViewer(title, content, editable = false) {
+        const modal = document.getElementById('fileViewerModal');
+        document.getElementById('fileViewerTitle').textContent = title;
+
+        const readonlyEl = document.getElementById('fileViewerReadonly');
+        const editableEl = document.getElementById('fileViewerEditable');
+        const saveBtn = document.getElementById('fileSaveBtn');
+
+        if (editable) {
+            readonlyEl.classList.add('hidden');
+            editableEl.classList.remove('hidden');
+            saveBtn.classList.remove('hidden');
+            saveBtn.classList.add('flex');
+            document.getElementById('fileEditorContent').value = content;
+        } else {
+            readonlyEl.classList.remove('hidden');
+            editableEl.classList.add('hidden');
+            saveBtn.classList.add('hidden');
+            saveBtn.classList.remove('flex');
+            document.getElementById('fileViewerContent').textContent = content;
+        }
+
+        modal.classList.remove('hidden');
+        void modal.offsetWidth;
+        modal.classList.remove('opacity-0');
+    }
+
+    function closeFileViewer() {
+        const modal = document.getElementById('fileViewerModal');
+        modal.classList.add('opacity-0');
+        window.currentEditFile = null;
+        setTimeout(() => {
+            modal.classList.add('hidden');
+            document.getElementById('fileViewerContent').textContent = '';
+            document.getElementById('fileEditorContent').value = '';
+        }, 300);
+    }
+
+    async function saveFileContent() {
+        if (!window.currentEditFile) return;
+        const { agentId, filePath } = window.currentEditFile;
+        const content = document.getElementById('fileEditorContent').value;
+
+        try {
+            const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/file`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: filePath, content })
+            });
+            if (res.ok) {
+                const btn = document.getElementById('fileSaveBtn');
+                btn.innerHTML = '<span class="material-icons-round text-sm">check</span> Saved';
+                
+                // --- SYNC LOGIC: If we just saved SOUL.md, update the main prompt area ---
+                if (filePath.endsWith('SOUL.md')) {
+                    const promptArea = document.getElementById('agent-prompt');
+                    if (promptArea) {
+                        promptArea.value = content;
+                    }
+                    // Also show the main save status
+                    const status = document.getElementById('soul-save-status');
+                    if (status) {
+                        status.textContent = 'Updated from Editor';
+                        status.classList.remove('hidden', 'text-red-400');
+                        status.classList.add('text-green-400');
+                        setTimeout(() => status.classList.add('hidden'), 2000);
+                    }
+                }
+                // --- END SYNC LOGIC ---
+
+                setTimeout(() => {
+                    btn.innerHTML = '<span class="material-icons-round text-sm">save</span> Save';
+                }, 1500);
+            } else {
+                alert('Failed to save file.');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Error saving file.');
+        }
+    }
+
+    async function viewFile(agentId, filePath, fileName) {
+        const isEditable = fileName.endsWith('.md');
+        openFileViewer(fileName, 'Loading...', isEditable);
+
+        if (isEditable) {
+            window.currentEditFile = { agentId, filePath };
+        }
+
+        try {
+            const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/file?path=${encodeURIComponent(filePath)}`);
+            const data = await res.json();
+
+            if (data.error) {
+                if (isEditable) {
+                    document.getElementById('fileEditorContent').value = 'Error: ' + data.error;
+                } else {
+                    document.getElementById('fileViewerContent').textContent = 'Error: ' + data.error;
+                }
+            } else {
+                if (isEditable) {
+                    document.getElementById('fileEditorContent').value = data.content;
+                } else {
+                    document.getElementById('fileViewerContent').textContent = data.content;
+                }
+            }
+        } catch (e) {
+            console.error(e);
+            const errMsg = 'Error loading file content.';
+            if (isEditable) {
+                document.getElementById('fileEditorContent').value = errMsg;
+            } else {
+                document.getElementById('fileViewerContent').textContent = errMsg;
+            }
+        }
+    }
+
+    async function loadWorkspaceFiles(agentId) {
+        if (!agentId) agentId = window.currentAgentId;
+        if (!agentId) return;
+
+        try {
+            const workspaceRes = await fetch(`/api/agents/${encodeURIComponent(agentId)}/workspace`);
+            const workspaceFiles = await workspaceRes.json();
+            const workspaceList = document.getElementById('workspace-list');
+            workspaceList.innerHTML = '';
+            
+            if (Array.isArray(workspaceFiles)) {
+                workspaceFiles.forEach(file => {
+                     const div = document.createElement('div');
+                     div.className = "bg-white/[0.03] hover:bg-white/[0.08] border border-white/5 hover:border-white/10 rounded-xl p-3 flex items-center gap-3 transition-all group text-left cursor-pointer";
+                     
+                     // Add click handler for files
+                     if (file.type !== 'folder') {
+                         div.onclick = () => viewFile(agentId, file.path, file.name);
+                     }
+
+                     const fileIcon = file.type === 'folder'
+                        ? `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>`
+                        : `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>`;
+
+                     div.innerHTML = `
+                        <div class="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center">
+                            ${fileIcon}
+                        </div>
+                        <div>
+                            <div class="text-xs font-medium text-gray-200 group-hover:text-white">${file.name}</div>
+                            <div class="text-[10px] text-gray-500">${file.path}</div>
+                        </div>
+                     `;
+                     workspaceList.appendChild(div);
+                });
+            }
+        } catch (e) {
+            console.error("Error loading workspace:", e);
+        }
+    }
+
+    function renderSidebar(agentsList) {
+        const sidebarList = document.getElementById('sidebar-list');
+        const currentId = window.currentAgentId;
+        
+        if (sidebarList) {
+            sidebarList.innerHTML = '';
+            agentsList.forEach(a => {
+                const displayName = a.displayName || a.name;
+                const hasCustomAvatar = a.avatarUrl && !a.avatarUrl.includes('googleusercontent.com');
+                const isActive = a.id === currentId;
+                
+                let sidebarAvatarHtml;
+                if (hasCustomAvatar) {
+                    sidebarAvatarHtml = `
+                        <img alt="${displayName}" class="w-8 h-8 rounded-full object-cover ring-2 ${isActive ? 'ring-primary/50' : 'ring-transparent'} group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100" 
+                             src="${a.avatarUrl}" 
+                             onerror="handleSidebarAvatarError(this, '${displayName}')">
+                    `;
+                } else {
+                    const colorClass = getRandomColor(displayName);
+                    const initial = displayName.charAt(0).toUpperCase();
+                    sidebarAvatarHtml = `
+                        <div class="w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ${isActive ? 'ring-primary/50' : 'ring-transparent'} group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100">
+                            ${initial}
+                        </div>
+                    `;
+                }
+
+                const sidebarItem = document.createElement('a');
+                sidebarItem.href = `edit.html?id=${encodeURIComponent(a.id)}`;
+                sidebarItem.className = `flex items-center gap-3 px-3 py-2 rounded-xl transition-colors group ${isActive ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white hover:bg-white/5'}`;
+                sidebarItem.innerHTML = `
+                    ${sidebarAvatarHtml}
+                    <span class="text-sm truncate font-medium">${displayName}</span>
+                `;
+                sidebarList.appendChild(sidebarItem);
+            });
+        }
+    }
+    
+    function filterSidebar(query) {
+        if (!query || query.trim() === '') {
+            renderSidebar(window.allAgents || []);
+            return;
+        }
+        
+        const lowerQ = query.toLowerCase().trim();
+        const filtered = (window.allAgents || []).filter(agent => {
+            const name = (agent.displayName || agent.name || '').toLowerCase();
+            const id = (agent.id || '').toLowerCase();
+            const desc = (agent.description || '').toLowerCase();
+            return name.includes(lowerQ) || id.includes(lowerQ) || desc.includes(lowerQ);
+        });
+        renderSidebar(filtered);
+    }
+    
+    // Search Listener
+    document.addEventListener('DOMContentLoaded', () => {
+        const input = document.getElementById('header-search');
+        if (input) {
+            input.addEventListener('input', (e) => {
+                filterSidebar(e.target.value);
+            });
+        }
+    });
+
+    async function loadAgentData() {
+        if (!agentIdParam && !agentNameParam) {
+             console.warn("No agent ID or name provided");
+             return;
+        }
+        
+        try {
+            // 1. Load Agent Details
+            const agentsRes = await fetch('/api/agents');
+            const agentsData = await agentsRes.json();
+            const agents = agentsData.agents ? Object.values(agentsData.agents) : agentsData;
+            
+            if (Array.isArray(agents)) {
+                    // Find agent by ID (preferred) or Name
+                    let agent = null;
+                    if (agentIdParam) {
+                        agent = agents.find(a => a.id === agentIdParam);
+                    }
+                    if (!agent && agentNameParam) {
+                        agent = agents.find(a => a.name === agentNameParam);
+                    }
+                    
+                    if (!agent) {
+                        console.error('Agent not found in list:', agents.map(a => a.id));
+                        alert("Agent not found");
+                        window.location.href = 'index.html';
+                        return;
+                    }
+                    
+                    // Use the real ID for subsequent calls
+                    const agentId = agent.id;
+                    window.currentAgentId = agentId; // Store globally for other functions
+
+                
+                // Update UI Title
+                document.getElementById('agent-name-display').innerHTML = `${agent.name} <span class="px-2 py-0.5 rounded text-[10px] bg-green-500/10 text-green-400 border border-green-500/20 uppercase tracking-widest font-bold">Active</span>`;
+                
+                // Populate Sidebar
+                window.allAgents = agents;
+                renderSidebar(agents);
+
+                // Fill Agent Info
+                // Avatar: Use avatarUrl from API which handles both local and system agents
+                const avatarUrl = agent.avatarUrl;
+                const hasCustomAvatar = avatarUrl && !avatarUrl.includes('googleusercontent.com');
+                
+                if (hasCustomAvatar) {
+                    document.getElementById('agent-avatar').src = avatarUrl;
+                } else {
+                    // Generate placeholder if no custom avatar
+                    const initial = agent.name.charAt(0).toUpperCase();
+                    // We can't easily do the div replacement here without restructuring HTML, 
+                    // so let's use a placeholder image service or hide the img and show a div.
+                    // For now, let's use UI Avatars as a simple fallback which works with img tag
+                    document.getElementById('agent-avatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(agent.name)}&background=random&size=512&font-size=0.5&bold=true&color=fff`;
+                }
+
+                // Load SOUL.md content for prompt textarea
+                try {
+                    const soulRes = await fetch(`/api/agents/${encodeURIComponent(agentId)}/soul`);
+                    const soulData = await soulRes.json();
+                    if (soulData.content) {
+                         document.getElementById('agent-prompt').value = soulData.content;
+                    } else {
+                         // Fallback to description if SOUL.md is empty
+                         document.getElementById('agent-prompt').value = agent.description || '';
+                    }
+                } catch (e) {
+                    console.error("Error loading SOUL.md", e);
+                    document.getElementById('agent-prompt').value = agent.description || '';
+                }
+
+                // Video player
+                if (agent.videoUrl) {
+                    const videoSection = document.getElementById('video-section');
+                    const videoEl = document.getElementById('agent-video');
+                    videoEl.src = agent.videoUrl;
+                    videoSection.classList.remove('hidden');
+                } else {
+                    document.getElementById('video-section').classList.add('hidden');
+                }
+                
+                // Voice ID & audio
+                if (agent.voiceId && agent.voiceId !== 'default') {
+                    document.getElementById('voice-id-display').textContent = 'ID: ' + agent.voiceId;
+                } else if (agent.voiceUrl) {
+                    document.getElementById('voice-id-display').textContent = 'Custom Voice Sample';
+                } else {
+                    document.getElementById('voice-id-display').textContent = 'No voice model';
+                }
+                
+                // Store voice audio URL for playback
+                if (agent.voiceUrl) {
+                    window.currentVoiceAudio = agent.voiceUrl;
+                } else {
+                    window.currentVoiceAudio = null;
+                }
+
+                // 2. Load Workspace (Use ID)
+                await loadWorkspaceFiles(agentId);
+                
+                // 3. Load Knowledge (Use ID)
+                loadKnowledge(agentId); // Initial load
+                
+                // Save SOUL.md function
+                const saveSoulMd = async () => {
+                    const content = document.getElementById('agent-prompt').value;
+                    try {
+                        // Use relative path directly, server will handle workspace joining
+                        const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/file`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ path: 'SOUL.md', content }) 
+                        });
+                        
+                        const status = document.getElementById('soul-save-status');
+                        status.classList.remove('hidden');
+                        
+                        if (res.ok) {
+                            status.textContent = 'Saved';
+                            status.classList.remove('text-red-400');
+                            status.classList.add('text-green-400');
+                            setTimeout(() => status.classList.add('hidden'), 2000);
+                        } else {
+                            status.textContent = 'Error saving';
+                            status.classList.add('text-red-400');
+                            status.classList.remove('text-green-400');
+                        }
+                    } catch (e) {
+                        console.error('Failed to save SOUL.md:', e);
+                    }
+                };
+
+                // Auto-save SOUL.md on blur
+                const promptTextarea = document.getElementById('agent-prompt');
+                if (promptTextarea) {
+                    promptTextarea.addEventListener('blur', saveSoulMd);
+                }
+                
+                // Save button also saves SOUL.md
+                const saveBtn = document.getElementById('save-btn');
+                if (saveBtn) {
+                    const newSaveBtn = saveBtn.cloneNode(true);
+                    saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
+                    newSaveBtn.addEventListener('click', async () => {
+                        await saveSoulMd();
+                        // Also trigger any other save logic if needed (e.g. name, etc)
+                        // For now just visual feedback
+                        newSaveBtn.innerHTML = '<span class="material-icons-round text-sm">check</span> Saved!';
+                        setTimeout(() => {
+                            newSaveBtn.innerHTML = '<span class="material-icons-round text-sm">save</span> Save Changes';
+                        }, 1500);
+                    });
+                }
+                
+                // Enter to execute (with IME composition support)
+                let isComposing = false;
+                const knowledgeInput = document.getElementById('knowledge-input');
+                knowledgeInput.addEventListener('compositionstart', () => { isComposing = true; });
+                knowledgeInput.addEventListener('compositionend', () => { isComposing = false; });
+                knowledgeInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !isComposing) {
+                        e.preventDefault();
+                        executeCommand();
+                    }
+                });
+
+            } else {
+                console.error('Expected array of agents, got:', agents);
+            }
+
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    
+    // Knowledge Functions
+    async function loadKnowledge(agentId, query = '') {
+        try {
+            const url = query 
+                ? `/api/agents/${encodeURIComponent(agentId)}/knowledge?q=${encodeURIComponent(query)}`
+                : `/api/agents/${encodeURIComponent(agentId)}/knowledge`;
+                
+            const knowledgeRes = await fetch(url);
+            const knowledgeData = await knowledgeRes.json();
+            const knowledgeList = document.getElementById('knowledge-list');
+            knowledgeList.innerHTML = '';
+
+            if (knowledgeData && Array.isArray(knowledgeData.items)) {
+                knowledgeData.items.forEach(item => {
+                    const div = document.createElement('div');
+                    // Card Styling: Glassmorphism + Hover effect
+                    div.className = "group relative bg-white/[0.02] hover:bg-white/[0.08] border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all duration-300 cursor-pointer flex gap-4 overflow-hidden shadow-sm hover:shadow-lg hover:-translate-y-0.5";
+                    
+                    // Click to open URL
+                    if (item.url) {
+                        div.onclick = (e) => {
+                            e.stopPropagation();
+                            window.open(item.url, '_blank');
+                        };
+                        div.title = "Click to open source on x.com";
+                    }
+                    
+                    let iconOrImage = `<div class="w-16 h-16 rounded-xl bg-gray-800 flex items-center justify-center shrink-0 border border-white/5 shadow-inner"><span class="material-symbols-outlined text-gray-500 text-2xl">image_not_supported</span></div>`;
+                    if (item.cover) {
+                        iconOrImage = `<div class="w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-white/5 shadow-md relative">
+                            <img src="${item.cover}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500">
+                        </div>`;
+                    }
+                    
+                    // Badges
+                    const badges = [];
+                    if (item.isTrending) badges.push(`<span class="text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded font-medium">Trending</span>`);
+                    if (item.category && item.category !== 'Uncategorized') badges.push(`<span class="text-[9px] bg-white/5 text-gray-400 border border-white/10 px-1.5 py-0.5 rounded">${item.category}</span>`);
+                    badges.push(`<span class="text-[9px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 rounded font-medium flex items-center gap-1"><span class="material-icons-round text-[8px]">open_in_new</span>x.com</span>`);
+
+                    div.innerHTML = `
+                        ${iconOrImage}
+                        <div class="overflow-hidden flex-1 flex flex-col justify-center min-w-0">
+                            <div class="flex justify-between items-start gap-2 mb-1">
+                                <h4 class="text-sm font-semibold text-gray-200 group-hover:text-white truncate leading-tight">${item.title || item.name}</h4>
+                            </div>
+                            <p class="text-xs text-gray-500 line-clamp-2 mb-2 leading-relaxed font-light group-hover:text-gray-400 transition-colors">${item.description || 'No description available.'}</p>
+                            <div class="flex items-center gap-2 mt-auto">
+                                ${badges.join('')}
+                            </div>
+                        </div>
+                        <div class="absolute right-3 top-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                             <span class="material-icons-outlined text-gray-500 text-sm">arrow_outward</span>
+                        </div>
+                    `;
+                    knowledgeList.appendChild(div);
+                });
+                
+                if (knowledgeData.items.length === 0) {
+                    knowledgeList.innerHTML = `
+                        <div class="flex flex-col items-center justify-center py-12 text-gray-500 gap-3 border border-dashed border-white/5 rounded-2xl">
+                            <span class="material-icons-outlined text-3xl opacity-50">search_off</span>
+                            <span class="text-xs">No knowledge topics found.</span>
+                        </div>`;
+                }
+            }
+        } catch (e) {
+            console.error("Error loading knowledge:", e);
+        }
+    }
+    
+    function getCurrentAgentId() {
+        const params = new URLSearchParams(window.location.search);
+        // We need to resolve ID again or store it globally. 
+        // For simplicity, let's re-resolve from URL params logic or assume it's stored.
+        // Actually loadAgentData runs once. We can store agentId globally.
+        return window.currentAgentId;
+    }
+
+    // Voice playback
+    let voiceAudio = null;
+
+    function playVoiceSample() {
+        const audioUrl = window.currentVoiceAudio;
+        if (!audioUrl) {
+            alert('No voice sample available for this agent.');
+            return;
+        }
+
+        const icon = document.getElementById('voice-play-icon');
+
+        if (voiceAudio && !voiceAudio.paused) {
+            voiceAudio.pause();
+            voiceAudio.currentTime = 0;
+            icon.textContent = 'play_arrow';
+            return;
+        }
+
+        voiceAudio = new Audio(audioUrl);
+        icon.textContent = 'stop';
+
+        voiceAudio.addEventListener('ended', () => {
+            icon.textContent = 'play_arrow';
+        });
+
+        voiceAudio.addEventListener('error', () => {
+            icon.textContent = 'play_arrow';
+            alert('Failed to play voice sample.');
+        });
+
+        voiceAudio.play();
+    }
+
+    // Loading overlay helper
+    function showUploadLoading(targetEl, msg = 'Syncing...') {
+        const overlay = document.createElement('div');
+        overlay.id = 'upload-loading-overlay';
+        overlay.className = 'absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm rounded-2xl';
+        overlay.innerHTML = `
+            <svg class="animate-spin h-8 w-8 text-primary mb-2" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span class="text-xs text-gray-300">${msg}</span>
+        `;
+        targetEl.style.position = 'relative';
+        targetEl.appendChild(overlay);
+        return overlay;
+    }
+    function hideUploadLoading() {
+        const el = document.getElementById('upload-loading-overlay');
+        if (el) el.remove();
+    }
+
+    // Avatar upload handler
+    document.getElementById('avatar-file-input').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const agentId = window.currentAgentId;
+        if (!agentId) return;
+
+        const avatarContainer = document.querySelector('.group\\/avatar');
+        const overlay = showUploadLoading(avatarContainer, 'Uploading & syncing avatar...');
+
+        const formData = new FormData();
+        formData.append('avatar', file);
+
+        try {
+            const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/avatar`, {
+                method: 'PUT',
+                body: formData
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                document.getElementById('agent-avatar').src = `/api/agents/${encodeURIComponent(agentId)}/avatar?t=${Date.now()}`;
+                if (data.podcastSynced) {
+                    console.log('[Avatar] Podcast API synced');
+                }
+            } else {
+                alert('Failed to upload avatar.');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Error uploading avatar.');
+        }
+
+        hideUploadLoading();
+        e.target.value = '';
+    });
+
+    // Video upload handler
+    document.getElementById('video-file-input').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const agentId = window.currentAgentId;
+        if (!agentId) return;
+
+        const videoContainer = document.querySelector('.group\\/avatar');
+        const overlay = showUploadLoading(videoContainer, 'Uploading & syncing video...');
+
+        const formData = new FormData();
+        formData.append('video', file);
+
+        try {
+            const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/video`, {
+                method: 'PUT',
+                body: formData
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                const videoSection = document.getElementById('video-section');
+                const videoEl = document.getElementById('agent-video');
+                videoEl.src = `/api/agents/${encodeURIComponent(agentId)}/video?t=${Date.now()}`;
+                videoSection.classList.remove('hidden');
+                videoEl.load();
+                if (data.podcastSynced) {
+                    console.log('[Video] Podcast API synced');
+                }
+            } else {
+                alert('Failed to upload video.');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Error uploading video.');
+        }
+
+        hideUploadLoading();
+        e.target.value = '';
+    });
+
+    // Execute Modal helpers
+    function showExecuteModal() {
+        const modal = document.getElementById('executeModal');
+        document.getElementById('executeContent').textContent = '';
+        document.getElementById('executeTitle').textContent = 'Agent is thinking...';
+        document.getElementById('executeSpinner').classList.remove('hidden');
+        document.getElementById('executeFooter').classList.add('hidden');
+        modal.classList.remove('hidden');
+        void modal.offsetWidth;
+        modal.classList.remove('opacity-0');
+    }
+
+    function closeExecuteModal() {
+        const modal = document.getElementById('executeModal');
+        modal.classList.add('opacity-0');
+        setTimeout(() => {
+            modal.classList.add('hidden');
+            document.getElementById('executeContent').textContent = '';
+        }, 300);
+    }
+
+    function confirmExecuteModal() {
+        closeExecuteModal();
+        // Wait for close animation, then refresh
+        setTimeout(() => refreshAfterExecute(), 350);
+    }
+
+    async function executeCommand() {
+        const input = document.getElementById('knowledge-input');
+        const text = input.value.trim();
+        const agentId = window.currentAgentId;
+
+        if (!text) return alert("Please enter a command.");
+        if (!agentId) return;
+
+        input.value = '';
+        showExecuteModal();
+        
+        const contentEl = document.getElementById('executeContent');
+        contentEl.textContent = ''; // Clear previous content
+
+        try {
+            const response = await fetch(`/api/agents/${encodeURIComponent(agentId)}/message`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: text })
+            });
+
+            if (!response.ok) {
+                // Try to parse error json if possible
+                let errorMsg = `HTTP error! status: ${response.status}`;
+                try {
+                    const errData = await response.json();
+                    if (errData.error) errorMsg = errData.error;
+                } catch(e) {}
+                throw new Error(errorMsg);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let fullResponse = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split('\n\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            if (data.content) {
+                                fullResponse += data.content;
+                                contentEl.textContent = fullResponse;
+                                // Auto-scroll to bottom
+                                contentEl.scrollTop = contentEl.scrollHeight;
+                            }
+                            if (data.error) {
+                                throw new Error(data.error);
+                            }
+                            if (data.done) {
+                                document.getElementById('executeTitle').textContent = 'Completed';
+                            }
+                        } catch (e) {
+                            // ignore incomplete JSON
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Execute error:', e);
+            document.getElementById('executeTitle').textContent = 'Error';
+            contentEl.textContent += `\n\n[Error: ${e.message}]`;
+        }
+
+        document.getElementById('executeSpinner').classList.add('hidden');
+        document.getElementById('executeFooter').classList.remove('hidden');
+    }
+
+    async function refreshAfterExecute() {
+        const agentId = window.currentAgentId;
+        if (!agentId) return;
+
+        // Refresh SOUL.md content
+        try {
+            const soulRes = await fetch(`/api/agents/${encodeURIComponent(agentId)}/soul`);
+            if (soulRes.ok) {
+                const soulData = await soulRes.json();
+                document.getElementById('agent-prompt').value = soulData.content || '';
+            }
+        } catch (e) {
+            console.error('Error refreshing SOUL.md:', e);
+        }
+
+        // Refresh workspace files
+        loadWorkspaceFiles();
+
+        // Refresh knowledge
+        loadKnowledge(agentId);
+    }
+</script>
+</body></html>

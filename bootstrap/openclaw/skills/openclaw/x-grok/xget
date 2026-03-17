@@ -1,0 +1,12 @@
+#!/bin/bash
+# X-Grok Get Answer - Save and organize Grok's answer
+#
+# Usage:
+#   xget "original question"
+#
+# Examples:
+#   xget "帮我找一些x上知名的财经博主"
+#   xget "What are the latest AI trends"
+
+export X_GROK_AGENT="${X_GROK_AGENT:-我的助手}"
+exec python3 ~/.openclaw/skills/x-grok/xget.py "$@"
