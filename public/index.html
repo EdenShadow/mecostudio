@@ -280,17 +280,11 @@
                     if (el) el.value = value || '';
                 };
 
-                setValue('cfg-openclaw-http-url', appRuntimeSettings.openclawHttpUrl);
-                setValue('cfg-openclaw-ws-url', appRuntimeSettings.openclawWsUrl);
-                setValue('cfg-openclaw-token', appRuntimeSettings.openclawGatewayToken);
                 setValue('cfg-openclaw-model', appRuntimeSettings.openclawModel);
                 setValue('cfg-minimax-key', appRuntimeSettings.minimaxApiKey);
                 setValue('cfg-minimax-ws-url', appRuntimeSettings.minimaxWsUrl);
                 setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
                 setValue('cfg-kimi-key', appRuntimeSettings.kimiApiKey);
-                setValue('cfg-kimi-command', appRuntimeSettings.kimiCliCommand);
-                setValue('cfg-hot-topics-kb', appRuntimeSettings.hotTopicsKbPath);
-                setValue('cfg-openai-key', appRuntimeSettings.openaiApiKey);
             } catch (e) {
                 console.error('Load settings failed', e);
                 alert('加载设置失败: ' + e.message);
@@ -305,17 +299,11 @@
             }
 
             const settings = {
-                openclawHttpUrl: document.getElementById('cfg-openclaw-http-url')?.value || '',
-                openclawWsUrl: document.getElementById('cfg-openclaw-ws-url')?.value || '',
-                openclawGatewayToken: document.getElementById('cfg-openclaw-token')?.value || '',
                 openclawModel: document.getElementById('cfg-openclaw-model')?.value || '',
                 minimaxApiKey: document.getElementById('cfg-minimax-key')?.value || '',
                 minimaxWsUrl: document.getElementById('cfg-minimax-ws-url')?.value || '',
                 tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
-                kimiApiKey: document.getElementById('cfg-kimi-key')?.value || '',
-                kimiCliCommand: document.getElementById('cfg-kimi-command')?.value || '',
-                hotTopicsKbPath: document.getElementById('cfg-hot-topics-kb')?.value || '',
-                openaiApiKey: document.getElementById('cfg-openai-key')?.value || ''
+                kimiApiKey: document.getElementById('cfg-kimi-key')?.value || ''
             };
 
             try {
@@ -1996,25 +1984,13 @@
         <div class="px-6 py-4 border-b border-white/10 flex items-center justify-between">
             <div>
                 <h3 class="text-lg font-bold text-white">API Keys & Integrations</h3>
-                <p class="text-xs text-gray-400 mt-1">保存后自动安装 Kimi CLI、安装 hot-topics 并激活配置</p>
+                <p class="text-xs text-gray-400 mt-1">OpenClaw 连接参数自动发现，无需手填。保存后自动安装/激活 Kimi CLI 与 hot-topics。</p>
             </div>
             <button type="button" class="text-gray-400 hover:text-white" onclick="closeApiSettingsModal()">
                 <span class="material-icons-round">close</span>
             </button>
         </div>
         <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">OpenClaw HTTP URL</label>
-                <input id="cfg-openclaw-http-url" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="http://127.0.0.1:18789/v1/chat/completions">
-            </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">OpenClaw WS URL</label>
-                <input id="cfg-openclaw-ws-url" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="ws://127.0.0.1:18789">
-            </div>
-            <div class="md:col-span-2">
-                <label class="block text-xs text-gray-400 mb-1">OpenClaw Gateway Token</label>
-                <input id="cfg-openclaw-token" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="gateway token">
-            </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">OpenClaw Model</label>
                 <input id="cfg-openclaw-model" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="kimi-openai/kimi-k2.5">
@@ -2032,20 +2008,8 @@
                 <input id="cfg-tikhub-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="TikHub key">
             </div>
             <div class="md:col-span-2">
-                <label class="block text-xs text-gray-400 mb-1">Kimi API Key</label>
-                <input id="cfg-kimi-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Moonshot API key">
-            </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">Kimi CLI Command</label>
-                <input id="cfg-kimi-command" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="kimi">
-            </div>
-            <div>
-                <label class="block text-xs text-gray-400 mb-1">Hot Topics KB Path</label>
-                <input id="cfg-hot-topics-kb" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="~/Documents/知识库/热门话题">
-            </div>
-            <div class="md:col-span-2">
-                <label class="block text-xs text-gray-400 mb-1">OpenAI API Key (Whisper, optional)</label>
-                <input id="cfg-openai-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="OpenAI key">
+                <label class="block text-xs text-gray-400 mb-1">Kimi Coding API Key</label>
+                <input id="cfg-kimi-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Kimi Coding key">
             </div>
         </div>
         <div class="px-6 py-4 border-t border-white/10 flex items-center justify-end gap-3">

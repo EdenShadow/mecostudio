@@ -45,13 +45,13 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 
 安装后访问 `http://127.0.0.1:3456`，点击左上角头像下拉，进入 **API Keys**。
 
+OpenClaw 连接项（HTTP URL / WS URL / Gateway Token）已改为自动发现，不需要填写。
+
 推荐配置项：
 
-- `OpenClaw Gateway Token`
-- `Kimi API Key`
+- `Kimi Coding API Key`
 - `TikHub API Key`
 - `MiniMax API Key`（TTS）
-- `OpenAI API Key`（可选）
 
 点击“确定并自动安装/激活”后自动执行：
 
@@ -59,6 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 写入 `~/.kimi/config.json` / `~/.kimi/config.toml`
 - 安装 hot-topics 技能
 - 安装 hot-topics 依赖（含 whisper）
+- 自动确定 `Kimi CLI Command` 与 `Hot Topics KB Path`
 - 初始化热门话题知识库目录（只补齐缺失）
 
 ## 可选环境变量
@@ -69,7 +70,13 @@ MECO_BRANCH="main" \
 MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
 MECO_UPGRADE_OPENCLAW=0 \
+MECO_OPENCLAW_MODEL="kimi-openai/kimi-k2.5" \
+MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
+MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
 MECO_KIMI_API_KEY="sk-xxxxx" \
+MECO_MINIMAX_API_KEY="xxxx" \
+MECO_TIKHUB_API_KEY="xxxx" \
+MECO_OPENAI_API_KEY="" \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
@@ -106,14 +113,15 @@ defaults:
   hot_topics_root: "~/Documents/知识库/热门话题"
 api_keys:
   required:
-    - "OpenClaw Gateway Token"
-    - "Kimi API Key"
+    - "Kimi Coding API Key"
     - "TikHub API Key"
     - "MiniMax API Key"
   optional:
     - "OpenAI API Key"
 post_install_auto:
   - "install/update openclaw"
+  - "auto discover openclaw http/ws/token from local config"
+  - "write openclaw model + provider api key defaults"
   - "install kimi cli"
   - "install whisper deps"
   - "sync agents and skills"

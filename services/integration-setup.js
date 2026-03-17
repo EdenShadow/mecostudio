@@ -84,6 +84,56 @@ function syncDir(src, dst) {
   fs.cpSync(src, dst, { recursive: true, force: true });
 }
 
+function configureOpenClawDefaults(settings, logs) {
+  const openclawRoot = path.join(os.homedir(), '.openclaw');
+  const openclawConfigPath = path.join(openclawRoot, 'openclaw.json');
+  const model = String(settings.openclawModel || '').trim() || 'kimi-openai/kimi-k2.5';
+  const providerKey = String(settings.kimiApiKey || '').trim();
+
+  fs.mkdirSync(openclawRoot, { recursive: true });
+
+  let conf = {};
+  if (fs.existsSync(openclawConfigPath)) {
+    try {
+      conf = JSON.parse(fs.readFileSync(openclawConfigPath, 'utf8') || '{}');
+    } catch (_) {
+      conf = {};
+    }
+  }
+
+  if (!conf.gateway || typeof conf.gateway !== 'object') conf.gateway = {};
+  if (!conf.gateway.port) conf.gateway.port = 18789;
+  if (!conf.gateway.auth || typeof conf.gateway.auth !== 'object') conf.gateway.auth = {};
+  if (!conf.agents || typeof conf.agents !== 'object') conf.agents = {};
+  if (!conf.agents.defaults || typeof conf.agents.defaults !== 'object') conf.agents.defaults = {};
+  if (!conf.agents.defaults.model || typeof conf.agents.defaults.model !== 'object') conf.agents.defaults.model = {};
+  conf.agents.defaults.model.primary = model;
+
+  if (!conf.models || typeof conf.models !== 'object') conf.models = {};
+  if (!conf.models.providers || typeof conf.models.providers !== 'object') conf.models.providers = {};
+  const providerId = model.includes('/') ? model.split('/')[0] : '';
+  if (providerId && providerKey) {
+    if (!conf.models.providers[providerId] || typeof conf.models.providers[providerId] !== 'object') {
+      conf.models.providers[providerId] = {};
+    }
+    conf.models.providers[providerId].apiKey = providerKey;
+  }
+
+  if (providerKey) {
+    for (const kimiProvider of ['kimi-coding', 'kimi-openai']) {
+      if (!conf.models.providers[kimiProvider] || typeof conf.models.providers[kimiProvider] !== 'object') {
+        conf.models.providers[kimiProvider] = {};
+      }
+      if (!conf.models.providers[kimiProvider].apiKey) {
+        conf.models.providers[kimiProvider].apiKey = providerKey;
+      }
+    }
+  }
+
+  fs.writeFileSync(openclawConfigPath, JSON.stringify(conf, null, 2) + '\n', 'utf8');
+  logs.push(`Updated OpenClaw defaults (~/.openclaw/openclaw.json): model=${model}`);
+}
+
 function patchKimiToml(content, apiKey) {
   const targetSections = new Set([
     'providers."managed:kimi-code"',
@@ -209,6 +259,8 @@ function ensureHotTopicsKnowledgeBase(settings, logs) {
     fs.mkdirSync(categoryPath, { recursive: true });
     logs.push(`Created category folder: ${categoryPath}`);
   }
+
+  return hotTopicsRoot;
 }
 
 async function ensureHotTopicsDeps(logs) {
@@ -236,16 +288,18 @@ async function ensureHotTopicsDeps(logs) {
 
 async function applyAll(settings = {}) {
   const logs = [];
+  configureOpenClawDefaults(settings, logs);
   const kimiPath = await ensureKimiCliInstalled(logs);
   configureKimiApiKey(String(settings.kimiApiKey || '').trim(), logs);
-  ensureHotTopicsKnowledgeBase(settings, logs);
+  const hotTopicsRoot = ensureHotTopicsKnowledgeBase(settings, logs);
   ensureHotTopicsSkill(logs);
   await ensureHotTopicsDeps(logs);
   return {
     ok: true,
     logs,
     settingsPatch: {
-      kimiCliCommand: kimiPath || String(settings.kimiCliCommand || '').trim() || 'kimi'
+      kimiCliCommand: kimiPath || String(settings.kimiCliCommand || '').trim() || 'kimi',
+      hotTopicsKbPath: hotTopicsRoot
     }
   };
 }

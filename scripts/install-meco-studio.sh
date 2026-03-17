@@ -8,6 +8,13 @@ MECO_START_AFTER_INSTALL="${MECO_START_AFTER_INSTALL:-1}"
 MECO_RESET_RUNTIME_STATE="${MECO_RESET_RUNTIME_STATE:-1}"
 MECO_UPGRADE_OPENCLAW="${MECO_UPGRADE_OPENCLAW:-0}"
 MECO_KIMI_API_KEY="${MECO_KIMI_API_KEY:-}"
+MECO_KIMI_CODING_API_KEY="${MECO_KIMI_CODING_API_KEY:-}"
+MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-openai/kimi-k2.5}"
+MECO_OPENCLAW_MODEL_API_KEY="${MECO_OPENCLAW_MODEL_API_KEY:-}"
+MECO_MINIMAX_API_KEY="${MECO_MINIMAX_API_KEY:-}"
+MECO_MINIMAX_WS_URL="${MECO_MINIMAX_WS_URL:-wss://api.minimaxi.com/ws/v1/t2a_v2}"
+MECO_TIKHUB_API_KEY="${MECO_TIKHUB_API_KEY:-}"
+MECO_OPENAI_API_KEY="${MECO_OPENAI_API_KEY:-}"
 OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
 CONFIG_SKILLS_ROOT="${CONFIG_SKILLS_ROOT:-$HOME/.config/agents/skills}"
 HOT_TOPICS_ROOT="${HOT_TOPICS_ROOT:-$HOME/Documents/知识库/热门话题}"
@@ -168,6 +175,110 @@ configure_kimi_api_key() {
 }
 JSON
   log "Updated $kimi_home/config.json"
+}
+
+configure_openclaw_defaults() {
+  local model="$1"
+  local provider_key="$2"
+  local openclaw_config="$OPENCLAW_ROOT/openclaw.json"
+  mkdir -p "$OPENCLAW_ROOT"
+
+  node -e '
+    const fs = require("fs");
+    const path = process.argv[1];
+    const model = String(process.argv[2] || "").trim() || "kimi-openai/kimi-k2.5";
+    const providerKey = String(process.argv[3] || "").trim();
+
+    let conf = {};
+    if (fs.existsSync(path)) {
+      try {
+        conf = JSON.parse(fs.readFileSync(path, "utf8") || "{}");
+      } catch (_) {
+        conf = {};
+      }
+    }
+
+    if (!conf.gateway || typeof conf.gateway !== "object") conf.gateway = {};
+    if (!conf.gateway.port) conf.gateway.port = 18789;
+    if (!conf.gateway.auth || typeof conf.gateway.auth !== "object") conf.gateway.auth = {};
+
+    if (!conf.agents || typeof conf.agents !== "object") conf.agents = {};
+    if (!conf.agents.defaults || typeof conf.agents.defaults !== "object") conf.agents.defaults = {};
+    if (!conf.agents.defaults.model || typeof conf.agents.defaults.model !== "object") conf.agents.defaults.model = {};
+    conf.agents.defaults.model.primary = model;
+
+    const providerId = model.includes("/") ? model.split("/")[0] : "";
+    if (!conf.models || typeof conf.models !== "object") conf.models = {};
+    if (!conf.models.providers || typeof conf.models.providers !== "object") conf.models.providers = {};
+
+    if (providerId && providerKey) {
+      if (!conf.models.providers[providerId] || typeof conf.models.providers[providerId] !== "object") {
+        conf.models.providers[providerId] = {};
+      }
+      conf.models.providers[providerId].apiKey = providerKey;
+    }
+
+    // Keep kimi providers aligned when key is supplied
+    if (providerKey) {
+      for (const kimiProvider of ["kimi-coding", "kimi-openai"]) {
+        if (!conf.models.providers[kimiProvider] || typeof conf.models.providers[kimiProvider] !== "object") {
+          conf.models.providers[kimiProvider] = {};
+        }
+        if (!conf.models.providers[kimiProvider].apiKey) {
+          conf.models.providers[kimiProvider].apiKey = providerKey;
+        }
+      }
+    }
+
+    fs.writeFileSync(path, JSON.stringify(conf, null, 2) + "\n");
+  ' "$openclaw_config" "$model" "$provider_key"
+
+  log "Configured OpenClaw defaults: model=$model"
+}
+
+configure_meco_runtime_settings() {
+  local kimi_api_key="$1"
+  mkdir -p "$MECO_INSTALL_DIR/data"
+  local settings_path="$MECO_INSTALL_DIR/data/app-settings.json"
+
+  node -e '
+    const fs = require("fs");
+    const path = process.argv[1];
+    const patch = {
+      openclawModel: String(process.argv[2] || "").trim(),
+      minimaxApiKey: String(process.argv[3] || "").trim(),
+      minimaxWsUrl: String(process.argv[4] || "").trim(),
+      tikhubApiKey: String(process.argv[5] || "").trim(),
+      kimiApiKey: String(process.argv[6] || "").trim(),
+      hotTopicsKbPath: String(process.argv[7] || "").trim(),
+      openaiApiKey: String(process.argv[8] || "").trim()
+    };
+
+    let current = {};
+    if (fs.existsSync(path)) {
+      try {
+        current = JSON.parse(fs.readFileSync(path, "utf8") || "{}");
+      } catch (_) {
+        current = {};
+      }
+    }
+
+    const next = { ...current };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next[k] = v;
+      else if (!Object.prototype.hasOwnProperty.call(next, k)) next[k] = "";
+    }
+    fs.writeFileSync(path, JSON.stringify(next, null, 2) + "\n");
+  ' "$settings_path" \
+    "$MECO_OPENCLAW_MODEL" \
+    "$MECO_MINIMAX_API_KEY" \
+    "$MECO_MINIMAX_WS_URL" \
+    "$MECO_TIKHUB_API_KEY" \
+    "$kimi_api_key" \
+    "$HOT_TOPICS_ROOT" \
+    "$MECO_OPENAI_API_KEY"
+
+  log "Updated Meco runtime settings: $settings_path"
 }
 
 ensure_hot_topics_skill() {
@@ -432,6 +543,9 @@ main() {
   require_cmd git
   ensure_node_and_npm
   ensure_openclaw
+  local effective_kimi_key="${MECO_KIMI_API_KEY:-$MECO_KIMI_CODING_API_KEY}"
+  local effective_model_key="${MECO_OPENCLAW_MODEL_API_KEY:-$MECO_KIMI_CODING_API_KEY}"
+  configure_openclaw_defaults "$MECO_OPENCLAW_MODEL" "$effective_model_key"
   ensure_kimi_cli
   ensure_kimi_whisper
   prepare_repo
@@ -439,7 +553,8 @@ main() {
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets
   ensure_hot_topics_skill
-  configure_kimi_api_key "$MECO_KIMI_API_KEY"
+  configure_kimi_api_key "$effective_kimi_key"
+  configure_meco_runtime_settings "$effective_kimi_key"
   reset_runtime_state
   start_service
   log "Install/upgrade done."

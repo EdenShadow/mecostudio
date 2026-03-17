@@ -19,6 +19,14 @@ const DEFAULT_SETTINGS = Object.freeze({
 });
 
 const SETTINGS_FIELDS = Object.freeze(Object.keys(DEFAULT_SETTINGS));
+const NON_PERSISTED_FIELDS = Object.freeze([
+  'openclawHttpUrl',
+  'openclawWsUrl',
+  'openclawGatewayToken'
+]);
+const PERSISTED_FIELDS = Object.freeze(
+  SETTINGS_FIELDS.filter((field) => !NON_PERSISTED_FIELDS.includes(field))
+);
 
 const ENV_MAP = Object.freeze({
   openclawHttpUrl: 'MECO_OPENCLAW_HTTP_URL',
@@ -33,8 +41,6 @@ const ENV_MAP = Object.freeze({
   hotTopicsKbPath: 'HOT_TOPICS_KB_PATH',
   openaiApiKey: 'OPENAI_API_KEY'
 });
-
-let cachedSettings = null;
 
 function toSafeString(value) {
   if (value === null || value === undefined) return '';
@@ -115,6 +121,19 @@ function discoverFromLocalFiles() {
     console.warn(`[Settings] hot-topics script parse failed: ${e.message}`);
   }
 
+  const kimiCommandCandidates = [
+    path.join(os.homedir(), '.local', 'bin', 'kimi'),
+    path.join(os.homedir(), '.kimi', 'bin', 'kimi'),
+    '/opt/homebrew/bin/kimi',
+    '/usr/local/bin/kimi'
+  ];
+  for (const p of kimiCommandCandidates) {
+    if (fs.existsSync(p)) {
+      discovered.kimiCliCommand = p;
+      break;
+    }
+  }
+
   return discovered;
 }
 
@@ -130,16 +149,22 @@ function applyEnvOverrides(base) {
 }
 
 function loadSettings() {
-  if (cachedSettings) return cachedSettings;
   const fromFile = loadSettingsFile();
   const discovered = discoverFromLocalFiles();
+
   const merged = {
     ...DEFAULT_SETTINGS,
     ...discovered,
     ...fromFile
   };
-  cachedSettings = applyEnvOverrides(merged);
-  return cachedSettings;
+
+  // Always trust local OpenClaw discovery for connection fields,
+  // so users never need to manually maintain URL/WS/token.
+  if (discovered.openclawHttpUrl) merged.openclawHttpUrl = discovered.openclawHttpUrl;
+  if (discovered.openclawWsUrl) merged.openclawWsUrl = discovered.openclawWsUrl;
+  if (discovered.openclawGatewayToken) merged.openclawGatewayToken = discovered.openclawGatewayToken;
+
+  return applyEnvOverrides(merged);
 }
 
 function getSettings() {
@@ -149,7 +174,7 @@ function getSettings() {
 function sanitizeIncoming(update = {}) {
   const next = {};
   if (!update || typeof update !== 'object') return next;
-  for (const field of SETTINGS_FIELDS) {
+  for (const field of PERSISTED_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(update, field)) continue;
     next[field] = toSafeString(update[field]);
   }
@@ -165,13 +190,12 @@ function saveSettings(update = {}) {
   };
 
   const toWrite = {};
-  for (const field of SETTINGS_FIELDS) {
+  for (const field of PERSISTED_FIELDS) {
     toWrite[field] = toSafeString(merged[field]);
   }
 
   fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(toWrite, null, 2) + '\n', 'utf8');
-  cachedSettings = applyEnvOverrides(toWrite);
   return getSettings();
 }
 
