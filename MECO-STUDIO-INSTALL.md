@@ -1,31 +1,67 @@
-# Meco Studio 一键安装/升级（给智能体执行）
+# Meco Studio 安装 / 升级 / API Key 一体文档（AI 可读）
 
-## 1) 一键安装并启动
+## 一行安装（Install）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
 
-这个命令会自动完成：
-- 安装/升级 OpenClaw（若未安装会自动安装）
-- 安装 Kimi CLI（命令：`curl -L code.kimi.com/install.sh | bash`）
-- 安装 Whisper（`python3 -m pip install --user --upgrade openai-whisper`，用于 hot-topics 音频分析）
-- 拉取或更新 Meco Studio 到 `~/meco-studio`
-- 安装依赖并同步初始化智能体与技能（含 hot-topics，幂等，不重复注册）
-- 初始化知识库目录 `~/Documents/知识库/热门话题` 及分类目录（只补齐缺失目录，不覆盖已有内容）
-  - 分类目录：`AI_Tech`、`Entertainment`、`Military`、`Sports`、`Design`、`Health`、`Politics`、`Technology`、`Economy`、`Medical`、`Society`、`Trending`
-- 清空默认测试房间（`data/rooms.json` 变为 `[]`）
+## 一行升级（Upgrade）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
+```
+
+同一命令可重复执行，脚本为幂等设计。
+
+## 安装脚本默认行为
+
+- 安装/升级 OpenClaw（未安装自动安装）
+- 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
+- 安装 Whisper（`python3 -m pip install --user --upgrade openai-whisper`）
+- 拉取或更新仓库至 `~/meco-studio`
+- 安装 npm 依赖
+- 同步 bootstrap agents/skills（幂等，不重复注册）
+- 初始化 `~/Documents/知识库/热门话题` 及分类目录（只补齐缺失，不覆盖已有内容）
+- 默认清空测试房间数据（`data/rooms.json = []`）
 - 启动服务（默认 `http://127.0.0.1:3456`）
 
-## 2) 一键升级
+分类目录：
 
-升级和安装使用同一个命令，直接重跑即可：
+- `AI_Tech`
+- `Entertainment`
+- `Military`
+- `Sports`
+- `Design`
+- `Health`
+- `Politics`
+- `Technology`
+- `Economy`
+- `Medical`
+- `Society`
+- `Trending`
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
-```
+## API Key 配置（UI）
 
-## 3) 常用参数（可选）
+安装后访问 `http://127.0.0.1:3456`，点击左上角头像下拉，进入 **API Keys**。
+
+推荐配置项：
+
+- `OpenClaw Gateway Token`
+- `Kimi API Key`
+- `TikHub API Key`
+- `MiniMax API Key`（TTS）
+- `OpenAI API Key`（可选）
+
+点击“确定并自动安装/激活”后自动执行：
+
+- 检测/安装 Kimi CLI
+- 写入 `~/.kimi/config.json` / `~/.kimi/config.toml`
+- 安装 hot-topics 技能
+- 安装 hot-topics 依赖（含 whisper）
+- 初始化热门话题知识库目录（只补齐缺失）
+
+## 可选环境变量
 
 ```bash
 MECO_INSTALL_DIR="$HOME/meco-studio" \
@@ -38,15 +74,13 @@ HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
 
-## 4) 维护者：更新初始化包（agents/skills）
-
-在仓库根目录执行：
+## 维护者打包命令
 
 ```bash
 bash scripts/build-bootstrap-package.sh
 ```
 
-可选定向打包：
+定向打包：
 
 ```bash
 MECO_BOOTSTRAP_AGENTS="main,gates,hawking,jobs,kobe,munger" \
@@ -55,4 +89,33 @@ MECO_BOOTSTRAP_CONFIG_SKILLS="hot-topics" \
 bash scripts/build-bootstrap-package.sh
 ```
 
-初始化包输出目录：`bootstrap/openclaw/`
+输出目录：`bootstrap/openclaw/`
+
+## Machine Readable Spec (for AI Agent)
+
+```yaml
+name: "Meco Studio"
+type: "OpenClaw multi-agent management platform"
+install:
+  command: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash"
+  idempotent: true
+defaults:
+  install_dir: "~/meco-studio"
+  service_url: "http://127.0.0.1:3456"
+  openclaw_root: "~/.openclaw"
+  hot_topics_root: "~/Documents/知识库/热门话题"
+api_keys:
+  required:
+    - "OpenClaw Gateway Token"
+    - "Kimi API Key"
+    - "TikHub API Key"
+    - "MiniMax API Key"
+  optional:
+    - "OpenAI API Key"
+post_install_auto:
+  - "install/update openclaw"
+  - "install kimi cli"
+  - "install whisper deps"
+  - "sync agents and skills"
+  - "init hot-topics folders"
+```
