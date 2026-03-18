@@ -109,6 +109,75 @@
             background: rgba(0, 0, 0, 0.28);
             color: #ffffff;
         }
+        #at-chat-messages .message-content p {
+            margin: 0 0 0.55rem 0;
+        }
+        #at-chat-messages .message-content p:last-child {
+            margin-bottom: 0;
+        }
+        #at-chat-messages .message-content h1,
+        #at-chat-messages .message-content h2,
+        #at-chat-messages .message-content h3,
+        #at-chat-messages .message-content h4,
+        #at-chat-messages .message-content h5,
+        #at-chat-messages .message-content h6 {
+            margin: 0.55rem 0 0.45rem 0;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+        #at-chat-messages .message-content h1 { font-size: 1.2rem; }
+        #at-chat-messages .message-content h2 { font-size: 1.12rem; }
+        #at-chat-messages .message-content h3 { font-size: 1.04rem; }
+        #at-chat-messages .message-content ul,
+        #at-chat-messages .message-content ol {
+            margin: 0.5rem 0 0.5rem 1.15rem;
+            padding: 0;
+        }
+        #at-chat-messages .message-content li {
+            margin: 0.2rem 0;
+        }
+        #at-chat-messages .message-content blockquote {
+            margin: 0.55rem 0;
+            padding: 0.45rem 0.7rem;
+            border-left: 3px solid rgba(192, 132, 252, 0.55);
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 0.65rem;
+        }
+        #at-chat-messages .message-content pre {
+            margin: 0.6rem 0;
+            padding: 0.7rem 0.8rem;
+            background: rgba(5, 5, 5, 0.72);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 0.7rem;
+            overflow-x: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 0.84em;
+            line-height: 1.5;
+        }
+        #at-chat-messages .message-content code {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 0.45rem;
+            padding: 0.08rem 0.35rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+            font-size: 0.86em;
+        }
+        #at-chat-messages .message-content pre code {
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            padding: 0;
+            font-size: inherit;
+        }
+        #at-chat-messages .message-content a {
+            color: #93c5fd;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            word-break: break-all;
+        }
+        #at-chat-messages .message-content a:hover {
+            color: #bfdbfe;
+        }
         #at-chat-messages img {
             user-select: none !important;
             -webkit-user-select: none !important;
@@ -399,6 +468,8 @@
         const atSkillToggleState = new Map();
         let atSkillToggleSeq = 0;
         let atSkillFetchSeq = 0;
+        let atAttachmentUploadDepth = 0;
+        let atAttachPickerOpen = false;
 
         function getSkillToggleKey(agentId, skillName) {
             return `${agentId || ''}::${skillName || ''}`;
@@ -1156,6 +1227,98 @@
 
         function getAgentTextInputElement() {
             return document.getElementById('at-chat-input');
+        }
+
+        function closeAttachPicker() {
+            const root = document.getElementById('at-attach-picker-root');
+            const menu = document.getElementById('at-attach-picker');
+            const btn = document.getElementById('at-upload-btn');
+            if (menu) menu.classList.add('hidden');
+            if (btn) btn.classList.remove('bg-white/10', 'border-white/20', 'text-white');
+            if (root) root.classList.remove('z-20');
+            atAttachPickerOpen = false;
+        }
+
+        function openAttachPicker() {
+            const root = document.getElementById('at-attach-picker-root');
+            const menu = document.getElementById('at-attach-picker');
+            const btn = document.getElementById('at-upload-btn');
+            if (!menu || !btn) return;
+            menu.classList.remove('hidden');
+            btn.classList.add('bg-white/10', 'border-white/20', 'text-white');
+            if (root) root.classList.add('z-20');
+            atAttachPickerOpen = true;
+        }
+
+        window.toggleAttachPicker = function() {
+            if (atAttachmentUploadDepth > 0) return;
+            if (atAttachPickerOpen) {
+                closeAttachPicker();
+                return;
+            }
+            openAttachPicker();
+        };
+
+        window.chooseAttachmentSource = function(kind) {
+            if (atAttachmentUploadDepth > 0) return;
+            const mode = String(kind || '').trim();
+            closeAttachPicker();
+            if (mode === 'folder') {
+                const folderInput = document.getElementById('at-folder-input');
+                if (!folderInput) return;
+                folderInput.value = '';
+                folderInput.click();
+                return;
+            }
+            const fileInput = document.getElementById('at-file-input');
+            if (!fileInput) return;
+            fileInput.value = '';
+            fileInput.click();
+        };
+
+        function setAttachmentUploadIndicator(active, text = '') {
+            const uploading = !!active;
+            const indicator = document.getElementById('at-attachment-uploading');
+            const indicatorText = document.getElementById('at-attachment-uploading-text');
+            if (indicator) {
+                indicator.classList.toggle('hidden', !uploading);
+                indicator.classList.toggle('flex', uploading);
+            }
+            if (indicatorText && uploading) {
+                indicatorText.textContent = (typeof text === 'string' && text.trim())
+                    ? text.trim()
+                    : 'Uploading attachments...';
+            }
+
+            const sendBtn = document.getElementById('at-send-btn');
+            if (sendBtn) {
+                if (uploading) {
+                    sendBtn.disabled = true;
+                } else {
+                    sendBtn.disabled = !(currentChannelId || currentAgentToolId);
+                }
+            }
+
+            const uploadBtn = document.getElementById('at-upload-btn');
+            if (uploadBtn) uploadBtn.disabled = uploading;
+            const fileInput = document.getElementById('at-file-input');
+            if (fileInput) fileInput.disabled = uploading;
+            const folderInput = document.getElementById('at-folder-input');
+            if (folderInput) folderInput.disabled = uploading;
+            const replaceInput = document.getElementById('at-replace-file-input');
+            if (replaceInput) replaceInput.disabled = uploading;
+        }
+
+        function beginAttachmentUpload(text = 'Uploading attachments...') {
+            atAttachmentUploadDepth += 1;
+            setAttachmentUploadIndicator(true, text);
+        }
+
+        function endAttachmentUpload() {
+            atAttachmentUploadDepth = Math.max(0, atAttachmentUploadDepth - 1);
+            if (atAttachmentUploadDepth === 0) {
+                setAttachmentUploadIndicator(false);
+            }
         }
 
         function placeCaretAtEnd(editor) {
@@ -3606,7 +3769,8 @@
             const msg = state.messages[idx];
             const contentDiv = messageDiv.querySelector('.message-content');
             if (contentDiv) {
-                contentDiv.textContent = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+                const streamingText = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+                renderBubbleContent(contentDiv, streamingText, true);
             }
             const reasoningContainer = messageDiv.querySelector('.reasoning-container');
             const reasoningDiv = messageDiv.querySelector('.reasoning-content');
@@ -3616,10 +3780,10 @@
             if (reasoningContainer && reasoningDiv) {
                 if (reasoningText.trim()) {
                     reasoningContainer.classList.remove('hidden');
-                    reasoningDiv.textContent = reasoningText;
+                    reasoningDiv.innerHTML = renderMarkdownToHtml(reasoningText);
                 } else {
                     reasoningContainer.classList.add('hidden');
-                    reasoningDiv.textContent = '';
+                    reasoningDiv.innerHTML = '';
                 }
             }
             chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -4287,6 +4451,166 @@
                 .replace(/'/g, '&#39;');
         }
 
+        function renderMarkdownInline(escapedText) {
+            const source = String(escapedText || '');
+            if (!source) return '';
+
+            const codeTokens = [];
+            const codeToken = (html) => {
+                const token = `@@MD_INLINE_CODE_${codeTokens.length}@@`;
+                codeTokens.push(html);
+                return token;
+            };
+            const linkTokens = [];
+            const linkToken = (html) => {
+                const token = `@@MD_INLINE_LINK_${linkTokens.length}@@`;
+                linkTokens.push(html);
+                return token;
+            };
+
+            let html = source.replace(/`([^`\n]+)`/g, (_, inner) => {
+                return codeToken(`<code>${inner}</code>`);
+            });
+
+            html = html.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+                const safeUrl = escapeHtml(url);
+                return linkToken(`<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+            });
+
+            html = html.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (_, prefix, url) => {
+                const safeUrl = escapeHtml(url);
+                return `${prefix}${linkToken(`<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${safeUrl}</a>`)}`;
+            });
+
+            html = html.replace(/\*\*([^*][\s\S]*?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/__([^_][\s\S]*?)__/g, '<strong>$1</strong>');
+            html = html.replace(/(^|[^\*])\*([^*\n][\s\S]*?)\*(?!\*)/g, '$1<em>$2</em>');
+            html = html.replace(/(^|[^_])_([^_\n][\s\S]*?)_(?!_)/g, '$1<em>$2</em>');
+            html = html.replace(/~~([^~][\s\S]*?)~~/g, '<del>$1</del>');
+
+            html = html.replace(/@@MD_INLINE_LINK_(\d+)@@/g, (_, idx) => {
+                const i = Number(idx);
+                return Number.isInteger(i) && i >= 0 && i < linkTokens.length ? linkTokens[i] : '';
+            });
+            html = html.replace(/@@MD_INLINE_CODE_(\d+)@@/g, (_, idx) => {
+                const i = Number(idx);
+                return Number.isInteger(i) && i >= 0 && i < codeTokens.length ? codeTokens[i] : '';
+            });
+            return html;
+        }
+
+        function renderMarkdownToHtml(rawText) {
+            const escaped = escapeHtml(String(rawText || '').replace(/\r\n?/g, '\n'));
+            if (!escaped.trim()) return '';
+
+            const blockTokens = [];
+            const blockToken = (html) => {
+                const token = `@@MD_BLOCK_${blockTokens.length}@@`;
+                blockTokens.push(html);
+                return token;
+            };
+
+            let prepared = escaped.replace(/```([a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g, (_, lang, codeBody) => {
+                const safeLang = (lang || '').trim().toLowerCase();
+                const languageClass = safeLang ? ` language-${safeLang}` : '';
+                return blockToken(`<pre><code class="${languageClass.trim()}">${codeBody}</code></pre>`);
+            });
+
+            const lines = prepared.split('\n');
+            const parts = [];
+            let inUl = false;
+            let inOl = false;
+            const closeLists = () => {
+                if (inUl) {
+                    parts.push('</ul>');
+                    inUl = false;
+                }
+                if (inOl) {
+                    parts.push('</ol>');
+                    inOl = false;
+                }
+            };
+
+            for (const rawLine of lines) {
+                const line = String(rawLine || '');
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    closeLists();
+                    continue;
+                }
+
+                const tokenMatch = /^@@MD_BLOCK_(\d+)@@$/.exec(trimmed);
+                if (tokenMatch) {
+                    closeLists();
+                    const idx = Number(tokenMatch[1]);
+                    if (Number.isInteger(idx) && idx >= 0 && idx < blockTokens.length) {
+                        parts.push(blockTokens[idx]);
+                    }
+                    continue;
+                }
+
+                const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+                if (headingMatch) {
+                    closeLists();
+                    const level = Math.min(6, headingMatch[1].length);
+                    parts.push(`<h${level}>${renderMarkdownInline(headingMatch[2])}</h${level}>`);
+                    continue;
+                }
+
+                const ulMatch = /^[-*+]\s+(.+)$/.exec(trimmed);
+                if (ulMatch) {
+                    if (!inUl) {
+                        if (inOl) {
+                            parts.push('</ol>');
+                            inOl = false;
+                        }
+                        parts.push('<ul>');
+                        inUl = true;
+                    }
+                    parts.push(`<li>${renderMarkdownInline(ulMatch[1])}</li>`);
+                    continue;
+                }
+
+                const olMatch = /^\d+\.\s+(.+)$/.exec(trimmed);
+                if (olMatch) {
+                    if (!inOl) {
+                        if (inUl) {
+                            parts.push('</ul>');
+                            inUl = false;
+                        }
+                        parts.push('<ol>');
+                        inOl = true;
+                    }
+                    parts.push(`<li>${renderMarkdownInline(olMatch[1])}</li>`);
+                    continue;
+                }
+
+                const quoteMatch = /^>\s?(.+)$/.exec(trimmed);
+                if (quoteMatch) {
+                    closeLists();
+                    parts.push(`<blockquote>${renderMarkdownInline(quoteMatch[1])}</blockquote>`);
+                    continue;
+                }
+
+                closeLists();
+                parts.push(`<p>${renderMarkdownInline(trimmed)}</p>`);
+            }
+
+            closeLists();
+            return parts.join('\n');
+        }
+
+        function renderBubbleContent(contentDiv, rawText, isAssistant = false) {
+            const source = typeof rawText === 'string' ? rawText : '';
+            const parsed = isAssistant
+                ? parseAssistantImageUrls(source)
+                : { text: source, imageUrls: [], videoUrls: [] };
+            if (contentDiv) {
+                contentDiv.innerHTML = renderMarkdownToHtml(parsed.text);
+            }
+            return parsed;
+        }
+
         function normalizeMessageFiles(files) {
             if (!Array.isArray(files) || files.length === 0) return [];
             return files
@@ -4540,11 +4864,11 @@
                 ${avatarHtml}
                 <div class="${isUser ? 'bg-primary text-black shadow-neon' : 'bg-white/10 text-gray-200 border border-white/5 shadow-glass'} p-5 rounded-3xl ${isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'} text-sm leading-relaxed backdrop-blur-md group relative hover:shadow-xl transition-all duration-300 min-w-[60px]">
                     ${isUser ? '' : '<div class="sender-label hidden text-[12px] font-semibold text-primary mb-2"></div>'}
-                    <div class="message-content select-text whitespace-pre-wrap" style="word-break: break-word;"></div>
+                    <div class="message-content select-text" style="word-break: break-word;"></div>
                     ${isUser ? '' : `
                     <div class="reasoning-container hidden mt-3 p-3 rounded-2xl bg-black/20 border border-white/10">
                         <div class="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Thinking / 推理</div>
-                        <div class="reasoning-content select-text whitespace-pre-wrap text-xs text-gray-300 leading-relaxed" style="word-break: break-word;"></div>
+                        <div class="reasoning-content select-text text-xs text-gray-300 leading-relaxed" style="word-break: break-word;"></div>
                     </div>
                     `}
                 </div>
@@ -4552,8 +4876,7 @@
             
             const contentDiv = div.querySelector('.message-content');
             const rawRenderText = typeof options.renderedContent === 'string' ? options.renderedContent : (text || '');
-            const parsedAssistant = isUser ? { text: rawRenderText, imageUrls: [], videoUrls: [] } : parseAssistantImageUrls(rawRenderText);
-            contentDiv.textContent = parsedAssistant.text;
+            const parsedAssistant = renderBubbleContent(contentDiv, rawRenderText, !isUser);
             const senderLabel = div.querySelector('.sender-label');
             const senderName = (!isUser && typeof options.senderName === 'string') ? options.senderName.trim() : '';
             if (senderLabel && senderName) {
@@ -4566,7 +4889,7 @@
             const reasoningText = typeof options.reasoning === 'string' ? options.reasoning : '';
             if (reasoningContainer && reasoningDiv && reasoningText) {
                 reasoningContainer.classList.remove('hidden');
-                reasoningDiv.textContent = reasoningText;
+                reasoningDiv.innerHTML = renderMarkdownToHtml(reasoningText);
             }
 
             const bubble = div.querySelector('.p-5');
@@ -4659,7 +4982,8 @@
 
             const contentDiv = currentMessageDiv.querySelector('.message-content');
             if (contentDiv) {
-                contentDiv.textContent = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+                const streamingText = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+                renderBubbleContent(contentDiv, streamingText, true);
             }
             const reasoningContainer = currentMessageDiv.querySelector('.reasoning-container');
             const reasoningDiv = currentMessageDiv.querySelector('.reasoning-content');
@@ -4667,10 +4991,10 @@
             if (reasoningContainer && reasoningDiv) {
                 if (reasoningText.trim()) {
                     reasoningContainer.classList.remove('hidden');
-                    reasoningDiv.textContent = reasoningText;
+                    reasoningDiv.innerHTML = renderMarkdownToHtml(reasoningText);
                 } else {
                     reasoningContainer.classList.add('hidden');
-                    reasoningDiv.textContent = '';
+                    reasoningDiv.innerHTML = '';
                 }
             }
             const chatContainer = document.getElementById('at-chat-messages');
@@ -4856,7 +5180,7 @@
             if (item.mode === 'web') {
                 return `web:${item.name || ''}:${item.size || 0}:${item.lastModified || 0}`;
             }
-            return `system:${item.kind || ''}:${normalizeSystemRelativePath(item.relativePath || item.name || '')}:${item.size || 0}:${item.lastModified || 0}`;
+            return `system:${item.kind || ''}:${normalizeSystemRelativePath(item.absolutePath || item.relativePath || item.name || '')}:${item.size || 0}:${item.lastModified || 0}`;
         }
 
         function addPendingAttachment(item) {
@@ -4874,6 +5198,8 @@
             renderPendingAttachments();
             const fileInput = document.getElementById('at-file-input');
             if (fileInput) fileInput.value = '';
+            const folderInput = document.getElementById('at-folder-input');
+            if (folderInput) folderInput.value = '';
             const replaceInput = document.getElementById('at-replace-file-input');
             if (replaceInput) replaceInput.value = '';
         }
@@ -5168,6 +5494,8 @@
         };
 
         window.handleReplaceFileUpload = async function(files) {
+            if (atAttachmentUploadDepth > 0) return;
+            closeAttachPicker();
             const replaceId = atReplacingAttachmentId ? String(atReplacingAttachmentId).trim() : '';
             atReplacingAttachmentId = null;
             const input = document.getElementById('at-replace-file-input');
@@ -5177,29 +5505,116 @@
             if (!nextFile) return;
             const idx = atPendingFiles.findIndex((x) => x && x.id === replaceId);
             if (idx < 0) return;
-            const nextItem = await createPendingWebAttachment(nextFile, replaceId);
-            if (!nextItem) return;
-            atPendingFiles[idx] = nextItem;
-            renderPendingAttachments();
+            beginAttachmentUpload('Preparing attachment...');
+            try {
+                const nextItem = await createPendingWebAttachment(nextFile, replaceId);
+                if (!nextItem) return;
+                atPendingFiles[idx] = nextItem;
+                renderPendingAttachments();
+            } finally {
+                endAttachmentUpload();
+            }
         };
 
-        window.handleFileUpload = function(files) {
+        window.handleFileUpload = async function(files) {
+            if (atAttachmentUploadDepth > 0) return;
             if (!files || files.length === 0) return;
-            void addWebFilesToPending(files);
-            const fileInput = document.getElementById('at-file-input');
-            if (fileInput) fileInput.value = '';
+            closeAttachPicker();
+            beginAttachmentUpload('Preparing attachments...');
+            try {
+                await addWebFilesToPending(files);
+            } finally {
+                endAttachmentUpload();
+                const fileInput = document.getElementById('at-file-input');
+                if (fileInput) fileInput.value = '';
+            }
         };
 
         window.handleComposerDrop = async function(event) {
             if (!event) return;
             event.preventDefault();
+            if (atAttachmentUploadDepth > 0) return;
+            closeAttachPicker();
             const composer = event.currentTarget;
             if (composer) {
                 composer.classList.remove('border-primary', 'bg-white/10');
             }
             const dt = event.dataTransfer;
             if (!dt) return;
-            await addWebFilesToPending(dt.files);
+            beginAttachmentUpload('Preparing attachments...');
+            try {
+                await addWebFilesToPending(dt.files);
+            } finally {
+                endAttachmentUpload();
+            }
+        };
+
+        function buildSystemPathPendingItemFromUpload(uploadResult) {
+            if (!uploadResult || typeof uploadResult !== 'object') return null;
+            const absolutePath = typeof uploadResult.absolutePath === 'string' ? uploadResult.absolutePath.trim() : '';
+            if (!absolutePath) return null;
+            const displayPath = typeof uploadResult.displayPath === 'string' ? uploadResult.displayPath.trim() : '';
+            const fallbackName = absolutePath.split('/').filter(Boolean).pop() || 'folder';
+            const folderName = (typeof uploadResult.folderName === 'string' && uploadResult.folderName.trim())
+                ? uploadResult.folderName.trim()
+                : fallbackName;
+            return {
+                id: buildPendingAttachmentId(),
+                mode: 'system',
+                kind: 'folder',
+                name: folderName,
+                type: 'application/x-system-folder',
+                pathType: 'folder',
+                absolutePath,
+                relativePath: displayPath || absolutePath,
+                displayPath
+            };
+        }
+
+        window.handleFolderUpload = async function(files) {
+            if (atAttachmentUploadDepth > 0) return;
+            const input = document.getElementById('at-folder-input');
+            if (!files || files.length === 0) {
+                if (input) input.value = '';
+                return;
+            }
+            closeAttachPicker();
+            const fileList = Array.from(files).filter((file) => file instanceof File);
+            if (fileList.length === 0) {
+                if (input) input.value = '';
+                return;
+            }
+            beginAttachmentUpload('Uploading folder...');
+            try {
+                const firstRel = String(fileList[0].webkitRelativePath || '').replace(/\\/g, '/').trim();
+                const folderName = firstRel.split('/')[0] || 'folder';
+                const formData = new FormData();
+                fileList.forEach((file) => {
+                    formData.append('files', file, file.name);
+                    formData.append('relPaths', file.webkitRelativePath || file.name || '');
+                });
+                formData.append('folderName', folderName);
+                const res = await fetch('/api/uploads/attachment-folder', {
+                    method: 'POST',
+                    body: formData
+                });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok || body.success === false) {
+                    throw new Error(body.error || `HTTP ${res.status}`);
+                }
+                const item = buildSystemPathPendingItemFromUpload(body);
+                if (!item) {
+                    throw new Error('invalid upload response');
+                }
+                addPendingAttachment(item);
+                renderPendingAttachments();
+            } catch (e) {
+                console.error('Folder upload failed', e);
+                alert(`文件夹上传失败: ${e.message || e}`);
+            } finally {
+                endAttachmentUpload();
+                if (input) input.value = '';
+            }
         };
 
         async function encodePendingFiles(files) {
@@ -5226,6 +5641,43 @@
                 });
             });
             return Promise.all(filePromises);
+        }
+
+        function encodePendingSystemPaths(files) {
+            const pending = Array.isArray(files) ? files : [];
+            return pending
+                .filter((item) => item && item.mode === 'system' && (item.kind === 'folder' || item.kind === 'file'))
+                .map((item) => {
+                    const absPath = (typeof item.absolutePath === 'string' && item.absolutePath.trim())
+                        ? item.absolutePath.trim()
+                        : '';
+                    if (!absPath) return null;
+                    const pathType = item.kind === 'folder' ? 'folder' : 'file';
+                    return {
+                        path: absPath,
+                        pathType,
+                        type: pathType === 'folder' ? 'application/x-system-folder' : 'application/x-system-file'
+                    };
+                })
+                .filter(Boolean);
+        }
+
+        function buildLocalMessageFiles(payloadFiles, payloadSystemPaths) {
+            const files = Array.isArray(payloadFiles) ? payloadFiles.slice() : [];
+            (Array.isArray(payloadSystemPaths) ? payloadSystemPaths : []).forEach((item) => {
+                if (!item || typeof item !== 'object') return;
+                const absPath = typeof item.path === 'string' ? item.path.trim() : '';
+                if (!absPath) return;
+                const pathType = item.pathType === 'folder' ? 'folder' : 'file';
+                const inferredName = absPath.split('/').filter(Boolean).pop() || (pathType === 'folder' ? 'folder' : 'file');
+                files.push({
+                    name: inferredName,
+                    type: pathType === 'folder' ? 'application/x-system-folder' : 'application/x-system-file',
+                    path: absPath,
+                    pathType
+                });
+            });
+            return files;
         }
 
         function scrollAgentToolsChatToBottom() {
@@ -5347,6 +5799,7 @@
         }
 
         window.sendAgentToolsMessage = async function() {
+            if (atAttachmentUploadDepth > 0) return;
             const input = document.getElementById('at-chat-input');
             const channelId = currentChannelId;
             const agentId = currentAgentToolId;
@@ -5368,12 +5821,26 @@
                 return;
             }
 
-            const payload = { type: 'message', content: text, files: [] };
-            payload.files = await encodePendingFiles(atPendingFiles);
+            const payload = { type: 'message', content: text, files: [], systemPaths: [] };
+            if (atPendingFiles.length > 0) {
+                beginAttachmentUpload('Uploading attachments...');
+                try {
+                    payload.files = await encodePendingFiles(atPendingFiles);
+                    payload.systemPaths = encodePendingSystemPaths(atPendingFiles);
+                } finally {
+                    endAttachmentUpload();
+                }
+            } else {
+                payload.files = [];
+                payload.systemPaths = [];
+            }
 
-            const hasAttachment = payload.files.length > 0;
+            const hasAttachment = payload.files.length > 0 || payload.systemPaths.length > 0;
             if (!text && !hasAttachment) return;
-            const attachmentFallbackText = payload.files.length > 0 ? `[Uploaded ${payload.files.length} file(s)]` : '';
+            const localFiles = buildLocalMessageFiles(payload.files, payload.systemPaths);
+            const attachmentFallbackText = payload.systemPaths.length > 0
+                ? `[Attached ${payload.systemPaths.length} local path(s)]`
+                : (payload.files.length > 0 ? `[Uploaded ${payload.files.length} file(s)]` : '');
 
             if (channelId) {
                 payload.channelRuleMode = !!atChannelRuleMode;
@@ -5386,7 +5853,7 @@
                     content: text || attachmentFallbackText,
                     senderName: 'You',
                     reasoning: '',
-                    files: payload.files
+                    files: localFiles
                 });
                 state.pendingQueue.push(payload);
                 renderAgentToolsChannelChat(channelId);
@@ -5406,7 +5873,7 @@
                 role: 'user',
                 content: text || attachmentFallbackText,
                 reasoning: '',
-                files: payload.files
+                files: localFiles
             });
             state.pendingQueue.push(payload);
             renderAgentToolsChat(agentId);
@@ -5571,6 +6038,7 @@
             loadAgentToolsChannelRuleModePref();
             loadAgentToolsImmersivePref();
             loadAgentToolsRuntimeStatusPref();
+            setAttachmentUploadIndicator(false);
             updateAgentToolsImmersiveToggleUi();
             updateAgentToolsChannelRuleModeUi();
             updateSidebarBusyIndicators();
@@ -5591,6 +6059,10 @@
                 if (root && menu && !root.contains(e.target)) {
                     menu.classList.add('hidden');
                 }
+                const attachRoot = document.getElementById('at-attach-picker-root');
+                if (attachRoot && !attachRoot.contains(e.target)) {
+                    closeAttachPicker();
+                }
                 const mentionPopup = getMentionPopupElement();
                 const mentionInput = getChannelInputElement();
                 const mentionInputWrap = document.getElementById('at-channel-input-wrap');
@@ -5606,6 +6078,7 @@
             });
             document.addEventListener('keyup', (event) => {
                 if (event.key === 'Alt') atAltPressed = false;
+                if (event.key === 'Escape') closeAttachPicker();
             });
             window.addEventListener('blur', () => {
                 atAltPressed = false;
@@ -6017,18 +6490,39 @@
                      </div>
                      <div class="relative max-w-3xl mx-auto flex items-end gap-3">
                          <!-- File Upload Button -->
-                         <button class="w-14 h-14 flex items-center justify-center flex-shrink-0 bg-white/5 hover:bg-white/10 rounded-full transition-colors text-gray-400 hover:text-white border border-transparent hover:border-white/10" onclick="document.getElementById('at-file-input').click()" title="Upload files">
-                             <span class="material-icons-round text-xl">attach_file</span>
-                         </button>
+                         <div id="at-attach-picker-root" class="relative flex-shrink-0">
+                             <button id="at-upload-btn" class="w-14 h-14 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors text-gray-400 hover:text-white border border-transparent hover:border-white/10 disabled:opacity-50 disabled:cursor-not-allowed" onclick="toggleAttachPicker()" title="Upload files">
+                                 <span class="material-icons-round text-xl">attach_file</span>
+                             </button>
+                             <div id="at-attach-picker" class="hidden absolute left-0 bottom-[calc(100%+8px)] w-44 rounded-xl border border-white/10 bg-black/90 backdrop-blur-md shadow-2xl overflow-hidden">
+                                 <button type="button"
+                                         class="w-full px-3 py-2.5 text-left text-sm text-gray-200 hover:bg-white/10 transition-colors flex items-center gap-2"
+                                         onclick="chooseAttachmentSource('file')">
+                                     <span class="material-icons-round text-[18px] text-cyan-300">description</span>
+                                     <span>Select File</span>
+                                 </button>
+                                 <button type="button"
+                                         class="w-full px-3 py-2.5 text-left text-sm text-gray-200 hover:bg-white/10 transition-colors flex items-center gap-2 border-t border-white/10"
+                                         onclick="chooseAttachmentSource('folder')">
+                                     <span class="material-icons-round text-[18px] text-yellow-300">folder</span>
+                                     <span>Select Folder</span>
+                                 </button>
+                             </div>
+                         </div>
                          <input type="file" id="at-file-input" multiple class="hidden" onchange="handleFileUpload(this.files)">
+                         <input type="file" id="at-folder-input" webkitdirectory directory multiple class="hidden" onchange="handleFolderUpload(this.files)">
                          <input type="file" id="at-replace-file-input" accept="video/*" class="hidden" onchange="handleReplaceFileUpload(this.files)">
 
                          <div class="flex-1 relative bg-white/5 border border-white/10 rounded-[28px] focus-within:bg-white/10 focus-within:border-primary/50 transition-all shadow-lg flex flex-col justify-center"
                               ondragover="event.preventDefault(); this.classList.add('border-primary', 'bg-white/10')"
-                              ondragleave="this.classList.remove('border-primary', 'bg-white/10')"
-                              ondrop="handleComposerDrop(event)">
+                             ondragleave="this.classList.remove('border-primary', 'bg-white/10')"
+                             ondrop="handleComposerDrop(event)">
                              <div id="at-mention-popup" class="mention-popup hidden"></div>
                              <div id="file-preview-area" class="flex flex-wrap gap-2 p-3 pb-0 empty:hidden"></div>
+                             <div id="at-attachment-uploading" class="hidden items-center gap-2 px-4 pt-3 text-xs text-blue-200">
+                                 <span class="inline-block w-3 h-3 rounded-full border border-blue-300/50 border-t-blue-400 animate-spin"></span>
+                                 <span id="at-attachment-uploading-text">Uploading attachments...</span>
+                             </div>
                              <textarea id="at-chat-input" 
                                     class="w-full bg-transparent border-none px-6 py-4 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none h-14 min-h-[56px] max-h-[104px] leading-6 overflow-y-hidden box-border"
                                     placeholder="Message agent..."

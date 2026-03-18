@@ -604,6 +604,23 @@ const DATA_AGENTS_DIR = path.join(__dirname, 'data/agents');
 // OpenClaw 系统目录
 const OPENCLAW_ROOT_DIR = path.join(os.homedir(), '.openclaw');
 const OPENCLAW_HOME_DIR = path.join(OPENCLAW_ROOT_DIR, 'agents');
+const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_ROOT_DIR, 'openclaw.json');
+
+function patchOpenClawConfigCompat() {
+  try {
+    if (!fs.existsSync(OPENCLAW_CONFIG_PATH)) return;
+    const raw = fs.readFileSync(OPENCLAW_CONFIG_PATH, 'utf-8');
+    const parsed = JSON.parse(raw);
+    const chatCompletions = parsed?.gateway?.http?.endpoints?.chatCompletions;
+    if (!chatCompletions || !Object.prototype.hasOwnProperty.call(chatCompletions, 'images')) return;
+    delete chatCompletions.images;
+    fs.writeFileSync(OPENCLAW_CONFIG_PATH, `${JSON.stringify(parsed, null, 2)}\n`, 'utf-8');
+    console.log('[OpenClawCompat] removed unsupported config: gateway.http.endpoints.chatCompletions.images');
+  } catch (e) {
+    console.warn(`[OpenClawCompat] patch failed: ${e.message}`);
+  }
+}
+patchOpenClawConfigCompat();
 
 // 扫描 OpenClaw 系统目录
 function scanOpenClawAgents() {
@@ -1597,9 +1614,9 @@ function saveUploadedFilesAndBuildContext(files) {
   uploads.forEach((f) => {
     if (!f || typeof f.data !== 'string') return;
     try {
-      const matches = f.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-      if (!matches || matches.length !== 3) return;
-      const buffer = Buffer.from(matches[2], 'base64');
+      const parsed = parseDataUriBase64(f.data);
+      if (!parsed || !Buffer.isBuffer(parsed.buffer) || parsed.buffer.length === 0) return;
+      const buffer = parsed.buffer;
       const safeName = ((typeof f.name === 'string' ? f.name : 'upload.bin').replace(/[^a-zA-Z0-9._-]/g, '_'));
       const filePath = path.join(uploadsDir, `${Date.now()}_${safeName}`);
       fs.writeFileSync(filePath, buffer);
@@ -1649,17 +1666,62 @@ function buildOpenClawAttachmentContext(savedFiles, systemPaths) {
 
   if (fileEntries.length === 0 && folderEntries.length === 0) return '';
   const lines = [];
+  const attachmentRefs = [];
+  let imageIdx = 0;
+  let videoIdx = 0;
+  let fileIdx = 0;
+  let folderIdx = 0;
 
-  if (fileEntries.length === 1) {
-    const one = fileEntries[0];
-    const mimeHint = one.type ? ` (${one.type})` : '';
-    lines.push(`[media attached: ${one.path}${mimeHint}]`);
-  } else if (fileEntries.length > 1) {
-    lines.push(`[media attached: ${fileEntries.length} files]`);
-    fileEntries.forEach((entry, idx) => {
-      const mimeHint = entry.type ? ` (${entry.type})` : '';
-      lines.push(`[media attached ${idx + 1}/${fileEntries.length}: ${entry.path}${mimeHint}]`);
+  fileEntries.forEach((entry) => {
+    const type = String(entry.type || '').toLowerCase();
+    const image = isImageMimeOrPath(type, entry.path);
+    const video = type.startsWith('video/');
+    if (image) {
+      imageIdx += 1;
+      attachmentRefs.push({ kind: 'image', kindIndex: imageIdx, path: entry.path, name: path.basename(entry.path) || entry.path });
+      return;
+    }
+    if (video) {
+      videoIdx += 1;
+      attachmentRefs.push({ kind: 'video', kindIndex: videoIdx, path: entry.path, name: path.basename(entry.path) || entry.path });
+      return;
+    }
+    fileIdx += 1;
+    attachmentRefs.push({ kind: 'file', kindIndex: fileIdx, path: entry.path, name: path.basename(entry.path) || entry.path });
+  });
+
+  folderEntries.forEach((folderPath) => {
+    folderIdx += 1;
+    attachmentRefs.push({ kind: 'folder', kindIndex: folderIdx, path: folderPath, name: path.basename(folderPath) || folderPath });
+  });
+
+  if (attachmentRefs.length > 0) {
+    const kindLabelMap = {
+      image: 'image',
+      video: 'video',
+      file: 'file',
+      folder: 'folder'
+    };
+    lines.push('附件路径索引 / Attachment path index:');
+    attachmentRefs.forEach((ref, index) => {
+      const kindLabel = kindLabelMap[ref.kind] || 'file';
+      lines.push(`[${index + 1}] ${ref.path} (${kindLabel}, ${ref.name})`);
     });
+    lines.push('别名映射 / Alias mapping:');
+    attachmentRefs.forEach((ref, index) => {
+      const no = index + 1;
+      if (ref.kind === 'image') {
+        lines.push(`图${ref.kindIndex} / image${ref.kindIndex} -> [${no}]`);
+      } else if (ref.kind === 'video') {
+        lines.push(`视频${ref.kindIndex} / video${ref.kindIndex} -> [${no}]`);
+      } else if (ref.kind === 'folder') {
+        lines.push(`文件夹${ref.kindIndex} / folder${ref.kindIndex} -> [${no}]`);
+      } else {
+        lines.push(`文件${ref.kindIndex} / file${ref.kindIndex} -> [${no}]`);
+      }
+      lines.push(`附件${no} / attachment${no} -> [${no}]`);
+    });
+    lines.push('当用户提到“图1/视频1/文件1/附件1”时，请按以上索引和路径理解并回答。');
   }
 
   fileEntries.forEach((entry) => {
@@ -1769,7 +1831,7 @@ function truncateAttachmentText(text, limit = ATTACHMENT_MAX_INLINE_TEXT_CHARS) 
   return `${source.slice(0, limit)}\n...[truncated]`;
 }
 
-function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
+function buildOpenClawMultimodalMessages(userText, uploads, savedFiles, systemPaths) {
   const contentParts = [];
   const attachmentTextBlocks = [];
   const attachmentReferences = [];
@@ -1787,8 +1849,9 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
     if (!normalized) return;
     attachmentTextBlocks.push(normalized);
   };
-  const pushAttachmentReference = (kind, name) => {
+  const pushAttachmentReference = (kind, name, localPath = '') => {
     const normalizedName = typeof name === 'string' && name.trim() ? name.trim() : `${kind}_${attachmentReferences.length + 1}`;
+    const normalizedPath = typeof localPath === 'string' ? localPath.trim() : '';
     let kindIndex = 0;
     if (kind === 'image') {
       imageRefCount += 1;
@@ -1807,20 +1870,26 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
       globalIndex: attachmentReferences.length + 1,
       kind,
       kindIndex,
-      name: normalizedName
+      name: normalizedName,
+      path: normalizedPath
     });
   };
 
   const files = [];
+  const savedList = Array.isArray(savedFiles) ? savedFiles : [];
+  let savedIndex = 0;
   (Array.isArray(uploads) ? uploads : []).forEach((item) => {
     if (!item || typeof item !== 'object') return;
     if (typeof item.data !== 'string' || !/^data:/i.test(item.data)) return;
+    const saved = savedList[savedIndex] || null;
+    savedIndex += 1;
     files.push({
       source: 'upload',
       name: (typeof item.name === 'string' && item.name.trim()) ? item.name.trim() : 'upload.bin',
       mime: typeof item.type === 'string' ? item.type : '',
       dataUri: item.data,
-      thumbnail: (typeof item.thumbnail === 'string' && item.thumbnail.trim()) ? item.thumbnail.trim() : ''
+      thumbnail: (typeof item.thumbnail === 'string' && item.thumbnail.trim()) ? item.thumbnail.trim() : '',
+      savedPath: saved && typeof saved.path === 'string' ? saved.path : ''
     });
   });
 
@@ -1829,7 +1898,7 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
     const absPath = typeof item.path === 'string' ? item.path.trim() : '';
     if (!absPath) return;
     if (item.pathType === 'folder') {
-      pushAttachmentReference('folder', path.basename(absPath) || absPath);
+      pushAttachmentReference('folder', path.basename(absPath) || absPath, absPath);
       pushAttachmentText(`[Attached local folder] ${absPath}`);
       return;
     }
@@ -1845,24 +1914,24 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
     if (file.source === 'upload') {
       const parsed = parseDataUriBase64(file.dataUri);
       if (!parsed) {
-        pushAttachmentReference('file', file.name);
-        pushAttachmentText(`[Attached file] ${file.name}`);
+        pushAttachmentReference('file', file.name, file.savedPath || '');
+        pushAttachmentText(file.savedPath ? `[Attached file] ${file.savedPath}` : `[Attached file] ${file.name}`);
         continue;
       }
       const mime = normalizeAttachmentMime(file.mime || parsed.mime, file.name);
       if (isImageMimeOrPath(mime, file.name)) {
         const imageMime = normalizeGatewayImageMime(parsed.mime || mime);
         if (!ATTACHMENT_SUPPORTED_IMAGE_MIMES.has(imageMime)) {
-          pushAttachmentReference('image', file.name);
+          pushAttachmentReference('image', file.name, file.savedPath || '');
           pushAttachmentText(`[Image attachment not supported by gateway MIME] ${file.name} (${imageMime || mime})`);
           continue;
         }
         if (parsed.buffer.length > ATTACHMENT_MAX_INLINE_IMAGE_BYTES) {
-          pushAttachmentReference('image', file.name);
+          pushAttachmentReference('image', file.name, file.savedPath || '');
           pushAttachmentText(`[Image attachment too large] ${file.name} (${Math.round(parsed.buffer.length / 1024 / 1024)}MB)`);
           continue;
         }
-        pushAttachmentReference('image', file.name);
+        pushAttachmentReference('image', file.name, file.savedPath || '');
         contentParts.push({
           type: 'image_url',
           image_url: { url: file.dataUri }
@@ -1870,34 +1939,42 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
         continue;
       }
       if (mime.startsWith('video/')) {
-        pushAttachmentReference('video', file.name);
+        pushAttachmentReference('video', file.name, file.savedPath || '');
         if (file.thumbnail && /^data:image\//i.test(file.thumbnail)) {
           contentParts.push({
             type: 'image_url',
             image_url: { url: file.thumbnail }
           });
-          pushAttachmentText(`[Video attachment] ${file.name} (thumbnail provided)`);
+          pushAttachmentText(file.savedPath
+            ? `[Video attachment] ${file.savedPath} (thumbnail provided)`
+            : `[Video attachment] ${file.name} (thumbnail provided)`);
         } else {
-          pushAttachmentText(`[Video attachment] ${file.name}`);
+          pushAttachmentText(file.savedPath ? `[Video attachment] ${file.savedPath}` : `[Video attachment] ${file.name}`);
         }
         continue;
       }
       if (isLikelyTextAttachment(mime, file.name) && parsed.buffer.length <= ATTACHMENT_MAX_INLINE_TEXT_BYTES) {
         const decoded = truncateAttachmentText(decodeAttachmentText(parsed.buffer));
         if (decoded) {
-          pushAttachmentReference('file', file.name);
-          pushAttachmentText(`<file name="${file.name}">\n${decoded}\n</file>`);
+          pushAttachmentReference('file', file.name, file.savedPath || '');
+          if (file.savedPath) {
+            pushAttachmentText(`<file path="${file.savedPath}" name="${file.name}">\n${decoded}\n</file>`);
+          } else {
+            pushAttachmentText(`<file name="${file.name}">\n${decoded}\n</file>`);
+          }
           continue;
         }
       }
-      pushAttachmentReference('file', file.name);
-      pushAttachmentText(`[File attachment] ${file.name} (${mime || 'application/octet-stream'})`);
+      pushAttachmentReference('file', file.name, file.savedPath || '');
+      pushAttachmentText(file.savedPath
+        ? `[File attachment] ${file.savedPath} (${mime || 'application/octet-stream'})`
+        : `[File attachment] ${file.name} (${mime || 'application/octet-stream'})`);
       continue;
     }
 
     const absPath = file.absPath;
     if (!absPath || !fs.existsSync(absPath)) {
-      pushAttachmentReference('file', file.name || absPath);
+      pushAttachmentReference('file', file.name || absPath, absPath || '');
       pushAttachmentText(`[Attached local file] ${file.name}`);
       continue;
     }
@@ -1908,7 +1985,7 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
       stat = null;
     }
     if (!stat || !stat.isFile()) {
-      pushAttachmentReference('file', path.basename(absPath) || absPath);
+      pushAttachmentReference('file', path.basename(absPath) || absPath, absPath);
       pushAttachmentText(`[Attached local file] ${absPath}`);
       continue;
     }
@@ -1916,12 +1993,12 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
     if (isImageMimeOrPath(mime, absPath) && stat.size <= ATTACHMENT_MAX_INLINE_IMAGE_BYTES) {
       const imageMime = normalizeGatewayImageMime(mime);
       if (!ATTACHMENT_SUPPORTED_IMAGE_MIMES.has(imageMime)) {
-        pushAttachmentReference('image', path.basename(absPath) || absPath);
+        pushAttachmentReference('image', path.basename(absPath) || absPath, absPath);
         pushAttachmentText(`[Attached local image not supported by gateway MIME] ${absPath} (${imageMime || mime})`);
         continue;
       }
       try {
-        pushAttachmentReference('image', path.basename(absPath) || absPath);
+        pushAttachmentReference('image', path.basename(absPath) || absPath, absPath);
         const buf = fs.readFileSync(absPath);
         const dataUri = `data:${imageMime};base64,${buf.toString('base64')}`;
         contentParts.push({
@@ -1937,13 +2014,13 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
       try {
         const decoded = truncateAttachmentText(decodeAttachmentText(fs.readFileSync(absPath)));
         if (decoded) {
-          pushAttachmentReference('file', path.basename(absPath) || absPath);
+          pushAttachmentReference('file', path.basename(absPath) || absPath, absPath);
           pushAttachmentText(`<file path="${absPath}">\n${decoded}\n</file>`);
           continue;
         }
       } catch (_) {}
     }
-    pushAttachmentReference('file', path.basename(absPath) || absPath);
+    pushAttachmentReference('file', path.basename(absPath) || absPath, absPath);
     pushAttachmentText(`[Attached local file] ${absPath}`);
   }
 
@@ -1956,18 +2033,22 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
     };
     const referenceLines = attachmentReferences.map((ref) => {
       const kindLabel = kindLabelMap[ref.kind] || 'file';
-      return `附件${ref.globalIndex} / Attachment ${ref.globalIndex}: ${ref.name} (${kindLabel})`;
+      if (ref.path) {
+        return `[${ref.globalIndex}] ${ref.path} (${kindLabel}, ${ref.name})`;
+      }
+      return `[${ref.globalIndex}] ${ref.name} (${kindLabel})`;
     });
     const aliasLines = [];
     attachmentReferences.forEach((ref) => {
+      aliasLines.push(`附件${ref.globalIndex} / attachment${ref.globalIndex} -> [${ref.globalIndex}]`);
       if (ref.kind === 'image') {
-        aliasLines.push(`图${ref.kindIndex} -> 附件${ref.globalIndex}`);
+        aliasLines.push(`图${ref.kindIndex} / image${ref.kindIndex} -> [${ref.globalIndex}]`);
       } else if (ref.kind === 'video') {
-        aliasLines.push(`视频${ref.kindIndex} -> 附件${ref.globalIndex}`);
+        aliasLines.push(`视频${ref.kindIndex} / video${ref.kindIndex} -> [${ref.globalIndex}]`);
       } else if (ref.kind === 'folder') {
-        aliasLines.push(`文件夹${ref.kindIndex} -> 附件${ref.globalIndex}`);
+        aliasLines.push(`文件夹${ref.kindIndex} / folder${ref.kindIndex} -> [${ref.globalIndex}]`);
       } else {
-        aliasLines.push(`文件${ref.kindIndex} -> 附件${ref.globalIndex}`);
+        aliasLines.push(`文件${ref.kindIndex} / file${ref.kindIndex} -> [${ref.globalIndex}]`);
       }
     });
     const referenceText = [
@@ -1975,7 +2056,7 @@ function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
       ...referenceLines,
       '可用引用 / Available aliases:',
       ...aliasLines,
-      '当用户说“图1/视频1/文件1/附件1”时，请按以上映射理解并作答。'
+      '当用户说“图1/视频1/文件1/附件1”时，请按以上映射和路径理解并作答。'
     ].join('\n');
     if (baseUserText) {
       contentParts.splice(1, 0, { type: 'text', text: referenceText });
@@ -6546,9 +6627,169 @@ app.post('/api/agents/:agentId/knowledge-rules/:lineNumber/experience', upload.s
 });
 
 function sanitizeUploadPathSegment(segment, fallback = 'item') {
-    const raw = String(segment || '').trim();
-    const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^_+|_+$/g, '');
-    return cleaned || fallback;
+    const raw = String(segment || '')
+        .normalize('NFC')
+        .replace(/[\\/]+/g, ' ')
+        .trim();
+    if (!raw) return fallback;
+
+    const ext = path.extname(raw);
+    const hasExt = !!ext && ext !== '.';
+    const baseRaw = hasExt ? raw.slice(0, -ext.length) : raw;
+    const extRaw = hasExt ? ext : '';
+
+    const sanitizePart = (value) => String(value || '')
+        .replace(/[\u0000-\u001f\u007f]/g, '')
+        .replace(/[:*?"<>|]/g, '_')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    let base = sanitizePart(baseRaw);
+    let safeExt = sanitizePart(extRaw).replace(/\s+/g, '');
+    if (safeExt && !safeExt.startsWith('.')) {
+        safeExt = `.${safeExt.replace(/^\.+/, '')}`;
+    }
+    if (!base || base === '.' || base === '..') {
+        base = fallback;
+    }
+
+    let candidate = `${base}${safeExt}`.replace(/[\\/]/g, '_').trim();
+    if (!candidate || candidate === '.' || candidate === '..') {
+        candidate = fallback;
+    }
+
+    const MAX_SEGMENT_LEN = 180;
+    if (candidate.length > MAX_SEGMENT_LEN) {
+        const suffix = safeExt && safeExt.length < 40 ? safeExt : '';
+        const keep = Math.max(1, MAX_SEGMENT_LEN - suffix.length);
+        candidate = `${candidate.slice(0, keep).trim()}${suffix}`;
+    }
+
+    return candidate || fallback;
+}
+
+function ensureUniqueFilePath(preferredPath) {
+    if (!preferredPath) return preferredPath;
+    if (!fs.existsSync(preferredPath)) return preferredPath;
+    const dir = path.dirname(preferredPath);
+    const ext = path.extname(preferredPath);
+    const base = path.basename(preferredPath, ext);
+    for (let i = 2; i < 10000; i += 1) {
+        const candidate = path.join(dir, `${base}_${i}${ext}`);
+        if (!fs.existsSync(candidate)) return candidate;
+    }
+    return path.join(dir, `${base}_${Date.now()}${ext}`);
+}
+
+const UPLOAD_CLEANUP_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
+const UPLOAD_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+function getUploadCleanupRoots() {
+    const roots = new Set();
+    const pushRoot = (dir) => {
+        if (!dir) return;
+        try {
+            roots.add(path.resolve(dir));
+        } catch (_) {}
+    };
+    pushRoot(path.join(__dirname, 'public', 'uploads'));
+    pushRoot(path.join(os.homedir(), 'Meco Studio', 'public', 'uploads'));
+    return Array.from(roots);
+}
+
+function isEntryOlderThan(entryPath, maxAgeMs, nowMs) {
+    try {
+        const stat = fs.statSync(entryPath);
+        const ageMs = nowMs - stat.mtimeMs;
+        return Number.isFinite(ageMs) && ageMs > maxAgeMs;
+    } catch (_) {
+        return false;
+    }
+}
+
+function cleanupUploadDirectoryRecursive(rootDir, maxAgeMs, nowMs) {
+    let removedFiles = 0;
+    let removedDirs = 0;
+    let removedBytes = 0;
+
+    let entries = [];
+    try {
+        entries = fs.readdirSync(rootDir, { withFileTypes: true });
+    } catch (_) {
+        return { removedFiles, removedDirs, removedBytes };
+    }
+
+    for (const entry of entries) {
+        const absPath = path.join(rootDir, entry.name);
+        try {
+            if (entry.isFile()) {
+                if (!isEntryOlderThan(absPath, maxAgeMs, nowMs)) continue;
+                let size = 0;
+                try {
+                    size = fs.statSync(absPath).size || 0;
+                } catch (_) {
+                    size = 0;
+                }
+                fs.rmSync(absPath, { force: true });
+                removedFiles += 1;
+                removedBytes += Math.max(0, size);
+                continue;
+            }
+
+            if (entry.isDirectory()) {
+                const nested = cleanupUploadDirectoryRecursive(absPath, maxAgeMs, nowMs);
+                removedFiles += nested.removedFiles;
+                removedDirs += nested.removedDirs;
+                removedBytes += nested.removedBytes;
+
+                let isEmpty = false;
+                try {
+                    isEmpty = fs.readdirSync(absPath).length === 0;
+                } catch (_) {
+                    isEmpty = false;
+                }
+                if (!isEmpty) continue;
+                if (!isEntryOlderThan(absPath, maxAgeMs, nowMs)) continue;
+                fs.rmSync(absPath, { recursive: true, force: true });
+                removedDirs += 1;
+            }
+        } catch (_) {
+            // Ignore individual entry failures; continue scanning.
+        }
+    }
+
+    return { removedFiles, removedDirs, removedBytes };
+}
+
+function runUploadRetentionCleanup() {
+    const nowMs = Date.now();
+    const roots = getUploadCleanupRoots();
+    let totalFiles = 0;
+    let totalDirs = 0;
+    let totalBytes = 0;
+
+    roots.forEach((rootDir) => {
+        try {
+            if (!fs.existsSync(rootDir)) return;
+            const result = cleanupUploadDirectoryRecursive(rootDir, UPLOAD_CLEANUP_MAX_AGE_MS, nowMs);
+            totalFiles += result.removedFiles;
+            totalDirs += result.removedDirs;
+            totalBytes += result.removedBytes;
+        } catch (e) {
+            console.warn(`[UploadCleanup] cleanup failed for ${rootDir}: ${e.message}`);
+        }
+    });
+
+    if (totalFiles > 0 || totalDirs > 0) {
+        console.log(`[UploadCleanup] removed files=${totalFiles}, dirs=${totalDirs}, bytes=${totalBytes}`);
+    }
+}
+
+function startUploadCleanupScheduler() {
+    runUploadRetentionCleanup();
+    setInterval(() => {
+        runUploadRetentionCleanup();
+    }, UPLOAD_CLEANUP_INTERVAL_MS);
 }
 
 function getKnowledgeRuleUploadRoot() {
@@ -6634,6 +6875,81 @@ function ensureUniqueFolderPath(parentDir, preferredName) {
     return path.join(parentDir, `${safeName}_${Date.now()}`);
 }
 
+app.post('/api/uploads/attachment-folder', upload.array('files', 5000), (req, res) => {
+    const incomingFiles = Array.isArray(req.files) ? req.files : [];
+    if (incomingFiles.length === 0) {
+        return res.status(400).json({ error: 'no files uploaded' });
+    }
+
+    const relPathsRaw = req.body?.relPaths;
+    const relPaths = Array.isArray(relPathsRaw)
+        ? relPathsRaw
+        : (typeof relPathsRaw === 'string' && relPathsRaw ? [relPathsRaw] : []);
+
+    const rawPreferredFolderName = String(req.body?.folderName || '').trim();
+    const preferredFolderName = rawPreferredFolderName
+        ? sanitizeUploadPathSegment(rawPreferredFolderName, 'folder')
+        : '';
+    const firstRelative = String(relPaths[0] || '').replace(/\\/g, '/').trim();
+    const rawInferredFolderName = firstRelative.split('/')[0] || '';
+    const inferredFolderName = rawInferredFolderName
+        ? sanitizeUploadPathSegment(rawInferredFolderName, 'folder')
+        : '';
+    const folderLabel = preferredFolderName || inferredFolderName || 'folder';
+    const normalizedInferredRoot = inferredFolderName || '';
+
+    const uploadRoot = path.join(__dirname, 'public', 'uploads');
+    fs.mkdirSync(uploadRoot, { recursive: true });
+    const foldersRoot = path.join(uploadRoot, 'agenttools-folders');
+    fs.mkdirSync(foldersRoot, { recursive: true });
+    const targetRoot = ensureUniqueFolderPath(foldersRoot, folderLabel);
+
+    let copiedCount = 0;
+    try {
+        fs.mkdirSync(targetRoot, { recursive: true });
+        incomingFiles.forEach((file, idx) => {
+            const relPath = String(relPaths[idx] || file.originalname || file.filename || `file_${idx + 1}`).trim();
+            let normalizedParts = normalizeRelativeUploadPath(relPath, file.originalname || `file_${idx + 1}`);
+            if (normalizedParts.length > 1) {
+                const firstPart = normalizedParts[0];
+                if ((normalizedInferredRoot && firstPart === normalizedInferredRoot) || firstPart === folderLabel) {
+                    normalizedParts = normalizedParts.slice(1);
+                }
+            }
+            const safeRelative = path.join(...normalizedParts);
+            const destination = ensureUniqueFilePath(path.join(targetRoot, safeRelative));
+            const destinationDir = path.dirname(destination);
+            fs.mkdirSync(destinationDir, { recursive: true });
+            fs.copyFileSync(file.path, destination);
+            copiedCount += 1;
+        });
+    } catch (e) {
+        incomingFiles.forEach((file) => {
+            try { fs.unlinkSync(file.path); } catch (_) {}
+        });
+        try { fs.rmSync(targetRoot, { recursive: true, force: true }); } catch (_) {}
+        return res.status(500).json({ error: `failed to store folder upload: ${e.message}` });
+    }
+
+    incomingFiles.forEach((file) => {
+        try { fs.unlinkSync(file.path); } catch (_) {}
+    });
+
+    if (copiedCount <= 0) {
+        try { fs.rmSync(targetRoot, { recursive: true, force: true }); } catch (_) {}
+        return res.status(500).json({ error: 'no files copied from upload' });
+    }
+    console.log(`[AttachmentFolderUpload] stored ${copiedCount}/${incomingFiles.length} files -> ${targetRoot}`);
+
+    return res.json({
+        success: true,
+        absolutePath: targetRoot,
+        displayPath: toTildePath(targetRoot),
+        folderName: path.basename(targetRoot),
+        fileCount: copiedCount
+    });
+});
+
 app.post('/api/uploads/knowledge-folder', upload.array('files', 5000), (req, res) => {
     const incomingFiles = Array.isArray(req.files) ? req.files : [];
     if (incomingFiles.length === 0) {
@@ -6675,7 +6991,7 @@ app.post('/api/uploads/knowledge-folder', upload.array('files', 5000), (req, res
                 }
             }
             const safeRelative = path.join(...normalizedParts);
-            const destination = path.join(targetRoot, safeRelative);
+            const destination = ensureUniqueFilePath(path.join(targetRoot, safeRelative));
             const destinationDir = path.dirname(destination);
             fs.mkdirSync(destinationDir, { recursive: true });
             fs.copyFileSync(file.path, destination);
@@ -6695,6 +7011,7 @@ app.post('/api/uploads/knowledge-folder', upload.array('files', 5000), (req, res
     if (copiedCount <= 0) {
         return res.status(500).json({ error: 'no files copied from upload' });
     }
+    console.log(`[KnowledgeFolderUpload] stored ${copiedCount}/${incomingFiles.length} files -> ${targetRoot}`);
 
     return res.json({
         success: true,
@@ -7186,12 +7503,36 @@ function findLocalAgentDir(agentId) {
     return null;
 }
 
+function sendInitialAvatarSvg(res, label) {
+  const raw = String(label || 'A').trim();
+  const initial = (raw.charAt(0) || 'A').toUpperCase();
+  const safeInitial = initial
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="mecoAvatarGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#334155"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="128" fill="url(#mecoAvatarGrad)"/>
+  <text x="128" y="152" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif" font-size="108" font-weight="700" fill="#ffffff">${safeInitial}</text>
+</svg>`;
+  res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  return res.status(200).send(svg);
+}
+
 // Serve Local Agent Avatar
 app.get('/api/local-agents/:agentId/avatar', (req, res) => {
   const { agentId } = req.params;
   
   const agentPath = findLocalAgentDir(agentId);
-  if (!agentPath) return res.status(404).send('Agent not found');
+  if (!agentPath) return sendInitialAvatarSvg(res, agentId);
 
   const extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
   for (const ext of extensions) {
@@ -7200,8 +7541,7 @@ app.get('/api/local-agents/:agentId/avatar', (req, res) => {
       return res.sendFile(avatarPath, { dotfiles: 'allow' });
     }
   }
-  // If no avatar found, return 404 so frontend can handle fallback
-  res.status(404).send('Avatar not found');
+  return sendInitialAvatarSvg(res, agentId);
 });
 
 // Serve Local Agent Video
@@ -9158,9 +9498,9 @@ wss.on('connection', (ws, req) => {
               const agentInputText = (routeByNext || routeByMention)
                   ? `${finalText}\n\n[System Instruction: You are explicitly designated by ${routeByNext ? '{next}' : '@ mention'}. Read the caller's full context carefully before replying. You may decide whether to reply (recommended to reply). If you reply, answer the caller's point directly first.]${requiredHandoffInstruction}${mentionNoHandoffInstruction}`
                   : finalText;
-              const multimodalMessages = hasMultimodalAttachments
-                  ? buildOpenClawMultimodalMessages(agentInputText, binaryUploads, systemPaths)
-                  : null;
+                  const multimodalMessages = hasMultimodalAttachments
+                      ? buildOpenClawMultimodalMessages(agentInputText, binaryUploads, savedFiles, systemPaths)
+                      : null;
               const result = await runChannelAgentTurn({
                   targetAgentId: agentId,
                   targetAgentName: agentName,
@@ -9276,7 +9616,7 @@ wss.on('connection', (ws, req) => {
                   const hasMultimodalAttachments = binaryUploads.length > 0 || systemPaths.length > 0;
                   const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(binaryUploads);
                   const multimodalMessages = hasMultimodalAttachments
-                      ? buildOpenClawMultimodalMessages(userText, binaryUploads, systemPaths)
+                      ? buildOpenClawMultimodalMessages(userText, binaryUploads, savedFiles, systemPaths)
                       : null;
                   if (uploads.length > 0) {
                       const attachmentContext = buildOpenClawAttachmentContext(savedFiles, systemPaths);
@@ -10395,6 +10735,7 @@ app.get('/api/roundtable/agents', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3456;
+startUploadCleanupScheduler();
 server.listen(PORT, () => {
   console.log(`Meco Studio 运行在 http://localhost:${PORT}`);
   console.log(`圆桌会议: http://localhost:${PORT}/roundtable`);
