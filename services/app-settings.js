@@ -8,10 +8,11 @@ const DEFAULT_SETTINGS = Object.freeze({
   openclawHttpUrl: 'http://127.0.0.1:18789/v1/chat/completions',
   openclawWsUrl: 'ws://127.0.0.1:18789',
   openclawGatewayToken: '',
-  openclawModel: 'kimi-openai/kimi-k2.5',
+  openclawModel: 'kimi-coding/kimi-k2.5',
   minimaxApiKey: '',
   minimaxWsUrl: 'wss://api.minimaxi.com/ws/v1/t2a_v2',
   tikhubApiKey: '',
+  meowloadApiKey: '',
   kimiApiKey: '',
   kimiCliCommand: 'kimi',
   hotTopicsKbPath: path.join(os.homedir(), 'Documents/知识库/热门话题'),
@@ -36,6 +37,7 @@ const ENV_MAP = Object.freeze({
   minimaxApiKey: 'MECO_MINIMAX_API_KEY',
   minimaxWsUrl: 'MECO_MINIMAX_WS_URL',
   tikhubApiKey: 'TIKHUB_API_KEY',
+  meowloadApiKey: 'MECO_MEOWLOAD_API_KEY',
   kimiApiKey: 'KIMI_API_KEY',
   kimiCliCommand: 'MECO_KIMI_CLI_COMMAND',
   hotTopicsKbPath: 'HOT_TOPICS_KB_PATH',
@@ -213,6 +215,7 @@ function getMaskedSettings() {
     openclawGatewayToken: maskSecret(current.openclawGatewayToken),
     minimaxApiKey: maskSecret(current.minimaxApiKey),
     tikhubApiKey: maskSecret(current.tikhubApiKey),
+    meowloadApiKey: maskSecret(current.meowloadApiKey),
     kimiApiKey: maskSecret(current.kimiApiKey),
     openaiApiKey: maskSecret(current.openaiApiKey)
   };

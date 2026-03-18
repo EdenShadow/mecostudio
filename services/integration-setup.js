@@ -87,7 +87,7 @@ function syncDir(src, dst) {
 function configureOpenClawDefaults(settings, logs) {
   const openclawRoot = path.join(os.homedir(), '.openclaw');
   const openclawConfigPath = path.join(openclawRoot, 'openclaw.json');
-  const model = String(settings.openclawModel || '').trim() || 'kimi-openai/kimi-k2.5';
+  const model = String(settings.openclawModel || '').trim() || 'kimi-coding/kimi-k2.5';
   const providerKey = String(settings.kimiApiKey || '').trim();
 
   fs.mkdirSync(openclawRoot, { recursive: true });
@@ -112,6 +112,15 @@ function configureOpenClawDefaults(settings, logs) {
   if (!conf.models || typeof conf.models !== 'object') conf.models = {};
   if (!conf.models.providers || typeof conf.models.providers !== 'object') conf.models.providers = {};
   const providerId = model.includes('/') ? model.split('/')[0] : '';
+  if (!conf.models.providers['kimi-coding'] || typeof conf.models.providers['kimi-coding'] !== 'object') {
+    conf.models.providers['kimi-coding'] = {};
+  }
+  if (!conf.models.providers['kimi-coding'].baseUrl) {
+    conf.models.providers['kimi-coding'].baseUrl = 'https://api.moonshot.cn/v1';
+  }
+  if (!Array.isArray(conf.models.providers['kimi-coding'].models)) {
+    conf.models.providers['kimi-coding'].models = [{ id: 'kimi-k2.5', kind: 'chat' }];
+  }
   if (providerId && providerKey) {
     if (!conf.models.providers[providerId] || typeof conf.models.providers[providerId] !== 'object') {
       conf.models.providers[providerId] = {};
@@ -128,6 +137,20 @@ function configureOpenClawDefaults(settings, logs) {
         conf.models.providers[kimiProvider].apiKey = providerKey;
       }
     }
+  }
+
+  if (providerKey) {
+    if (!conf.models.providers['kimi-coding'] || typeof conf.models.providers['kimi-coding'] !== 'object') {
+      conf.models.providers['kimi-coding'] = {};
+    }
+    conf.models.providers['kimi-coding'].apiKey = providerKey;
+  }
+
+  if (conf.agents && Array.isArray(conf.agents.list)) {
+    conf.agents.list = conf.agents.list.map((agent) => {
+      if (!agent || typeof agent !== 'object') return agent;
+      return { ...agent, model };
+    });
   }
 
   fs.writeFileSync(openclawConfigPath, JSON.stringify(conf, null, 2) + '\n', 'utf8');
@@ -237,6 +260,19 @@ function ensureHotTopicsSkill(logs) {
   logs.push(`Synced hot-topics skill to ${openclawSkillTarget}`);
 }
 
+function ensureOpenClawSkillByName(name, logs) {
+  const repoRoot = path.join(__dirname, '..');
+  const src = path.join(repoRoot, `bootstrap/openclaw/skills/openclaw/${name}`);
+  if (!fs.existsSync(src)) {
+    logs.push(`${name} source not found (skip sync)`);
+    return;
+  }
+  const target = path.join(os.homedir(), `.openclaw/skills/${name}`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  syncDir(src, target);
+  logs.push(`Synced ${name} skill to ${target}`);
+}
+
 function ensureHotTopicsKnowledgeBase(settings, logs) {
   const configured = String(settings.hotTopicsKbPath || '').trim();
   const fallback = '~/Documents/知识库/热门话题';
@@ -293,6 +329,7 @@ async function applyAll(settings = {}) {
   configureKimiApiKey(String(settings.kimiApiKey || '').trim(), logs);
   const hotTopicsRoot = ensureHotTopicsKnowledgeBase(settings, logs);
   ensureHotTopicsSkill(logs);
+  ensureOpenClawSkillByName('media-downloader', logs);
   await ensureHotTopicsDeps(logs);
   return {
     ok: true,

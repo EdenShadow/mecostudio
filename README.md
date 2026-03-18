@@ -56,6 +56,7 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 
 - `Kimi Coding API Key`
 - `TikHub API Key`
+- `MeowLoad API Key`（哼哼猫 / media-downloader）
 - `MiniMax API Key`（TTS 必需）
 
 点击“确定并自动安装/激活”后会自动执行：
@@ -74,11 +75,12 @@ MECO_BRANCH="main" \
 MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
 MECO_UPGRADE_OPENCLAW=0 \
-MECO_OPENCLAW_MODEL="kimi-openai/kimi-k2.5" \
+MECO_OPENCLAW_MODEL="kimi-coding/kimi-k2.5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
 MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
 MECO_MINIMAX_API_KEY="xxxx" \
 MECO_TIKHUB_API_KEY="xxxx" \
+MECO_MEOWLOAD_API_KEY="xxxx" \
 MECO_OPENAI_API_KEY="" \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
@@ -89,7 +91,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `MECO_OPENCLAW_MODEL`：安装时写入 OpenClaw 默认模型
 - `MECO_OPENCLAW_MODEL_API_KEY`：安装时写入 OpenClaw 对应 provider 的 key
 - `MECO_KIMI_CODING_API_KEY`：用于 Kimi CLI 激活，并可作为 OpenClaw kimi provider 的 key 兜底
-- `MECO_MINIMAX_API_KEY` / `MECO_TIKHUB_API_KEY`：开箱即用所需关键能力
+- `MECO_MINIMAX_API_KEY` / `MECO_TIKHUB_API_KEY` / `MECO_MEOWLOAD_API_KEY`：开箱即用所需关键能力
 - `MECO_OPENAI_API_KEY`：可选，Whisper API 模式可用
 
 ## 🤖 AI 可读协议（Machine Readable Spec）
@@ -106,6 +108,7 @@ service_url: "http://127.0.0.1:3456"
 required_api_keys:
   - "Kimi Coding API Key"
   - "TikHub API Key"
+  - "MeowLoad API Key"
   - "MiniMax API Key"
 optional_api_keys:
   - "OpenAI API Key"

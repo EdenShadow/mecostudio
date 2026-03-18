@@ -218,7 +218,7 @@
                 <div id="knowledge-rule-error" class="hidden text-xs text-red-400"></div>
                 <div id="knowledge-rule-loading" class="hidden flex items-center gap-2 text-xs text-gray-300">
                     <span class="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></span>
-                    <span>Resolving folder and writing AGENTS.md...</span>
+                    <span>Uploading folder and writing AGENTS.md...</span>
                 </div>
             </div>
             <div class="px-6 py-4 border-t border-white/5 flex items-center justify-end gap-3">
@@ -455,15 +455,21 @@
                     </div>
                 </div>
 
-                <div id="knowledge-rule-panel" class="hidden flex-1 min-h-0 flex flex-col">
+                <div id="knowledge-rule-panel" class="hidden relative flex-1 min-h-0 flex flex-col">
+                    <div class="pb-3">
+                        <button id="knowledge-rule-add-btn" onclick="openKnowledgeRuleModal()" class="w-full h-11 rounded-xl border border-white/15 bg-white/5 text-gray-200 hover:text-white hover:bg-white/10 transition-colors flex items-center justify-center gap-2">
+                            <span class="material-icons-round text-lg">add</span>
+                            <span class="text-sm font-semibold">Add Rule</span>
+                        </button>
+                    </div>
                     <div id="knowledge-rule-list" class="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
                          <!-- Dynamic Rule Items -->
                     </div>
-                    <div class="pt-3">
-                        <button onclick="openKnowledgeRuleModal()" class="w-full h-10 rounded-xl border border-white/15 bg-white/5 text-gray-300 hover:text-white hover:bg-white/10 transition-colors flex items-center justify-center gap-2">
-                            <span class="material-icons-round text-base">add</span>
-                            <span class="text-sm font-medium">Add Rule</span>
-                        </button>
+                    <div id="knowledge-rule-busy-overlay" class="hidden absolute inset-0 z-20 rounded-2xl bg-black/55 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
+                        <div class="px-4 py-3 rounded-xl border border-white/10 bg-black/50 text-sm text-gray-200 flex items-center gap-2 shadow-xl">
+                            <span class="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></span>
+                            <span id="knowledge-rule-busy-text">处理中...</span>
+                        </div>
                     </div>
                 </div>
 
@@ -484,6 +490,8 @@
 <!-- Hidden file inputs for upload -->
 <input type="file" id="avatar-file-input" accept="image/*" class="hidden" />
 <input type="file" id="video-file-input" accept="video/*" class="hidden" />
+<input type="file" id="knowledge-folder-input" webkitdirectory directory multiple class="hidden" onchange="handleKnowledgeRuleFolderInput(this.files)" />
+<input type="file" id="knowledge-experience-file-input" accept=".doc,.docx,.pdf,.txt,.md" class="hidden" onchange="handleKnowledgeExperienceFileInput(this.files)" />
 
 <script>
     const params = new URLSearchParams(window.location.search);
@@ -505,6 +513,12 @@
     window.currentKnowledgeTab = 'lib';
     window.currentKnowledgeRules = [];
     window.knowledgeSelectedFolderPath = '';
+    window.knowledgeSelectedFolderFiles = [];
+    window.knowledgeSelectedFolderLabel = '';
+    window.knowledgeRuleDeletingLineNumber = null;
+    window.knowledgeRuleExperienceLineNumber = null;
+    window.knowledgeRuleExperienceUploadingLineNumber = null;
+    window.knowledgeRuleBusy = false;
 
     // --- Avatar Helper Functions ---
     function getRandomColor(name) {
@@ -972,6 +986,8 @@
 
         if (ruleInput) ruleInput.value = '';
         window.knowledgeSelectedFolderPath = '';
+        window.knowledgeSelectedFolderFiles = [];
+        window.knowledgeSelectedFolderLabel = '';
         if (pickedEl) {
             pickedEl.textContent = '未选择文件夹';
             pickedEl.classList.remove('text-gray-200');
@@ -981,6 +997,8 @@
             folderBtn.disabled = false;
             folderBtn.textContent = '选择文件夹';
         }
+        const folderInput = document.getElementById('knowledge-folder-input');
+        if (folderInput) folderInput.value = '';
         if (errorEl) {
             errorEl.textContent = '';
             errorEl.classList.add('hidden');
@@ -1007,8 +1025,15 @@
 
     async function chooseKnowledgeRuleFolder() {
         const folderBtn = document.getElementById('knowledge-folder-select-btn');
-        const pickedEl = document.getElementById('knowledge-folder-picked');
         const errorEl = document.getElementById('knowledge-rule-error');
+        const folderInput = document.getElementById('knowledge-folder-input');
+        if (!folderInput) {
+            if (errorEl) {
+                errorEl.textContent = '浏览器不支持文件夹选择';
+                errorEl.classList.remove('hidden');
+            }
+            return;
+        }
         if (errorEl) {
             errorEl.textContent = '';
             errorEl.classList.add('hidden');
@@ -1017,38 +1042,44 @@
             folderBtn.disabled = true;
             folderBtn.textContent = '选择中...';
         }
-        try {
-            const res = await fetch('/api/system/pick-folder', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ currentPath: window.knowledgeSelectedFolderPath || '' })
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                throw new Error(data.error || 'pick folder failed');
-            }
-            if (data.cancelled) return;
-            const folderPath = String(data.path || '').trim();
-            const displayPath = String(data.displayPath || folderPath || '').trim();
-            if (!folderPath) {
-                throw new Error('folder path empty');
-            }
-            window.knowledgeSelectedFolderPath = folderPath;
-            if (pickedEl) {
-                pickedEl.textContent = displayPath;
-                pickedEl.classList.remove('text-gray-400');
-                pickedEl.classList.add('text-gray-200');
-            }
-        } catch (e) {
-            if (errorEl) {
-                errorEl.textContent = e.message || '选择文件夹失败';
-                errorEl.classList.remove('hidden');
-            }
-        } finally {
+        folderInput.click();
+        setTimeout(() => {
             if (folderBtn) {
                 folderBtn.disabled = false;
                 folderBtn.textContent = '选择文件夹';
             }
+        }, 300);
+    }
+
+    window.handleKnowledgeRuleFolderInput = function(files) {
+        const pickedEl = document.getElementById('knowledge-folder-picked');
+        const errorEl = document.getElementById('knowledge-rule-error');
+        const selected = Array.from(files || []).filter((f) => f instanceof File);
+        if (errorEl) {
+            errorEl.textContent = '';
+            errorEl.classList.add('hidden');
+        }
+        if (selected.length === 0) {
+            window.knowledgeSelectedFolderFiles = [];
+            window.knowledgeSelectedFolderLabel = '';
+            window.knowledgeSelectedFolderPath = '';
+            if (pickedEl) {
+                pickedEl.textContent = '未选择文件夹';
+                pickedEl.classList.remove('text-gray-200');
+                pickedEl.classList.add('text-gray-400');
+            }
+            return;
+        }
+
+        const firstRel = String(selected[0].webkitRelativePath || '').trim();
+        const folderName = firstRel ? firstRel.split('/')[0] : (selected[0].name || 'folder');
+        window.knowledgeSelectedFolderFiles = selected;
+        window.knowledgeSelectedFolderLabel = folderName;
+        window.knowledgeSelectedFolderPath = '';
+        if (pickedEl) {
+            pickedEl.textContent = `${folderName} (${selected.length} files)`;
+            pickedEl.classList.remove('text-gray-400');
+            pickedEl.classList.add('text-gray-200');
         }
     }
 
@@ -1084,9 +1115,15 @@
         }
 
         rules.forEach((rule) => {
+            const isDeleting = String(window.knowledgeRuleDeletingLineNumber || '') === String(rule.lineNumber || '');
+            const isUploadingExperience = String(window.knowledgeRuleExperienceUploadingLineNumber || '') === String(rule.lineNumber || '');
+            const isBusy = !!window.knowledgeRuleBusy;
             const card = document.createElement('div');
-            card.className = 'group relative bg-white/[0.03] hover:bg-white/[0.08] border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all duration-300 cursor-pointer';
-            card.onclick = () => openKnowledgeRuleFolder(rule.lineNumber);
+            card.className = `group relative bg-white/[0.03] hover:bg-white/[0.08] border border-white/5 hover:border-white/10 rounded-2xl p-4 transition-all duration-300 ${(isDeleting || isUploadingExperience || isBusy) ? 'opacity-70 cursor-wait' : 'cursor-pointer'}`;
+            card.onclick = () => {
+                if (isDeleting || isUploadingExperience || isBusy) return;
+                openKnowledgeRuleFolder(rule.lineNumber);
+            };
 
             const title = document.createElement('div');
             title.className = 'text-sm font-semibold text-gray-200 group-hover:text-white pr-7';
@@ -1100,20 +1137,100 @@
             hint.className = 'mt-1 text-[11px] text-gray-500';
             hint.textContent = rule.folderExists ? 'Click to open local folder' : 'Folder not found';
 
+            const actionWrap = document.createElement('div');
+            actionWrap.className = `absolute top-2 right-2 flex items-center gap-1 transition-all ${(isDeleting || isUploadingExperience) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`;
+
+            const addBtn = document.createElement('button');
+            addBtn.className = `h-6 px-2 rounded-md bg-black/35 border border-white/10 text-[10px] text-gray-200 hover:text-white hover:bg-primary/20 hover:border-primary/30 transition-colors ${(isUploadingExperience || isDeleting) ? 'cursor-wait' : ''}`;
+            addBtn.textContent = isUploadingExperience ? '处理中...' : '添加经验';
+            addBtn.disabled = isUploadingExperience || isDeleting || isBusy;
+            addBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (isUploadingExperience || isDeleting || isBusy) return;
+                openAddKnowledgeExperience(rule.lineNumber);
+            };
+
             const delBtn = document.createElement('button');
-            delBtn.className = 'absolute top-2 right-2 w-6 h-6 rounded-md bg-black/30 text-gray-400 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all';
-            delBtn.innerHTML = '<span class="material-icons-round text-sm">close</span>';
+            delBtn.className = `w-6 h-6 rounded-md bg-black/30 text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all ${isDeleting ? 'cursor-wait' : ''}`;
+            delBtn.innerHTML = isDeleting
+                ? '<span class="w-3 h-3 border-2 border-red-300/40 border-t-red-400 rounded-full animate-spin inline-block"></span>'
+                : '<span class="material-icons-round text-sm">close</span>';
+            delBtn.disabled = isDeleting || isUploadingExperience || isBusy;
             delBtn.onclick = (e) => {
                 e.stopPropagation();
+                if (isDeleting || isUploadingExperience || isBusy) return;
                 deleteKnowledgeRule(rule.lineNumber);
             };
 
             card.appendChild(title);
             card.appendChild(path);
             card.appendChild(hint);
-            card.appendChild(delBtn);
+            actionWrap.appendChild(addBtn);
+            actionWrap.appendChild(delBtn);
+            card.appendChild(actionWrap);
             list.appendChild(card);
         });
+    }
+
+    function openAddKnowledgeExperience(lineNumber) {
+        if (window.knowledgeRuleBusy || window.knowledgeRuleExperienceUploadingLineNumber || !lineNumber) return;
+        window.knowledgeRuleExperienceLineNumber = lineNumber;
+        const input = document.getElementById('knowledge-experience-file-input');
+        if (!input) return;
+        input.value = '';
+        input.click();
+    }
+
+    function setKnowledgeRuleBusy(isBusy, text = '处理中...') {
+        window.knowledgeRuleBusy = !!isBusy;
+        const overlay = document.getElementById('knowledge-rule-busy-overlay');
+        const textEl = document.getElementById('knowledge-rule-busy-text');
+        const addBtn = document.getElementById('knowledge-rule-add-btn');
+        if (textEl) textEl.textContent = text || '处理中...';
+        if (overlay) overlay.classList.toggle('hidden', !window.knowledgeRuleBusy);
+        if (addBtn) addBtn.disabled = !!window.knowledgeRuleBusy;
+    }
+
+    window.handleKnowledgeExperienceFileInput = async function(files) {
+        const input = document.getElementById('knowledge-experience-file-input');
+        const selected = Array.from(files || []).filter((f) => f instanceof File);
+        const lineNumber = Number(window.knowledgeRuleExperienceLineNumber || 0);
+        window.knowledgeRuleExperienceLineNumber = null;
+        if (input) input.value = '';
+        if (!lineNumber || selected.length === 0) return;
+
+        const file = selected[0];
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        const allowed = ['doc', 'docx', 'pdf', 'txt', 'md'];
+        if (!allowed.includes(ext)) {
+            alert('仅支持 .doc/.docx/.pdf/.txt/.md');
+            return;
+        }
+        const agentId = window.currentAgentId;
+        if (!agentId) return;
+
+        window.knowledgeRuleExperienceUploadingLineNumber = lineNumber;
+        setKnowledgeRuleBusy(true, '添加经验中，请稍候...');
+        renderKnowledgeRuleList();
+        try {
+            const form = new FormData();
+            form.append('file', file);
+            const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge-rules/${encodeURIComponent(String(lineNumber))}/experience`, {
+                method: 'POST',
+                body: form
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || '添加经验失败');
+            }
+            alert(`添加经验成功\n${data.outputDisplayPath || data.outputPath || ''}`);
+        } catch (e) {
+            alert(`添加经验失败: ${e.message || 'unknown error'}`);
+        } finally {
+            window.knowledgeRuleExperienceUploadingLineNumber = null;
+            setKnowledgeRuleBusy(false);
+            renderKnowledgeRuleList();
+        }
     }
 
     async function submitKnowledgeRule() {
@@ -1127,13 +1244,13 @@
         const folderBtn = document.getElementById('knowledge-folder-select-btn');
 
         const ruleText = ruleInput ? ruleInput.value.trim() : '';
-        const folderPath = String(window.knowledgeSelectedFolderPath || '').trim();
+        const selectedFiles = Array.isArray(window.knowledgeSelectedFolderFiles) ? window.knowledgeSelectedFolderFiles : [];
         if (errorEl) {
             errorEl.textContent = '';
             errorEl.classList.add('hidden');
         }
 
-        if (!ruleText || !folderPath) {
+        if (!ruleText || selectedFiles.length === 0) {
             if (errorEl) {
                 errorEl.textContent = 'Rule and folder are required';
                 errorEl.classList.remove('hidden');
@@ -1149,6 +1266,27 @@
         }
 
         try {
+            const uploadForm = new FormData();
+            uploadForm.append('folderName', String(window.knowledgeSelectedFolderLabel || '').trim());
+            selectedFiles.forEach((file) => {
+                const relPath = String(file.webkitRelativePath || file.name || '').trim() || file.name;
+                uploadForm.append('files', file, relPath);
+                uploadForm.append('relPaths', relPath);
+            });
+
+            const uploadRes = await fetch('/api/uploads/knowledge-folder', {
+                method: 'POST',
+                body: uploadForm
+            });
+            const uploadData = await uploadRes.json();
+            if (!uploadRes.ok || !uploadData.success) {
+                throw new Error(uploadData.error || 'Failed to upload folder');
+            }
+            const folderPath = String(uploadData.absolutePath || '').trim();
+            if (!folderPath) {
+                throw new Error('Uploaded folder path is empty');
+            }
+
             const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge-rules`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1178,6 +1316,10 @@
     async function deleteKnowledgeRule(lineNumber) {
         const agentId = window.currentAgentId;
         if (!agentId || !lineNumber) return;
+        if (window.knowledgeRuleBusy) return;
+        if (window.knowledgeRuleDeletingLineNumber) return;
+        window.knowledgeRuleDeletingLineNumber = lineNumber;
+        renderKnowledgeRuleList();
         try {
             const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge-rules/${encodeURIComponent(String(lineNumber))}`, {
                 method: 'DELETE'
@@ -1189,11 +1331,18 @@
             await loadKnowledgeRules(agentId);
         } catch (e) {
             alert(e.message || 'Failed to delete rule');
+            window.knowledgeRuleDeletingLineNumber = null;
+            renderKnowledgeRuleList();
+        } finally {
+            if (String(window.knowledgeRuleDeletingLineNumber || '') === String(lineNumber || '')) {
+                window.knowledgeRuleDeletingLineNumber = null;
+            }
         }
     }
 
     async function openKnowledgeRuleFolder(lineNumber) {
         const agentId = window.currentAgentId;
+        if (window.knowledgeRuleBusy) return;
         if (!agentId || !lineNumber) return;
         try {
             const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/knowledge-rules/open`, {

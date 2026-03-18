@@ -8,11 +8,12 @@ MECO_START_AFTER_INSTALL="${MECO_START_AFTER_INSTALL:-1}"
 MECO_RESET_RUNTIME_STATE="${MECO_RESET_RUNTIME_STATE:-1}"
 MECO_UPGRADE_OPENCLAW="${MECO_UPGRADE_OPENCLAW:-0}"
 MECO_KIMI_CODING_API_KEY="${MECO_KIMI_CODING_API_KEY:-}"
-MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-openai/kimi-k2.5}"
+MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-coding/kimi-k2.5}"
 MECO_OPENCLAW_MODEL_API_KEY="${MECO_OPENCLAW_MODEL_API_KEY:-}"
 MECO_MINIMAX_API_KEY="${MECO_MINIMAX_API_KEY:-}"
 MECO_MINIMAX_WS_URL="${MECO_MINIMAX_WS_URL:-wss://api.minimaxi.com/ws/v1/t2a_v2}"
 MECO_TIKHUB_API_KEY="${MECO_TIKHUB_API_KEY:-}"
+MECO_MEOWLOAD_API_KEY="${MECO_MEOWLOAD_API_KEY:-}"
 MECO_OPENAI_API_KEY="${MECO_OPENAI_API_KEY:-}"
 OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
 CONFIG_SKILLS_ROOT="${CONFIG_SKILLS_ROOT:-$HOME/.config/agents/skills}"
@@ -185,7 +186,7 @@ configure_openclaw_defaults() {
   node -e '
     const fs = require("fs");
     const path = process.argv[1];
-    const model = String(process.argv[2] || "").trim() || "kimi-openai/kimi-k2.5";
+    const model = String(process.argv[2] || "").trim() || "kimi-coding/kimi-k2.5";
     const providerKey = String(process.argv[3] || "").trim();
 
     let conf = {};
@@ -209,6 +210,15 @@ configure_openclaw_defaults() {
     const providerId = model.includes("/") ? model.split("/")[0] : "";
     if (!conf.models || typeof conf.models !== "object") conf.models = {};
     if (!conf.models.providers || typeof conf.models.providers !== "object") conf.models.providers = {};
+    if (!conf.models.providers["kimi-coding"] || typeof conf.models.providers["kimi-coding"] !== "object") {
+      conf.models.providers["kimi-coding"] = {};
+    }
+    if (!conf.models.providers["kimi-coding"].baseUrl) {
+      conf.models.providers["kimi-coding"].baseUrl = "https://api.moonshot.cn/v1";
+    }
+    if (!Array.isArray(conf.models.providers["kimi-coding"].models)) {
+      conf.models.providers["kimi-coding"].models = [{ id: "kimi-k2.5", kind: "chat" }];
+    }
 
     if (providerId && providerKey) {
       if (!conf.models.providers[providerId] || typeof conf.models.providers[providerId] !== "object") {
@@ -223,10 +233,15 @@ configure_openclaw_defaults() {
         if (!conf.models.providers[kimiProvider] || typeof conf.models.providers[kimiProvider] !== "object") {
           conf.models.providers[kimiProvider] = {};
         }
-        if (!conf.models.providers[kimiProvider].apiKey) {
-          conf.models.providers[kimiProvider].apiKey = providerKey;
-        }
+        conf.models.providers[kimiProvider].apiKey = providerKey;
       }
+    }
+
+    if (conf.agents && Array.isArray(conf.agents.list)) {
+      conf.agents.list = conf.agents.list.map((agent) => {
+        if (!agent || typeof agent !== "object") return agent;
+        return { ...agent, model };
+      });
     }
 
     fs.writeFileSync(path, JSON.stringify(conf, null, 2) + "\n");
@@ -248,9 +263,10 @@ configure_meco_runtime_settings() {
       minimaxApiKey: String(process.argv[3] || "").trim(),
       minimaxWsUrl: String(process.argv[4] || "").trim(),
       tikhubApiKey: String(process.argv[5] || "").trim(),
-      kimiApiKey: String(process.argv[6] || "").trim(),
-      hotTopicsKbPath: String(process.argv[7] || "").trim(),
-      openaiApiKey: String(process.argv[8] || "").trim()
+      meowloadApiKey: String(process.argv[6] || "").trim(),
+      kimiApiKey: String(process.argv[7] || "").trim(),
+      hotTopicsKbPath: String(process.argv[8] || "").trim(),
+      openaiApiKey: String(process.argv[9] || "").trim()
     };
 
     let current = {};
@@ -273,6 +289,7 @@ configure_meco_runtime_settings() {
     "$MECO_MINIMAX_API_KEY" \
     "$MECO_MINIMAX_WS_URL" \
     "$MECO_TIKHUB_API_KEY" \
+    "$MECO_MEOWLOAD_API_KEY" \
     "$kimi_api_key" \
     "$HOT_TOPICS_ROOT" \
     "$MECO_OPENAI_API_KEY"

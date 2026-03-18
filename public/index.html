@@ -386,6 +386,9 @@
         let atMentionCandidates = [];
         let atMentionSelectedIndex = 0;
         let atMentionMode = 'mention';
+        let atRefreshModalContext = null;
+        let atRefreshModalActionInProgress = false;
+        let atRefreshToastTimer = null;
         let atRemoteRuntimeStatus = { agents: {}, channels: {}, updatedAt: '' };
         let atRuntimeStatusPollTimer = null;
         let atHistoryScrollTicking = false;
@@ -393,6 +396,21 @@
         const atChannelTypingTimers = new Map();
         const atAgentSentInputHistory = new Map();
         const atChannelSentInputHistory = new Map();
+        const atSkillToggleState = new Map();
+        let atSkillToggleSeq = 0;
+        let atSkillFetchSeq = 0;
+
+        function getSkillToggleKey(agentId, skillName) {
+            return `${agentId || ''}::${skillName || ''}`;
+        }
+
+        function getPendingSkillToggleState(agentId, skillName) {
+            if (!agentId || !skillName) return null;
+            const key = getSkillToggleKey(agentId, skillName);
+            const state = atSkillToggleState.get(key);
+            if (!state || !state.pending) return null;
+            return state;
+        }
 
         function setSidebarSelectedAgent(agentId) {
             sidebarActiveAgentId = agentId || null;
@@ -900,7 +918,7 @@
             const isChannelMode = !!currentChannelId;
             const isAvailable = isChannelMode ? true : !!currentAgentToolId;
             const isLoading = isChannelMode ? atChannelRefreshInProgress : atPersonaRefreshInProgress;
-            btn.title = isChannelMode ? 'Clear channel chat history' : 'Reload persona and clear session';
+            btn.title = 'Refresh options';
             btn.disabled = !isAvailable || isLoading;
             if (btn.disabled) {
                 btn.classList.add('opacity-60', 'cursor-not-allowed');
@@ -912,6 +930,62 @@
             } else {
                 icon.classList.remove('animate-spin');
             }
+        }
+
+        function updateAgentToolsRefreshModalUi() {
+            const modal = document.getElementById('agenttools-refresh-modal');
+            const titleEl = document.getElementById('agenttools-refresh-modal-title');
+            const descEl = document.getElementById('agenttools-refresh-modal-desc');
+            const onlyBtn = document.getElementById('agenttools-refresh-persona-btn');
+            const clearBtn = document.getElementById('agenttools-refresh-reset-btn');
+            const closeBtn = document.getElementById('agenttools-refresh-close-btn');
+            if (!modal || !titleEl || !descEl || !onlyBtn || !clearBtn || !closeBtn) return;
+
+            const ctx = atRefreshModalContext;
+            if (!ctx) return;
+            const isChannel = ctx.type === 'channel';
+            const displayName = ctx.name || ctx.id || '-';
+            titleEl.textContent = isChannel ? '群聊刷新选项' : '单聊刷新选项';
+            descEl.textContent = isChannel
+                ? `当前频道：${displayName}`
+                : `当前智能体：${displayName}`;
+
+            const busy = !!atRefreshModalActionInProgress;
+            [onlyBtn, clearBtn, closeBtn].forEach((el) => {
+                el.disabled = busy;
+                el.classList.toggle('opacity-60', busy);
+                el.classList.toggle('cursor-not-allowed', busy);
+            });
+        }
+
+        function showAgentToolsRefreshToast(message, type = 'success') {
+            const toast = document.getElementById('agenttools-refresh-toast');
+            if (!toast) return;
+            const textEl = document.getElementById('agenttools-refresh-toast-text');
+            if (textEl) {
+                textEl.textContent = message || '';
+            }
+            const isError = type === 'error';
+            toast.classList.remove('hidden', 'translate-y-[-8px]', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+            toast.classList.toggle('border-emerald-400/40', !isError);
+            toast.classList.toggle('bg-emerald-500/15', !isError);
+            toast.classList.toggle('text-emerald-200', !isError);
+            toast.classList.toggle('border-red-400/40', isError);
+            toast.classList.toggle('bg-red-500/15', isError);
+            toast.classList.toggle('text-red-200', isError);
+
+            if (atRefreshToastTimer) {
+                clearTimeout(atRefreshToastTimer);
+                atRefreshToastTimer = null;
+            }
+            atRefreshToastTimer = setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-[-8px]', 'opacity-0');
+                setTimeout(() => {
+                    toast.classList.add('hidden');
+                }, 180);
+            }, 1800);
         }
 
         async function refreshAgentToolsSoundAvailability() {
@@ -949,39 +1023,121 @@
             updateAgentToolsChannelRuleModeUi();
         };
 
-        window.reloadAgentToolsPersonaSession = async function() {
+        function getAgentToolsRefreshContext() {
             if (currentChannelId) {
-                const channelId = currentChannelId;
-                if (!channelId || atChannelRefreshInProgress) return;
-                atChannelRefreshInProgress = true;
-                updateAgentToolsPersonaRefreshUi();
-                try {
-                    await resetAgentToolsChannelConversation(channelId);
-                } catch (e) {
-                    alert(`刷新失败: ${e.message}`);
-                } finally {
-                    atChannelRefreshInProgress = false;
-                    updateAgentToolsPersonaRefreshUi();
-                }
-                return;
+                const channel = getChannelById(currentChannelId);
+                return {
+                    type: 'channel',
+                    id: currentChannelId,
+                    name: channel && channel.name ? channel.name : currentChannelId
+                };
             }
-            const agentId = currentAgentToolId;
-            if (!agentId) return;
-            if (atPersonaRefreshInProgress) return;
+            if (currentAgentToolId) {
+                const agent = getAgentById(currentAgentToolId);
+                return {
+                    type: 'agent',
+                    id: currentAgentToolId,
+                    name: agent && agent.name ? agent.name : currentAgentToolId
+                };
+            }
+            return null;
+        }
 
-            atPersonaRefreshInProgress = true;
+        window.closeAgentToolsRefreshModal = function() {
+            if (atRefreshModalActionInProgress) return;
+            const modal = document.getElementById('agenttools-refresh-modal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+            atRefreshModalContext = null;
+        };
+
+        window.reloadAgentToolsPersonaSession = function() {
+            if (atPersonaRefreshInProgress || atChannelRefreshInProgress || atRefreshModalActionInProgress) return;
+            const ctx = getAgentToolsRefreshContext();
+            if (!ctx) return;
+            atRefreshModalContext = ctx;
+            const modal = document.getElementById('agenttools-refresh-modal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            updateAgentToolsRefreshModalUi();
+        };
+
+        window.confirmAgentToolsRefreshPersonaOnly = async function() {
+            const ctx = atRefreshModalContext;
+            if (!ctx || atRefreshModalActionInProgress) return;
+            closeAgentToolsRefreshModal();
+            atRefreshModalActionInProgress = true;
+            if (ctx.type === 'channel') {
+                atChannelRefreshInProgress = true;
+            } else {
+                atPersonaRefreshInProgress = true;
+            }
             updateAgentToolsPersonaRefreshUi();
+
             try {
-                await resetAgentToolsConversation(agentId, '', {
-                    allowEmptyCommand: true,
-                    reloadPersona: true,
-                    skipRemoteReset: true
-                });
-                await refreshSystemPrompt();
+                if (ctx.type === 'channel') {
+                    const res = await fetch(`/api/agent-channels/${encodeURIComponent(ctx.id)}/persona/refresh`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    const body = await res.json().catch(() => ({}));
+                    if (!res.ok || !body.success) {
+                        throw new Error(body.error || 'persona refresh failed');
+                    }
+                } else {
+                    const res = await fetch(`/api/persona/${encodeURIComponent(ctx.id)}/refresh`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    const body = await res.json().catch(() => ({}));
+                    if (!res.ok || !body.success) {
+                        throw new Error(body.error || 'persona refresh failed');
+                    }
+                    await refreshSystemPrompt();
+                }
+                showAgentToolsRefreshToast('重载人设成功', 'success');
             } catch (e) {
-                alert(`刷新失败: ${e.message}`);
+                showAgentToolsRefreshToast(`重载人设失败: ${e.message}`, 'error');
             } finally {
+                atRefreshModalActionInProgress = false;
                 atPersonaRefreshInProgress = false;
+                atChannelRefreshInProgress = false;
+                updateAgentToolsPersonaRefreshUi();
+            }
+        };
+
+        window.confirmAgentToolsRefreshReloadAndClear = async function() {
+            const ctx = atRefreshModalContext;
+            if (!ctx || atRefreshModalActionInProgress) return;
+            closeAgentToolsRefreshModal();
+            atRefreshModalActionInProgress = true;
+            if (ctx.type === 'channel') {
+                atChannelRefreshInProgress = true;
+            } else {
+                atPersonaRefreshInProgress = true;
+            }
+            updateAgentToolsPersonaRefreshUi();
+
+            try {
+                if (ctx.type === 'channel') {
+                    await resetAgentToolsChannelConversation(ctx.id, { reloadPersona: true });
+                } else {
+                    await resetAgentToolsConversation(ctx.id, '', {
+                        allowEmptyCommand: true,
+                        reloadPersona: true,
+                        skipRemoteReset: true
+                    });
+                    await refreshSystemPrompt();
+                }
+                showAgentToolsRefreshToast('重载并清空成功', 'success');
+            } catch (e) {
+                showAgentToolsRefreshToast(`重载并清空失败: ${e.message}`, 'error');
+            } finally {
+                atRefreshModalActionInProgress = false;
+                atPersonaRefreshInProgress = false;
+                atChannelRefreshInProgress = false;
                 updateAgentToolsPersonaRefreshUi();
             }
         };
@@ -1257,18 +1413,17 @@
             } else {
                 mention.textContent = `@${candidate.name || candidate.id || 'Agent'}`;
             }
-            const separator = document.createTextNode('\u200B');
-
+            const imeAnchor = document.createTextNode('\u200B');
             range.insertNode(mention);
             range.setStartAfter(mention);
             range.collapse(true);
-            range.insertNode(separator);
+            range.insertNode(imeAnchor);
 
-            const sepLen = (separator.textContent || '').length;
-            range.setStart(separator, sepLen);
-            range.collapse(true);
+            const newRange = document.createRange();
+            newRange.setStart(imeAnchor, imeAnchor.textContent.length);
+            newRange.collapse(true);
             selection.removeAllRanges();
-            selection.addRange(range);
+            selection.addRange(newRange);
 
             hideMentionPopup();
         }
@@ -2057,6 +2212,7 @@
                 setValue('cfg-minimax-key', appRuntimeSettings.minimaxApiKey);
                 setValue('cfg-minimax-ws-url', appRuntimeSettings.minimaxWsUrl);
                 setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
+                setValue('cfg-meowload-key', appRuntimeSettings.meowloadApiKey);
                 setValue('cfg-kimi-key', appRuntimeSettings.kimiApiKey);
             } catch (e) {
                 console.error('Load settings failed', e);
@@ -2076,6 +2232,7 @@
                 minimaxApiKey: document.getElementById('cfg-minimax-key')?.value || '',
                 minimaxWsUrl: document.getElementById('cfg-minimax-ws-url')?.value || '',
                 tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
+                meowloadApiKey: document.getElementById('cfg-meowload-key')?.value || '',
                 kimiApiKey: document.getElementById('cfg-kimi-key')?.value || ''
             };
 
@@ -2312,7 +2469,7 @@
                 const data = await response.json();
                 
                 // Store as array
-                allAgents = Object.values(data.agents);
+                allAgents = sortAgentsMainFirst(Object.values(data.agents || {}));
                 console.log("Agents loaded:", allAgents.length);
                 
                 // Check for search param on load
@@ -2363,6 +2520,29 @@
             });
             
             renderAgents(filtered);
+        }
+
+        function isMainAgentEntry(agent) {
+            if (!agent || typeof agent !== 'object') return false;
+            const id = String(agent.id || '').trim().toLowerCase();
+            const name = String(agent.name || '').trim().toLowerCase();
+            const displayName = String(agent.displayName || '').trim().toLowerCase();
+            return id === 'main' || name === 'main' || displayName === 'main';
+        }
+
+        function sortAgentsMainFirst(agents) {
+            const list = Array.isArray(agents)
+                ? agents.filter(Boolean)
+                : Object.values(agents || {}).filter(Boolean);
+            return list
+                .map((agent, index) => ({ agent, index }))
+                .sort((a, b) => {
+                    const aMain = isMainAgentEntry(a.agent) ? 0 : 1;
+                    const bMain = isMainAgentEntry(b.agent) ? 0 : 1;
+                    if (aMain !== bMain) return aMain - bMain;
+                    return a.index - b.index;
+                })
+                .map((item) => item.agent);
         }
 
         function getRandomColor(name) {
@@ -2431,7 +2611,8 @@
             
             sidebarList.innerHTML = '';
 
-            Object.values(agents).forEach(agent => {
+            const orderedAgents = sortAgentsMainFirst(agents);
+            orderedAgents.forEach(agent => {
                 const displayName = agent.displayName || agent.name;
                 const hasCustomAvatar = agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com');
                 
@@ -3631,17 +3812,21 @@
             }
         }
 
-        async function refreshAgentSkills() {
+        async function refreshAgentSkills(options = {}) {
             if (!currentAgentToolId) return;
             const list = document.getElementById('at-skills-list');
             if (!list) return;
-            
-            // Don't clear list immediately to avoid flickering, maybe just show a small spinner?
-            // list.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">Refreshing...</div>';
+            const showLoading = options.showLoading !== false;
+            const agentId = currentAgentToolId;
+            const fetchSeq = ++atSkillFetchSeq;
+            if (showLoading) {
+                list.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">Loading skills...</div>';
+            }
             
             try {
-                const res = await fetch(`/api/agents/${currentAgentToolId}/skills`);
+                const res = await fetch(`/api/agents/${agentId}/skills`);
                 const data = await res.json();
+                if (fetchSeq !== atSkillFetchSeq || currentAgentToolId !== agentId) return;
                 
                 list.innerHTML = '';
                 if (data.skills && data.skills.length > 0) {
@@ -3652,9 +3837,10 @@
                     
                     const renderSkillItem = (skill) => {
                         const item = document.createElement('div');
-                        item.className = 'flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors mb-2';
-                        
-                        const isEnabled = skill.enabled; 
+                        const pendingState = getPendingSkillToggleState(agentId, skill.name);
+                        const isPending = !!pendingState;
+                        const isEnabled = isPending ? !!pendingState.desired : !!skill.enabled;
+                        item.className = `at-skill-item flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5 hover:bg-white/10 transition-colors mb-2 ${isPending ? 'opacity-75' : ''}`;
                         const safeName = (skill.name || '').replace(/'/g, "\\'");
                         
                         // Use emoji if available, otherwise use initials
@@ -3678,7 +3864,7 @@
                                 </div>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
-                                <input type="checkbox" class="sr-only peer" ${isEnabled ? 'checked' : ''} onchange="toggleSkill('${safeName}', this.checked)">
+                                <input type="checkbox" class="sr-only peer" ${isEnabled ? 'checked' : ''} onchange="toggleSkill('${safeName}', this)">
                                 <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
                             </label>
                         `;
@@ -3705,6 +3891,7 @@
                     list.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">No skills found.</div>';
                 }
             } catch (e) {
+                if (fetchSeq !== atSkillFetchSeq || currentAgentToolId !== agentId) return;
                 console.error('Failed to fetch skills', e);
                 list.innerHTML = '<div class="p-4 text-center text-red-500 text-sm">Error loading skills.</div>';
             }
@@ -3733,17 +3920,69 @@
             }
         }
 
-        window.toggleSkill = async function(skillName, enabled) {
+        window.toggleSkill = async function(skillName, inputOrEnabled) {
             if (!currentAgentToolId) return;
+            const agentId = currentAgentToolId;
+            const checkbox = inputOrEnabled instanceof HTMLInputElement ? inputOrEnabled : null;
+            const enabled = checkbox ? !!checkbox.checked : !!inputOrEnabled;
+            const toggleKey = getSkillToggleKey(agentId, skillName);
+            const requestId = ++atSkillToggleSeq;
+            atSkillToggleState.set(toggleKey, {
+                requestId,
+                desired: enabled,
+                pending: true
+            });
             try {
-                await fetch(`/api/agents/${currentAgentToolId}/skills/toggle`, {
+                const res = await fetch(`/api/agents/${agentId}/skills/toggle`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ skillName, enabled })
                 });
+                let data = {};
+                try {
+                    data = await res.json();
+                } catch (_) {}
+                if (!res.ok || data.success === false) {
+                    throw new Error(data.error || data.message || `HTTP ${res.status}`);
+                }
+                const currentState = atSkillToggleState.get(toggleKey);
+                if (!currentState || currentState.requestId !== requestId) {
+                    return;
+                }
+                const finalEnabled = typeof data.enabled === 'boolean' ? data.enabled : enabled;
+                atSkillToggleState.set(toggleKey, {
+                    requestId,
+                    desired: finalEnabled,
+                    pending: false
+                });
+                if (checkbox && currentAgentToolId === agentId) {
+                    checkbox.checked = finalEnabled;
+                }
+                if (typeof showAgentToolsToast === 'function') {
+                    showAgentToolsToast(`${skillName} ${finalEnabled ? 'enabled' : 'disabled'}`);
+                }
             } catch (e) {
                 console.error('Failed to toggle skill', e);
-                alert('Failed to toggle skill');
+                const currentState = atSkillToggleState.get(toggleKey);
+                if (currentState && currentState.requestId === requestId) {
+                    atSkillToggleState.delete(toggleKey);
+                    if (checkbox && currentAgentToolId === agentId) {
+                        checkbox.checked = !enabled;
+                    }
+                }
+                if (typeof showAgentToolsToast === 'function') {
+                    showAgentToolsToast(`Toggle failed: ${e.message || e}`, true);
+                } else {
+                    alert('Failed to toggle skill');
+                }
+            } finally {
+                const currentState = atSkillToggleState.get(toggleKey);
+                if (currentState && currentState.requestId === requestId) {
+                    atSkillToggleState.delete(toggleKey);
+                }
+                if (currentAgentToolId === agentId) {
+                    refreshAgentSkills({ showLoading: false });
+                }
             }
         };
 
@@ -5023,11 +5262,14 @@
             updateSidebarBusyIndicators();
         }
 
-        async function resetAgentToolsChannelConversation(channelId) {
+        async function resetAgentToolsChannelConversation(channelId, options = {}) {
             const id = typeof channelId === 'string' ? channelId.trim() : '';
             if (!id) {
                 throw new Error('channel id is required');
             }
+            const shouldReloadPersona = options && Object.prototype.hasOwnProperty.call(options, 'reloadPersona')
+                ? !!options.reloadPersona
+                : true;
             const socket = atChannelSockets.get(id);
             if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
                 try { socket.close(); } catch (_) {}
@@ -5040,7 +5282,8 @@
 
             const res = await fetch(`/api/agent-channels/${encodeURIComponent(id)}/history/reset`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reloadPersona: shouldReloadPersona })
             });
             const body = await res.json().catch(() => ({}));
             if (!res.ok || !body.success) {
@@ -5927,7 +6170,7 @@
         <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
             <div>
                 <label class="block text-xs text-gray-400 mb-1">OpenClaw Model</label>
-                <input id="cfg-openclaw-model" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="kimi-openai/kimi-k2.5">
+                <input id="cfg-openclaw-model" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="kimi-coding/kimi-k2.5">
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">MiniMax WS URL</label>
@@ -5940,6 +6183,10 @@
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">TikHub API Key (hot-topics)</label>
                 <input id="cfg-tikhub-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="TikHub key">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">MeowLoad API Key (media-downloader / 哼哼猫)</label>
+                <input id="cfg-meowload-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="MeowLoad key">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Kimi Coding API Key</label>
@@ -6138,6 +6385,40 @@
             </button>
         </div>
     </div>
+</div>
+
+<!-- AgentTools Refresh Modal -->
+<div id="agenttools-refresh-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeAgentToolsRefreshModal()"></div>
+    <div class="relative w-full max-w-md bg-[#0a0a0a] rounded-3xl p-6 border border-white/10 shadow-2xl mx-4 animate-scale-in">
+        <div class="flex items-center justify-between mb-3">
+            <h3 id="agenttools-refresh-modal-title" class="text-lg font-bold text-white">刷新选项</h3>
+            <button id="agenttools-refresh-close-btn" class="text-gray-400 hover:text-white" onclick="closeAgentToolsRefreshModal()">
+                <span class="material-icons-round">close</span>
+            </button>
+        </div>
+        <p id="agenttools-refresh-modal-desc" class="text-sm text-gray-400">-</p>
+        <div class="mt-6 space-y-3">
+            <button id="agenttools-refresh-persona-btn"
+                    type="button"
+                    onclick="confirmAgentToolsRefreshPersonaOnly()"
+                    class="w-full py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-colors border border-white/10">
+                仅重载人设
+            </button>
+            <button id="agenttools-refresh-reset-btn"
+                    type="button"
+                    onclick="confirmAgentToolsRefreshReloadAndClear()"
+                    class="w-full py-3 rounded-xl bg-primary hover:bg-primaryHover text-black font-bold transition-colors shadow-lg shadow-primary/20">
+                重载+清空
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- AgentTools Refresh Toast -->
+<div id="agenttools-refresh-toast"
+     class="hidden fixed top-6 right-6 z-[70] px-4 py-2 rounded-xl border backdrop-blur-md shadow-xl transition-all duration-200 translate-y-[-8px] opacity-0">
+    <span id="agenttools-refresh-toast-text" class="text-sm font-medium">-</span>
 </div>
 
 <!-- Loading Overlay -->

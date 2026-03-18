@@ -142,7 +142,7 @@
 <div id="loadingOverlay" class="loading-overlay">
     <div class="loader"></div>
     <h3 class="text-xl font-bold text-white mt-4 tracking-wide">Creating Agent...</h3>
-    <p class="text-gray-400 text-sm mt-2">Training voice model &amp; configuring workspace</p>
+    <p class="text-gray-400 text-sm mt-2">Configuring workspace and profile...</p>
 </div>
 
 <form id="createForm" class="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -190,11 +190,12 @@
     <input type="file" name="avatar" accept="image/*" class="hidden" onchange="handleFileSelect(this, 'avatar')">
     <div class="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
     <div id="avatar-placeholder" class="border border-dashed border-white/20 rounded-2xl h-full flex flex-col items-center justify-center bg-white/[0.02] hover:bg-white/[0.05] hover:border-primary/40 transition-all">
+        <div class="absolute top-2 right-2 text-[9px] bg-white/10 px-1.5 py-0.5 rounded text-gray-400 border border-white/5">Optional</div>
         <div class="w-12 h-12 mb-3 rounded-full bg-gradient-to-br from-gray-800 to-black flex items-center justify-center shadow-lg border border-white/5">
             <span class="material-icons-round text-2xl text-gray-400 group-hover:text-primary transition-colors">add_a_photo</span>
         </div>
         <span class="text-xs font-medium text-gray-300">Avatar Image</span>
-        <span class="text-[10px] text-gray-600 mt-1">PNG, JPG up to 5MB</span>
+        <span class="text-[10px] text-gray-600 mt-1">PNG, JPG up to 5MB (or use letter avatar)</span>
     </div>
     <div id="avatar-preview" class="absolute inset-0 hidden bg-black">
         <img id="avatar-img" class="w-full h-full object-cover" />
@@ -226,12 +227,13 @@
 <div class="space-y-4">
 <label class="flex items-center gap-2 text-sm font-semibold text-primary tracking-wide uppercase">
 <span class="material-icons-outlined text-lg">graphic_eq</span>
-                        Voice Training
+                        Voice (Optional)
                     </label>
 <label class="relative group cursor-pointer h-40 block">
     <input type="file" name="voice" accept="audio/*" class="hidden" onchange="updateFileName(this, 'voiceLabel')">
 <div class="absolute inset-0 bg-gradient-to-br from-purple-500/10 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
 <div class="border border-dashed border-white/20 rounded-2xl h-full flex flex-col items-center justify-center bg-white/[0.02] hover:bg-white/[0.05] hover:border-primary/40 transition-all px-6 text-center">
+<div class="absolute top-2 right-2 text-[9px] bg-white/10 px-1.5 py-0.5 rounded text-gray-400 border border-white/5">Optional</div>
 <div class="flex gap-2 mb-3">
 <div class="w-1 h-6 bg-gray-600 rounded-full animate-[pulse_1s_ease-in-out_infinite]"></div>
 <div class="w-1 h-8 bg-gray-500 rounded-full animate-[pulse_1.2s_ease-in-out_infinite]"></div>
@@ -240,7 +242,7 @@
 <div class="w-1 h-6 bg-gray-600 rounded-full animate-[pulse_0.9s_ease-in-out_infinite]"></div>
 </div>
 <span id="voiceLabel" class="text-xs font-medium text-gray-300">Upload Voice Samples</span>
-<p class="text-[10px] text-gray-500 mt-1 max-w-[200px]">Upload at least 1 min of clear audio to clone voice style and tone.</p>
+<p class="text-[10px] text-gray-500 mt-1 max-w-[220px]">If omitted, system will use default voice ID directly.</p>
 </div>
 </label>
 </div>

@@ -2,6 +2,7 @@ const { exec, spawn } = require('child_process');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
+const appSettings = require('./app-settings');
 
 // Simple Mutex to prevent concurrent OpenClaw CLI execution
 class Mutex {
@@ -35,6 +36,26 @@ const openclawMutex = new Mutex();
 
 const HOME_DIR = os.homedir();
 const OPENCLAW_CMD = 'openclaw'; // Assumes it's in PATH
+
+function buildOpenClawEnv() {
+    const runtime = appSettings.getSettings();
+    const meowloadKey = String(runtime.meowloadApiKey || '').trim();
+    const env = {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        FORCE_COLOR: '0'
+    };
+    if (runtime && typeof runtime === 'object') {
+        if (runtime.tikhubApiKey) env.TIKHUB_API_KEY = String(runtime.tikhubApiKey);
+        if (runtime.kimiApiKey) env.KIMI_API_KEY = String(runtime.kimiApiKey);
+        if (runtime.openaiApiKey) env.OPENAI_API_KEY = String(runtime.openaiApiKey);
+    }
+    if (meowloadKey) {
+        env.MEOWLOAD_API_KEY = meowloadKey;
+        env.HENGHENGMAO_API_KEY = meowloadKey;
+    }
+    return env;
+}
 
 const runCommandWithRetry = async (cmd, retries = 5, delay = 2000) => {
     // Acquire lock before running command
@@ -242,12 +263,23 @@ Always respond in whatever language the user speaks to you. If they write in Chi
 ### Agent Handoff 
 💡 **Tip**: Usually, let the system decide who speaks next. But if you want to explicitly invite another participant to reply, ask them what you want to know within your message first, and then on a **new line** at the very end, append \`{next: "AgentName"}\`. This must be the absolute last line, with no content after it. 
 
-Example format: 
+Example format (single target): 
 Your message content here... 
 
 {next: "AgentName"} 
 
 Do NOT use "@". Do not say things like "Let me think" — just speak naturally.
+
+### Mode-specific \`{next}\` Rules
+- **Moderator/Host mode (主持人模式):** you may output **only ONE** \`{next: "Name"}\` in the whole reply.
+- **Free discussion / 1-on-1 chat (自由讨论/单聊):** you may output **multiple** \`{next: "Name"}\` directives when needed.
+- For multiple targets, place each \`{next: "Name"}\` as its own line at the end.
+
+Example format (multi-target, free discussion only):
+Your message content here...
+
+{next: "Stephen Hawking"}
+{next: "Kobe Bryant"}
 
 ### Next-Speaker Discipline
 - If you see \`{next: "Name"}\` and **Name is not you**, do not jump in; let that person take the turn.
@@ -627,7 +659,7 @@ const sendMessage = async (agentId, message) => {
 
     try {
         return await new Promise((resolve, reject) => {
-            exec(cmd, { timeout: 120000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+            exec(cmd, { timeout: 120000, maxBuffer: 1024 * 1024 * 5, env: buildOpenClawEnv() }, (error, stdout, stderr) => {
                 if (error) {
                     console.error(`[sendMessage] Error:`, error.message);
                     console.error(`[sendMessage] Stderr:`, stderr);
@@ -659,9 +691,7 @@ const sendMessage = async (agentId, message) => {
 const sendMessageStream = (agentId, message, onChunk, onDone, onError, options = {}) => {
     // Using spawn for concurrency - NO MUTEX LOCK
     const { spawn } = require('child_process');
-    // Inject PYTHONUNBUFFERED just in case it's Python under the hood
-    // Also try FORCE_COLOR=0 to reduce ANSI noise
-    const env = { ...process.env, PYTHONUNBUFFERED: '1', FORCE_COLOR: '0' };
+    const env = buildOpenClawEnv();
     const args = ['agent', '--agent', agentId, '--message', message, '--local'];
     if (options && typeof options.thinking === 'string' && options.thinking.trim()) {
         args.push('--thinking', options.thinking.trim());
@@ -903,7 +933,7 @@ const resetConversation = async (agentId) => {
         const child = spawn(
             OPENCLAW_CMD,
             ['agent', '--agent', normalizedAgentId, '--message', '/new', '--local'],
-            { env: { ...process.env, PYTHONUNBUFFERED: '1', FORCE_COLOR: '0' } }
+            { env: buildOpenClawEnv() }
         );
 
         let settled = false;

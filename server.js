@@ -166,7 +166,7 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
     const runtime = getRuntimeSettings();
     const gatewayUrl = runtime.openclawHttpUrl || 'http://127.0.0.1:18789/v1/chat/completions';
     const gatewayToken = runtime.openclawGatewayToken || '';
-    const model = runtime.openclawModel || 'kimi-openai/kimi-k2.5';
+    const model = runtime.openclawModel || 'kimi-coding/kimi-k2.5';
     const headers = {
       'Content-Type': 'application/json'
     };
@@ -363,7 +363,7 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
     const runtime = getRuntimeSettings();
     const gatewayUrl = runtime.openclawHttpUrl || 'http://127.0.0.1:18789/v1/chat/completions';
     const gatewayToken = runtime.openclawGatewayToken || '';
-    const defaultModel = runtime.openclawModel || 'kimi-openai/kimi-k2.5';
+    const defaultModel = runtime.openclawModel || 'kimi-coding/kimi-k2.5';
     const headers = {
       'Content-Type': 'application/json'
     };
@@ -501,6 +501,7 @@ const AGENT_VOICES = {
 // 默认 agentIds 和 voiceIds（5人圆桌）
 const DEFAULT_AGENT_IDS = ['jobs', 'kobe', 'munger', 'hawking', 'gates'];
 const DEFAULT_VOICE_IDS = ['jobs_voice_20260115_v3', 'kobe_v1_hd', 'charles_munger_v1_hd', 'hawking_v1_hd', 'bill_v1_hd'];
+const CREATE_DEFAULT_VOICE_ID = AGENT_VOICES['main'] || DEFAULT_VOICE_IDS[0] || 'jobs_voice_20260115_v3';
 
 // 动态构建 AGENTS 对象的函数
 function buildAgentsObject(agentIds, voiceIds) {
@@ -1309,6 +1310,60 @@ function resolveChannelDesignatedAgents(messageText, channelMembers) {
   return channelMembers.filter((id) => resolved.has(id));
 }
 
+function resolveChannelDesignatedAgentsInDirectiveOrder(messageText, channelMembers) {
+  const directives = extractNextDirectives(messageText);
+  if (!Array.isArray(channelMembers) || channelMembers.length === 0 || directives.length === 0) {
+    return [];
+  }
+
+  const normalizedMembers = channelMembers.map((id) => {
+    const displayName = getAgentDisplayName(id) || id;
+    return {
+      id,
+      idLower: String(id || '').trim().toLowerCase(),
+      displayName,
+      displayLower: String(displayName || '').trim().toLowerCase()
+    };
+  });
+
+  const ordered = [];
+  const seen = new Set();
+  directives.forEach((directive) => {
+    const needle = String(directive || '').trim().toLowerCase();
+    if (!needle) return;
+    let target = normalizedMembers.find((m) => m.displayLower === needle || m.idLower === needle);
+    if (!target) {
+      target = normalizedMembers.find((m) => m.displayLower.includes(needle) || needle.includes(m.displayLower));
+    }
+    if (!target || seen.has(target.id)) return;
+    seen.add(target.id);
+    ordered.push(target.id);
+  });
+
+  return ordered;
+}
+
+function ensureAllRequiredNextDirectives(content, requiredNames) {
+  const source = typeof content === 'string' ? content.trim() : '';
+  if (!source || !Array.isArray(requiredNames) || requiredNames.length === 0) {
+    return source;
+  }
+
+  const existing = extractNextDirectives(source).map((n) => String(n || '').trim().toLowerCase());
+  const normalizedExisting = new Set(existing.filter(Boolean));
+  const missingNames = requiredNames.filter((name) => {
+    const normalized = String(name || '').trim().toLowerCase();
+    return normalized && !normalizedExisting.has(normalized);
+  });
+
+  if (missingNames.length === 0) {
+    return source;
+  }
+
+  const appended = missingNames.map((name) => `{next: "${name}"}`).join('\n');
+  return `${source}\n\n${appended}`.trim();
+}
+
 function resolveChannelMentionedAgents(messageText, channelMembers) {
   const source = typeof messageText === 'string' ? messageText : '';
   if (!source || !Array.isArray(channelMembers) || channelMembers.length === 0) {
@@ -1324,20 +1379,58 @@ function resolveChannelMentionedAgents(messageText, channelMembers) {
     };
   });
 
-  const resolved = new Set();
-  for (const member of normalizedMembers) {
-    const candidates = Array.from(new Set([member.displayName, member.agentId].filter(Boolean)));
-    const hit = candidates.some((candidate) => {
-      const escaped = escapeRegexLiteral(candidate).replace(/\s+/g, '\\s+');
-      if (!escaped) return false;
-      // Match @Name / @AgentId with boundary on both sides, avoid matching emails/tokens.
-      const pattern = new RegExp(`(^|[^A-Za-z0-9_])@${escaped}(?=$|[^A-Za-z0-9_])`, 'i');
-      return pattern.test(source);
-    });
-    if (hit) resolved.add(member.id);
+  const candidatesByMember = normalizedMembers.map((member) => {
+    const candidates = Array.from(new Set([member.displayName, member.agentId].filter(Boolean)))
+      .map((candidate) => {
+        const escaped = escapeRegexLiteral(candidate).replace(/\s+/g, '\\s+');
+        if (!escaped) return null;
+        // Match from the position right after '@'; right boundary must be non-token.
+        const pattern = new RegExp(`^${escaped}(?=$|[^A-Za-z0-9_])`, 'i');
+        return {
+          raw: candidate,
+          pattern,
+          weight: candidate.length
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.weight - a.weight);
+    return {
+      id: member.id,
+      candidates
+    };
+  });
+
+  // Parse mentions in textual order: supports contiguous mentions like "@A@B".
+  const ordered = [];
+  const seen = new Set();
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] !== '@') continue;
+    const tail = source.slice(i + 1);
+    if (!tail) continue;
+
+    let best = null;
+    for (const member of candidatesByMember) {
+      for (const candidate of member.candidates) {
+        const m = tail.match(candidate.pattern);
+        if (!m || !m[0]) continue;
+        const matchedText = m[0];
+        const score = matchedText.length;
+        if (!best || score > best.score) {
+          best = {
+            id: member.id,
+            score
+          };
+        }
+      }
+    }
+
+    if (best && !seen.has(best.id)) {
+      seen.add(best.id);
+      ordered.push(best.id);
+    }
   }
 
-  return channelMembers.filter((id) => resolved.has(id));
+  return ordered;
 }
 
 function serializeAgentChannel(channel) {
@@ -2734,7 +2827,7 @@ app.post('/api/agents', upload.fields([
             fs.unlinkSync(files.video[0].path);
         }
         
-        let voiceId = null;
+        let voiceId = CREATE_DEFAULT_VOICE_ID;
         let voiceError = null;
         if (files.voice && files.voice[0]) {
             // 3. Voice Training (Minimax)
@@ -2784,16 +2877,33 @@ app.post('/api/agents', upload.fields([
                 console.warn(`[Create] Suppressing voice error for UX: ${voiceError}`);
                 voiceError = null; 
             }
-            
-            // Update meta with voiceId
-            const metaPath = path.join(agentDataDir, 'meta.json');
-            if (fs.existsSync(metaPath)) {
-                try {
-                    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-                    meta.voiceId = voiceId;
-                    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-                } catch(e) {}
+        } else {
+            console.log(`[Create] No voice sample uploaded, use default voiceId: ${voiceId}`);
+        }
+
+        // Ensure voice.json exists even when no voice sample is uploaded
+        const localVoiceJsonPath = path.join(agentDataDir, 'voice.json');
+        const wsVoiceJsonPath = path.join(workspacePath, 'voice.json');
+        if (!fs.existsSync(localVoiceJsonPath)) {
+            const defaultVoiceData = {
+                voiceId,
+                voice_id: voiceId,
+                status: 'default_voice'
+            };
+            fs.writeFileSync(localVoiceJsonPath, JSON.stringify(defaultVoiceData, null, 2));
+            if (fs.existsSync(workspacePath)) {
+                fs.writeFileSync(wsVoiceJsonPath, JSON.stringify(defaultVoiceData, null, 2));
             }
+        }
+
+        // Always persist voiceId into meta
+        const metaPath = path.join(agentDataDir, 'meta.json');
+        if (fs.existsSync(metaPath)) {
+            try {
+                const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+                meta.voiceId = voiceId;
+                fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+            } catch (e) {}
         }
         
         // 注册到 AI Podcast API（文件上传和语音训练完成后，携带完整信息）
@@ -4271,6 +4381,8 @@ Ignore any examples in this file that mention other names.
 
 ## Next-Speaker Protocol
 
+- If you are acting as the moderator/host in this roundtable, your reply may contain **at most one** \`{next: "Name"}\`.
+- Outside moderator mode (free discussion / single chat), multiple \`{next: "Name"}\` directives are allowed.
 - If a message contains \`{next: "Name"}\` and **Name is not you**, do not jump in. Let that person handle this turn.
 - If **Name is you**, first read the full context/question from the person who called on you, then decide whether to reply.
 - If you reply, answer that person's point directly before expanding to anything else.
@@ -6243,6 +6355,355 @@ function getAgentKnowledgeRules(agentId) {
     return { filePath, rules, lines };
 }
 
+function isKnowledgeRuleExperienceExt(ext) {
+    const normalized = String(ext || '').toLowerCase();
+    return ['.doc', '.docx', '.pdf', '.txt', '.md'].includes(normalized);
+}
+
+function normalizeExperienceBaseName(filename) {
+    const ext = path.extname(String(filename || ''));
+    const base = path.basename(String(filename || ''), ext);
+    const cleaned = String(base || '')
+        .replace(/[\/\\:*?"<>|]/g, '_')
+        .replace(/[\u0000-\u001F]/g, '')
+        .trim();
+    return cleaned || 'experience';
+}
+
+function normalizeUploadedFilename(filename) {
+    const raw = String(filename || '').trim();
+    if (!raw) return '';
+    const rawHasCJK = /[\u3400-\u9FFF]/.test(raw);
+    const rawLooksMojibake = /[\u0080-\u009F]|[ÃÂâæåéèêëìíîïðñòóôõöøùúûüýþÿ]/.test(raw);
+    let decoded = '';
+    try {
+        decoded = Buffer.from(raw, 'latin1').toString('utf8');
+    } catch (_) {
+        decoded = '';
+    }
+    const decodedHasCJK = /[\u3400-\u9FFF]/.test(decoded);
+    if (!rawHasCJK && decodedHasCJK) {
+        return decoded;
+    }
+    if (rawLooksMojibake && decoded && !decoded.includes('�')) {
+        return decoded;
+    }
+    return raw;
+}
+
+function buildUniqueMarkdownFilePath(targetFolder, preferredBaseName) {
+    const base = normalizeExperienceBaseName(preferredBaseName || 'experience');
+    const firstPath = path.join(targetFolder, `${base}.md`);
+    if (!fs.existsSync(firstPath)) return firstPath;
+    for (let i = 2; i <= 10000; i += 1) {
+        const candidate = path.join(targetFolder, `${base}_${i}.md`);
+        if (!fs.existsSync(candidate)) return candidate;
+    }
+    return path.join(targetFolder, `${base}_${Date.now()}.md`);
+}
+
+function unwrapMarkdownFence(content) {
+    const source = String(content || '').trim();
+    if (!source) return '';
+    const fenceMatch = source.match(/```(?:markdown|md)?\s*([\s\S]*?)```/i);
+    if (fenceMatch && fenceMatch[1]) {
+        return String(fenceMatch[1]).trim();
+    }
+    return source;
+}
+
+function sanitizeMarkdownText(content) {
+    const source = String(content || '');
+    if (!source) return '';
+    // Remove C0/C1 control characters while preserving common whitespace/newlines.
+    // Keep: \t(0x09), \n(0x0A), \r(0x0D)
+    return source.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+}
+
+async function convertFileToMarkdownByAgent(agentId, sourceFilePath, originalName) {
+    const absPath = path.resolve(String(sourceFilePath || '').trim());
+    const ext = path.extname(String(originalName || absPath)).toLowerCase();
+    const scriptsDir = path.join(os.homedir(), '.openclaw', 'skills', 'doc-to-md', 'scripts');
+    const { execFile } = require('child_process');
+    const run = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
+        execFile(cmd, args, { timeout: 120000, maxBuffer: 1024 * 1024 * 10, ...opts }, (error, stdout, stderr) => {
+            if (error) {
+                const details = [stderr, stdout, error.message].filter(Boolean).join('\n').trim();
+                reject(new Error(details || `${cmd} failed`));
+                return;
+            }
+            resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') });
+        });
+    });
+
+    const tempDir = path.join(os.tmpdir(), `meco-doc-to-md-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempOutput = path.join(tempDir, `${normalizeExperienceBaseName(originalName || path.basename(absPath))}.md`);
+
+    try {
+        if (ext === '.docx') {
+            const script = path.join(scriptsDir, 'convert_docx.py');
+            await run('python3', [script, absPath, tempOutput], { cwd: scriptsDir });
+        } else if (ext === '.pdf') {
+            const script = path.join(scriptsDir, 'convert_pdf.py');
+            await run('python3', [script, absPath, tempOutput], { cwd: scriptsDir });
+        } else if (ext === '.doc') {
+            // .doc 先尝试用 macOS textutil 转成 .docx，再走 docx 转换
+            const convertedDocx = path.join(tempDir, `${normalizeExperienceBaseName(originalName || path.basename(absPath))}.docx`);
+            await run('textutil', ['-convert', 'docx', '-output', convertedDocx, absPath], {});
+            const script = path.join(scriptsDir, 'convert_docx.py');
+            await run('python3', [script, convertedDocx, tempOutput], { cwd: scriptsDir });
+        } else {
+            throw new Error(`unsupported extension: ${ext}`);
+        }
+
+        if (!fs.existsSync(tempOutput)) {
+            throw new Error(`doc-to-md output not found: ${tempOutput}`);
+        }
+        const markdownContent = fs.readFileSync(tempOutput, 'utf-8');
+        const md = unwrapMarkdownFence(markdownContent);
+        if (!md || !md.trim()) {
+            throw new Error('doc-to-md returned empty markdown');
+        }
+        return md;
+    } catch (e) {
+        throw new Error(`doc-to-md conversion failed: ${e.message || e}`);
+    } finally {
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (_) {}
+    }
+}
+
+app.post('/api/agents/:agentId/knowledge-rules/:lineNumber/experience', upload.single('file'), async (req, res) => {
+    const { agentId, lineNumber } = req.params;
+    const agent = getAgentById(agentId);
+    if (!agent) {
+        if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+        return res.status(404).json({ error: 'agent not found' });
+    }
+
+    const lineNo = Number(lineNumber);
+    if (!Number.isFinite(lineNo) || lineNo <= 0) {
+        if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch (_) {} }
+        return res.status(400).json({ error: 'invalid line number' });
+    }
+    if (!req.file) {
+        return res.status(400).json({ error: 'file is required' });
+    }
+
+    const normalizedOriginalName = normalizeUploadedFilename(req.file.originalname || '') || 'experience';
+    const ext = path.extname(normalizedOriginalName).toLowerCase();
+    if (!isKnowledgeRuleExperienceExt(ext)) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(400).json({ error: 'unsupported file type, only .doc/.docx/.pdf/.txt/.md' });
+    }
+
+    const { rules } = getAgentKnowledgeRules(agentId);
+    const rule = rules.find((item) => item.lineNumber === lineNo);
+    if (!rule || !rule.absoluteFolderPath) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(404).json({ error: 'rule not found' });
+    }
+
+    const targetFolder = path.resolve(rule.absoluteFolderPath);
+    let folderOk = false;
+    try {
+        folderOk = fs.existsSync(targetFolder) && fs.statSync(targetFolder).isDirectory();
+    } catch (_) {
+        folderOk = false;
+    }
+    if (!folderOk) {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+        return res.status(404).json({ error: 'rule folder does not exist' });
+    }
+
+    try {
+        let markdownContent = '';
+        if (ext === '.txt' || ext === '.md') {
+            markdownContent = fs.readFileSync(req.file.path, 'utf-8');
+        } else {
+            markdownContent = await convertFileToMarkdownByAgent(agentId, req.file.path, normalizedOriginalName);
+        }
+
+        const normalized = sanitizeMarkdownText(unwrapMarkdownFence(markdownContent));
+        if (!normalized.trim()) {
+            throw new Error('markdown content is empty');
+        }
+
+        const outputPath = buildUniqueMarkdownFilePath(targetFolder, normalizedOriginalName || 'experience');
+        fs.writeFileSync(outputPath, `${normalized.trimEnd()}\n`, 'utf-8');
+
+        return res.json({
+            success: true,
+            message: 'experience added',
+            outputPath,
+            outputDisplayPath: toTildePath(outputPath)
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'failed to add experience' });
+    } finally {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+    }
+});
+
+function sanitizeUploadPathSegment(segment, fallback = 'item') {
+    const raw = String(segment || '').trim();
+    const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^_+|_+$/g, '');
+    return cleaned || fallback;
+}
+
+function getKnowledgeRuleUploadRoot() {
+    const preferred = path.join(os.homedir(), 'Meco Studio', 'public', 'uploads');
+    try {
+        fs.mkdirSync(preferred, { recursive: true });
+        return preferred;
+    } catch (e) {
+        console.warn(`[KnowledgeRules] preferred upload root unavailable: ${e.message}`);
+    }
+    const fallback = path.join(__dirname, 'public', 'uploads');
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
+}
+
+function normalizeRelativeUploadPath(relPath, fallbackName = 'file.bin') {
+    const normalized = String(relPath || '').replace(/\\/g, '/').trim();
+    const rawParts = normalized.split('/').filter((part) => part && part !== '.' && part !== '..');
+    if (rawParts.length === 0) {
+        return [sanitizeUploadPathSegment(fallbackName, 'file.bin')];
+    }
+    return rawParts.map((part, idx) => sanitizeUploadPathSegment(part, idx === rawParts.length - 1 ? 'file.bin' : 'dir'));
+}
+
+function isPathInsideDir(parentDir, targetPath) {
+    if (!parentDir || !targetPath) return false;
+    const parent = path.resolve(parentDir);
+    const target = path.resolve(targetPath);
+    const relative = path.relative(parent, target);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function getKnowledgeRuleManagedFolderRoots() {
+    const roots = new Set();
+    const pushRoot = (dir) => {
+        if (!dir) return;
+        try {
+            roots.add(path.resolve(dir));
+        } catch (_) {}
+    };
+    pushRoot(path.join(getKnowledgeRuleUploadRoot(), 'knowledge-rule-folders'));
+    pushRoot(path.join(__dirname, 'public', 'uploads', 'knowledge-rule-folders'));
+    pushRoot(path.join(os.homedir(), 'Meco Studio', 'public', 'uploads', 'knowledge-rule-folders'));
+    pushRoot(path.join(os.homedir(), 'Desktop', 'Meco Studio', 'public', 'uploads', 'knowledge-rule-folders'));
+    return Array.from(roots);
+}
+
+function tryDeleteManagedKnowledgeRuleFolder(folderPath) {
+    const absPath = path.resolve(String(folderPath || '').trim());
+    if (!absPath) {
+        return { removed: false, reason: 'empty_path' };
+    }
+    let stat = null;
+    try {
+        stat = fs.statSync(absPath);
+    } catch (_) {
+        stat = null;
+    }
+    if (!stat || !stat.isDirectory()) {
+        return { removed: false, reason: 'not_directory_or_missing' };
+    }
+    const managedRoots = getKnowledgeRuleManagedFolderRoots();
+    const inManagedRoots = managedRoots.some((root) => isPathInsideDir(root, absPath));
+    if (!inManagedRoots) {
+        return { removed: false, reason: 'outside_managed_roots' };
+    }
+    fs.rmSync(absPath, { recursive: true, force: true });
+    return { removed: true, path: absPath };
+}
+
+function ensureUniqueFolderPath(parentDir, preferredName) {
+    const safeName = sanitizeUploadPathSegment(preferredName || 'folder', 'folder');
+    let candidate = path.join(parentDir, safeName);
+    if (!fs.existsSync(candidate)) {
+        return candidate;
+    }
+    for (let i = 2; i < 10000; i += 1) {
+        candidate = path.join(parentDir, `${safeName}_${i}`);
+        if (!fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+    return path.join(parentDir, `${safeName}_${Date.now()}`);
+}
+
+app.post('/api/uploads/knowledge-folder', upload.array('files', 5000), (req, res) => {
+    const incomingFiles = Array.isArray(req.files) ? req.files : [];
+    if (incomingFiles.length === 0) {
+        return res.status(400).json({ error: 'no files uploaded' });
+    }
+
+    const relPathsRaw = req.body?.relPaths;
+    const relPaths = Array.isArray(relPathsRaw)
+        ? relPathsRaw
+        : (typeof relPathsRaw === 'string' && relPathsRaw ? [relPathsRaw] : []);
+
+    const rawPreferredFolderName = String(req.body?.folderName || '').trim();
+    const preferredFolderName = rawPreferredFolderName
+        ? sanitizeUploadPathSegment(rawPreferredFolderName, 'folder')
+        : '';
+    const firstRelative = String(relPaths[0] || '').replace(/\\/g, '/').trim();
+    const rawInferredFolderName = firstRelative.split('/')[0] || '';
+    const inferredFolderName = rawInferredFolderName
+        ? sanitizeUploadPathSegment(rawInferredFolderName, 'folder')
+        : '';
+    const folderLabel = preferredFolderName || inferredFolderName || 'folder';
+    const normalizedInferredRoot = inferredFolderName || '';
+
+    const uploadRoot = getKnowledgeRuleUploadRoot();
+    const foldersRoot = path.join(uploadRoot, 'knowledge-rule-folders');
+    fs.mkdirSync(foldersRoot, { recursive: true });
+    const targetRoot = ensureUniqueFolderPath(foldersRoot, folderLabel);
+
+    let copiedCount = 0;
+    try {
+        fs.mkdirSync(targetRoot, { recursive: true });
+        incomingFiles.forEach((file, idx) => {
+            const relPath = String(relPaths[idx] || file.originalname || file.filename || `file_${idx + 1}`).trim();
+            let normalizedParts = normalizeRelativeUploadPath(relPath, file.originalname || `file_${idx + 1}`);
+            if (normalizedParts.length > 1) {
+                const firstPart = normalizedParts[0];
+                if ((normalizedInferredRoot && firstPart === normalizedInferredRoot) || firstPart === folderLabel) {
+                    normalizedParts = normalizedParts.slice(1);
+                }
+            }
+            const safeRelative = path.join(...normalizedParts);
+            const destination = path.join(targetRoot, safeRelative);
+            const destinationDir = path.dirname(destination);
+            fs.mkdirSync(destinationDir, { recursive: true });
+            fs.copyFileSync(file.path, destination);
+            copiedCount += 1;
+        });
+    } catch (e) {
+        incomingFiles.forEach((file) => {
+            try { fs.unlinkSync(file.path); } catch (_) {}
+        });
+        return res.status(500).json({ error: `failed to store folder upload: ${e.message}` });
+    }
+
+    incomingFiles.forEach((file) => {
+        try { fs.unlinkSync(file.path); } catch (_) {}
+    });
+
+    if (copiedCount <= 0) {
+        return res.status(500).json({ error: 'no files copied from upload' });
+    }
+
+    return res.json({
+        success: true,
+        absolutePath: targetRoot,
+        displayPath: toTildePath(targetRoot),
+        fileCount: copiedCount
+    });
+});
+
 app.get('/api/agents/:agentId/knowledge-rules', (req, res) => {
     const { agentId } = req.params;
     const agent = getAgentById(agentId);
@@ -6334,12 +6795,34 @@ app.delete('/api/agents/:agentId/knowledge-rules/:lineNumber', (req, res) => {
         return res.status(404).json({ error: 'rule not found' });
     }
 
+    let removedFolder = false;
+    let removedFolderPath = '';
+    let removedFolderReason = '';
+    try {
+        const expanded = expandHomePath(parsed.folderDisplayPath);
+        const absoluteFolderPath = path.isAbsolute(expanded)
+            ? path.resolve(expanded)
+            : path.resolve(os.homedir(), expanded);
+        const removeResult = tryDeleteManagedKnowledgeRuleFolder(absoluteFolderPath);
+        removedFolder = !!removeResult.removed;
+        removedFolderPath = removeResult.path || '';
+        removedFolderReason = removeResult.reason || '';
+    } catch (e) {
+        removedFolder = false;
+        removedFolderReason = e.message || 'remove_failed';
+    }
+
     lines.splice(idx, 1);
     const updatedContent = `${lines.join('\n').trimEnd()}\n`;
     fs.writeFileSync(filePath, updatedContent, 'utf-8');
     refreshPersona(agentId);
 
-    res.json({ success: true });
+    res.json({
+        success: true,
+        removedFolder,
+        removedFolderPath: removedFolderPath || undefined,
+        removedFolderReason: removedFolder ? undefined : (removedFolderReason || undefined)
+    });
 });
 
 app.post('/api/agents/:agentId/knowledge-rules/open', (req, res) => {
@@ -7489,6 +7972,9 @@ app.get('/api/agent-channels/:id/history', (req, res) => {
 
 app.post('/api/agent-channels/:id/history/reset', (req, res) => {
     const channelId = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+    const reloadPersona = req.body && Object.prototype.hasOwnProperty.call(req.body, 'reloadPersona')
+        ? !!req.body.reloadPersona
+        : true;
     if (!channelId) {
         return res.status(400).json({ error: 'channel id is required' });
     }
@@ -7520,6 +8006,32 @@ app.post('/api/agent-channels/:id/history/reset', (req, res) => {
     clearAgentChannelHistory(channelId);
     touchAgentChannel(channelId);
 
+    const refreshChannelPersonas = (channelRef) => {
+        let reloadedCount = 0;
+        const errors = [];
+        const members = Array.isArray(channelRef && channelRef.agentIds) ? channelRef.agentIds : [];
+        members.forEach((agentId) => {
+            try {
+                refreshPersona(agentId);
+                reloadedCount += 1;
+            } catch (e) {
+                errors.push({
+                    agentId,
+                    error: e && e.message ? e.message : String(e)
+                });
+            }
+        });
+        return { reloadedCount, errors };
+    };
+
+    let personaReloadedCount = 0;
+    let personaReloadErrors = [];
+    if (reloadPersona) {
+        const refreshed = refreshChannelPersonas(channel);
+        personaReloadedCount = refreshed.reloadedCount;
+        personaReloadErrors = refreshed.errors;
+    }
+
     const body = JSON.stringify({
         type: 'channel_conversation_reset',
         channelId,
@@ -7532,7 +8044,48 @@ app.post('/api/agent-channels/:id/history/reset', (req, res) => {
         }
     }
 
-    res.json({ success: true, cleared: true, channelId });
+    res.json({
+        success: true,
+        cleared: true,
+        channelId,
+        personaReloaded: !!reloadPersona,
+        personaReloadedCount,
+        personaReloadErrors
+    });
+});
+
+app.post('/api/agent-channels/:id/persona/refresh', (req, res) => {
+    const channelId = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+    if (!channelId) {
+        return res.status(400).json({ error: 'channel id is required' });
+    }
+    const channel = findAgentChannelById(channelId);
+    if (!channel) {
+        return res.status(404).json({ error: 'channel not found' });
+    }
+
+    let personaReloadedCount = 0;
+    const personaReloadErrors = [];
+    const members = Array.isArray(channel.agentIds) ? channel.agentIds : [];
+    members.forEach((agentId) => {
+        try {
+            refreshPersona(agentId);
+            personaReloadedCount += 1;
+        } catch (e) {
+            personaReloadErrors.push({
+                agentId,
+                error: e && e.message ? e.message : String(e)
+            });
+        }
+    });
+
+    res.json({
+        success: true,
+        channelId,
+        personaReloaded: true,
+        personaReloadedCount,
+        personaReloadErrors
+    });
 });
 
 const agentRuntimeBusyCounters = new Map();
@@ -7672,100 +8225,209 @@ app.get('/api/agents/:id', (req, res) => {
     }
 });
 
-// Get Agent Skills (Plugins)
+function extractFirstJsonObject(rawText) {
+    const text = String(rawText || '');
+    if (!text) return null;
+
+    for (let start = 0; start < text.length; start++) {
+        const ch = text[start];
+        if (ch !== '{' && ch !== '[') continue;
+        const openChar = ch;
+        const closeChar = ch === '{' ? '}' : ']';
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+
+        for (let i = start; i < text.length; i++) {
+            const c = text[i];
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (c === '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (c === '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c === '"') {
+                inString = true;
+                continue;
+            }
+            if (c === openChar) depth++;
+            if (c === closeChar) depth--;
+            if (depth === 0) {
+                const candidate = text.slice(start, i + 1);
+                try {
+                    return JSON.parse(candidate);
+                } catch (_) {
+                    break;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+function execOpenclawCommand(args, options = {}) {
+    const { execFile } = require('child_process');
+    return new Promise((resolve, reject) => {
+        execFile('openclaw', args, { maxBuffer: 1024 * 1024 * 10, ...options }, (error, stdout, stderr) => {
+            if (error) {
+                error.stdout = stdout;
+                error.stderr = stderr;
+                return reject(error);
+            }
+            resolve({ stdout, stderr });
+        });
+    });
+}
+
+function normalizeSkillName(raw) {
+    return String(raw || '').trim();
+}
+
+function normalizeSkillList(list) {
+    const result = [];
+    const seen = new Set();
+    if (!Array.isArray(list)) return result;
+    for (const item of list) {
+        const name = normalizeSkillName(item);
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        result.push(name);
+    }
+    result.sort((a, b) => a.localeCompare(b));
+    return result;
+}
+
+async function getOpenclawSkillsCatalog() {
+    const listResult = await execOpenclawCommand(['skills', 'list', '--json']);
+    const rawList = `${listResult.stdout || ''}\n${listResult.stderr || ''}`;
+    const parsedList = extractFirstJsonObject(rawList);
+    if (!parsedList) throw new Error('No JSON object found in skills list output');
+
+    if (Array.isArray(parsedList.items)) return parsedList.items;
+    if (Array.isArray(parsedList.skills)) return parsedList.skills;
+    if (Array.isArray(parsedList)) return parsedList;
+    return [];
+}
+
+async function getOpenclawAgentsConfigList() {
+    const configResult = await execOpenclawCommand(['config', 'get', 'agents.list', '--json']);
+    const rawConfig = `${configResult.stdout || ''}\n${configResult.stderr || ''}`;
+    const parsedConfig = extractFirstJsonObject(rawConfig);
+    if (Array.isArray(parsedConfig)) return parsedConfig;
+    return [];
+}
+
+async function getOpenclawSkillEntriesConfig() {
+    try {
+        const configResult = await execOpenclawCommand(['config', 'get', 'skills.entries', '--json']);
+        const rawConfig = `${configResult.stdout || ''}\n${configResult.stderr || ''}`;
+        const parsedConfig = extractFirstJsonObject(rawConfig);
+        if (parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)) {
+            return parsedConfig;
+        }
+        return {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function resolveAgentConfigIndex(agentsList, agentId) {
+    const target = String(agentId || '').trim().toLowerCase();
+    if (!target) return -1;
+    return agentsList.findIndex((entry) => String(entry && entry.id || '').trim().toLowerCase() === target);
+}
+
+// Get Agent Skills
 app.get('/api/agents/:id/skills', async (req, res) => {
     const { id } = req.params;
-    
     try {
-        const { exec } = require('child_process');
-        // Use skills list --json for better parsing and filtering
-        exec('openclaw skills list --json', { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`[Skills] Error: ${error.message}`);
-                return res.status(500).json({ error: error.message });
-            }
-            
-            try {
-                // Find JSON start and end to handle potential CLI warnings/logs
-                const jsonStartIndex = stdout.indexOf('{');
-                const jsonEndIndex = stdout.lastIndexOf('}');
-                
-                if (jsonStartIndex === -1 || jsonEndIndex === -1) {
-                    throw new Error('No JSON object found in output');
-                }
-                
-                const jsonStr = stdout.substring(jsonStartIndex, jsonEndIndex + 1);
-                console.log(`[Skills] Raw JSON string length: ${jsonStr.length}`);
-                
-                let data;
-                try {
-                    data = JSON.parse(jsonStr);
-                } catch (parseErr) {
-                    console.error(`[Skills] JSON Parse Error:`, parseErr);
-                    // Try to clean up JSON string if possible (e.g. trailing commas)
-                    // For now, return empty list
-                    return res.json({ skills: [] });
-                }
-                
-                let skillsList = [];
-                // Handle new CLI format which returns object with 'items' array or similar
-                if (data.items) {
-                    skillsList = data.items;
-                } else if (data.skills) {
-                    skillsList = data.skills;
-                } else if (Array.isArray(data)) {
-                    skillsList = data;
-                } else if (typeof data === 'object') {
-                    // Fallback: try to find any array property that looks like skills
-                    const values = Object.values(data);
-                    const foundArray = values.find(v => Array.isArray(v) && v.length > 0 && v[0].name);
-                    if (foundArray) {
-                        skillsList = foundArray;
-                    } else {
-                        // If no array found, maybe it's a map of skills? Unlikely but possible.
-                        // For now, let's just log warning and use empty list to avoid crashing
-                        console.warn('[Skills] Could not find skills array in response:', Object.keys(data));
-                        skillsList = [];
-                    }
-                }
-                
-                // Filter outbundled skills if needed, or process them
-                // Ensure each skill has necessary fields
-                skillsList = skillsList.map(skill => ({
-                    name: skill.name || 'Unknown Skill',
-                    displayName: skill.displayName || skill.name || 'Unknown Skill',
-                    description: skill.description || '',
-                    enabled: skill.eligible !== false && !skill.disabled,
-                    emoji: skill.emoji || '🧩',
-                    source: skill.source || 'unknown'
-                }));
-                
-                // Sort skills: Installed (openclaw-managed) first, then Extra (openclaw-extra/bundled)
-                skillsList.sort((a, b) => {
-                    const sourceA = a.source || '';
-                    const sourceB = b.source || '';
-                    const nameA = a.name || '';
-                    const nameB = b.name || '';
-                    
-                    // managed first
-                    if (sourceA.includes('managed') && !sourceB.includes('managed')) return -1;
-                    if (!sourceA.includes('managed') && sourceB.includes('managed')) return 1;
-                    
-                    // extra second (implicit by being not managed)
-                    
-                    // fallback to name sort
-                    return nameA.localeCompare(nameB);
-                });
+        const [catalog, agentsList, globalSkillEntries] = await Promise.all([
+            getOpenclawSkillsCatalog(),
+            getOpenclawAgentsConfigList(),
+            getOpenclawSkillEntriesConfig()
+        ]);
 
-                res.json({ skills: skillsList });
-            } catch (e) {
-                console.error(`[Skills] Parse error:`, e);
-                // Fallback to empty list
-                res.json({ skills: [] });
+        const agentIndex = resolveAgentConfigIndex(agentsList, id);
+        const agentEntry = agentIndex >= 0 ? agentsList[agentIndex] : null;
+        const hasAgentFilter = agentEntry && Array.isArray(agentEntry.skills);
+        const agentAllowedSet = new Set(normalizeSkillList(hasAgentFilter ? agentEntry.skills : []));
+
+        const globalEnabledByName = new Map();
+        for (const [nameRaw, entry] of Object.entries(globalSkillEntries || {})) {
+            const name = normalizeSkillName(nameRaw);
+            if (!name) continue;
+            if (entry && typeof entry.enabled === 'boolean') {
+                globalEnabledByName.set(name, entry.enabled);
             }
+        }
+
+        const skillByName = new Map();
+        for (const skill of catalog) {
+            const name = normalizeSkillName(skill.name) || 'Unknown Skill';
+            const defaultGlobalEnabled = skill.eligible !== false && !skill.disabled;
+            const globalEnabled = globalEnabledByName.has(name) ? globalEnabledByName.get(name) : defaultGlobalEnabled;
+            const agentEnabled = hasAgentFilter ? agentAllowedSet.has(name) : true;
+            skillByName.set(name, {
+                name,
+                displayName: skill.displayName || name,
+                description: skill.description || '',
+                enabled: !!(globalEnabled && agentEnabled),
+                emoji: skill.emoji || '🧩',
+                source: skill.source || 'unknown'
+            });
+        }
+
+        // Keep globally disabled skills visible even if not returned by skills list.
+        for (const [name, globalEnabled] of globalEnabledByName.entries()) {
+            if (skillByName.has(name)) continue;
+            const agentEnabled = hasAgentFilter ? agentAllowedSet.has(name) : true;
+            skillByName.set(name, {
+                name,
+                displayName: name,
+                description: globalEnabled ? '' : 'Disabled globally in config',
+                enabled: !!(globalEnabled && agentEnabled),
+                emoji: '🧩',
+                source: 'openclaw-managed'
+            });
+        }
+
+        // Keep agent-allowed skills visible even if currently missing from catalog.
+        for (const name of agentAllowedSet) {
+            if (skillByName.has(name)) continue;
+            const globalEnabled = globalEnabledByName.has(name) ? globalEnabledByName.get(name) : true;
+            skillByName.set(name, {
+                name,
+                displayName: name,
+                description: 'Enabled for this agent (metadata unavailable)',
+                enabled: !!globalEnabled,
+                emoji: '🧩',
+                source: 'openclaw-managed'
+            });
+        }
+
+        const skillsList = Array.from(skillByName.values());
+        skillsList.sort((a, b) => {
+            const sourceA = a.source || '';
+            const sourceB = b.source || '';
+            const nameA = a.name || '';
+            const nameB = b.name || '';
+            if (sourceA.includes('managed') && !sourceB.includes('managed')) return -1;
+            if (!sourceA.includes('managed') && sourceB.includes('managed')) return 1;
+            return nameA.localeCompare(nameB);
         });
+
+        res.json({ skills: skillsList });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error(`[Skills] Error: ${e.message}`);
+        res.json({ skills: [] });
     }
 });
 
@@ -8015,23 +8677,100 @@ app.post('/api/agents/:id/history/reset', async (req, res) => {
 });
 
 // Toggle Skill
-app.post('/api/agents/:id/skills/toggle', (req, res) => {
+app.post('/api/agents/:id/skills/toggle', async (req, res) => {
     const { id } = req.params;
-    const { skillName, enabled } = req.body;
-    
-    const action = enabled ? 'enable' : 'disable';
-    const cmd = `openclaw plugins ${action} ${skillName}`;
-    
-    console.log(`[Skills] Toggling ${skillName} -> ${action}`);
-    
-    const { exec } = require('child_process');
-    exec(cmd, (error, stdout, stderr) => {
-        if (error) {
-            console.error(`[Skills] Toggle Error: ${error.message}`);
-            return res.status(500).json({ error: error.message });
+    const { skillName, enabled } = req.body || {};
+    const normalizedName = String(skillName || '').trim();
+    const agentId = String(id || '').trim();
+
+    if (!normalizedName) {
+        return res.status(400).json({ success: false, error: 'skillName is required' });
+    }
+    if (!/^[A-Za-z0-9._-]+$/.test(normalizedName)) {
+        return res.status(400).json({ success: false, error: 'Invalid skill name' });
+    }
+    if (!agentId) {
+        return res.status(400).json({ success: false, error: 'Invalid agent id' });
+    }
+
+    const targetEnabled = enabled !== false;
+    console.log(`[Skills] Toggling ${normalizedName} -> ${targetEnabled ? 'enable' : 'disable'} (agent=${agentId})`);
+
+    try {
+        const [catalog, agentsList] = await Promise.all([
+            getOpenclawSkillsCatalog(),
+            getOpenclawAgentsConfigList()
+        ]);
+
+        const agentIndex = resolveAgentConfigIndex(agentsList, agentId);
+        if (agentIndex < 0) {
+            return res.status(404).json({ success: false, error: `Agent not found in OpenClaw config: ${agentId}` });
         }
-        res.json({ success: true, message: stdout });
-    });
+
+        const allKnownSkills = normalizeSkillList([
+            ...catalog.map(skill => normalizeSkillName(skill.name)).filter(Boolean),
+            normalizedName
+        ]);
+
+        const currentEntry = agentsList[agentIndex] || {};
+        const currentAllowlist = Array.isArray(currentEntry.skills)
+            ? normalizeSkillList(currentEntry.skills)
+            : allKnownSkills.slice();
+
+        const nextSet = new Set(currentAllowlist);
+        if (targetEnabled) nextSet.add(normalizedName);
+        else nextSet.delete(normalizedName);
+
+        const nextAllowlist = normalizeSkillList(Array.from(nextSet));
+        const isAllEnabled = allKnownSkills.length > 0
+            && nextAllowlist.length === allKnownSkills.length
+            && allKnownSkills.every((name) => nextSet.has(name));
+
+        const perAgentPath = `agents.list.${agentIndex}.skills`;
+        const opMessages = [];
+
+        // Keep global skill enabled so this panel is truly per-agent.
+        if (targetEnabled) {
+            try {
+                const result = await execOpenclawCommand(['config', 'set', `skills.entries.${normalizedName}.enabled`, 'true']);
+                const text = `${result && result.stdout ? result.stdout : ''}${result && result.stderr ? `\n${result.stderr}` : ''}`.trim();
+                if (text) opMessages.push(text);
+            } catch (e) {
+                opMessages.push(`warning: global-enable failed: ${e.message || e}`);
+            }
+        }
+
+        if (isAllEnabled) {
+            try {
+                const result = await execOpenclawCommand(['config', 'unset', perAgentPath]);
+                const text = `${result && result.stdout ? result.stdout : ''}${result && result.stderr ? `\n${result.stderr}` : ''}`.trim();
+                if (text) opMessages.push(text);
+            } catch (e) {
+                const em = String(e && e.message || '');
+                if (em.includes('Config path not found')) {
+                    opMessages.push('warning: path already unset');
+                } else {
+                    throw e;
+                }
+            }
+        } else {
+            const result = await execOpenclawCommand(['config', 'set', perAgentPath, JSON.stringify(nextAllowlist)]);
+            const text = `${result && result.stdout ? result.stdout : ''}${result && result.stderr ? `\n${result.stderr}` : ''}`.trim();
+            if (text) opMessages.push(text);
+        }
+
+        res.json({
+            success: true,
+            agentId,
+            skillName: normalizedName,
+            enabled: targetEnabled,
+            message: opMessages.join('\n\n')
+        });
+    } catch (error) {
+        const details = [error.message, error.stdout, error.stderr].filter(Boolean).join('\n').trim();
+        console.error(`[Skills] Toggle Error (${normalizedName}): ${details}`);
+        res.status(500).json({ success: false, error: details || 'Toggle failed' });
+    }
 });
 
 // Helper for Agent Tools TTS
@@ -8190,10 +8929,10 @@ wss.on('connection', (ws, req) => {
               // Rule mode: @mention has higher priority than {next} for user-origin messages.
               designatedByMentionMembers = resolveChannelMentionedAgents(routingText, channelMembers);
               designatedByNextMembers = designatedByMentionMembers.length === 0
-                  ? resolveChannelDesignatedAgents(routingText, channelMembers)
+                  ? resolveChannelDesignatedAgentsInDirectiveOrder(routingText, channelMembers)
                   : [];
           } else {
-              designatedByNextMembers = resolveChannelDesignatedAgents(routingText, channelMembers);
+              designatedByNextMembers = resolveChannelDesignatedAgentsInDirectiveOrder(routingText, channelMembers);
               designatedByMentionMembers = designatedByNextMembers.length === 0
                   ? resolveChannelMentionedAgents(routingText, channelMembers)
                   : [];
@@ -8203,13 +8942,14 @@ wss.on('connection', (ws, req) => {
               : (designatedByNextMembers.length > 0 ? designatedByNextMembers : channelMembers);
           const routeByMention = designatedByMentionMembers.length > 0;
           const routeByNext = !routeByMention && designatedByNextMembers.length > 0;
+          const explicitUserNextTargets = resolveChannelDesignatedAgentsInDirectiveOrder(routingText, channelMembers);
           if (routeByMention) {
               console.log(`[AgentChannels] 🎯 @mention 命中，仅向被@成员发送: ${designatedByMentionMembers.join(', ')}`);
           } else if (routeByNext) {
               console.log(`[AgentChannels] 🎯 {next} 命中，仅向指定成员发送: ${designatedByNextMembers.join(', ')}`);
           }
 
-          const runChannelAgentTurn = async ({ targetAgentId, targetAgentName, inputText, multimodalMessages = null }) => {
+          const runChannelAgentTurn = async ({ targetAgentId, targetAgentName, inputText, multimodalMessages = null, postProcessContent = null }) => {
               const safeAgentId = targetAgentId;
               const safeAgentName = targetAgentName || getAgentDisplayName(targetAgentId) || targetAgentId;
               let fullResponse = '';
@@ -8279,6 +9019,36 @@ wss.on('connection', (ws, req) => {
                   const onDone = () => {
                       ws._agentChannelStreamHandle = null;
                       markAgentBusyEnd();
+                      if (typeof postProcessContent === 'function') {
+                          try {
+                              const patched = postProcessContent(fullResponse);
+                              if (typeof patched === 'string' && patched.trim()) {
+                                  const patchedTrimmed = patched.trim();
+                                  const originalTrimmed = fullResponse.trim();
+                                  if (patchedTrimmed !== originalTrimmed) {
+                                      const appendedDelta = patchedTrimmed.startsWith(originalTrimmed)
+                                          ? patchedTrimmed.slice(originalTrimmed.length)
+                                          : `\n\n${patchedTrimmed}`;
+                                      if (appendedDelta && ws.readyState === WebSocket.OPEN) {
+                                          ws.send(JSON.stringify({
+                                              type: 'channel_text_stream',
+                                              channelId: activeChannel.id,
+                                              agentId: safeAgentId,
+                                              agentName: safeAgentName,
+                                              content: appendedDelta,
+                                              isNew: !hasStartedStreaming
+                                          }));
+                                      }
+                                      fullResponse = patchedTrimmed;
+                                      hasStartedStreaming = true;
+                                  } else {
+                                      fullResponse = patchedTrimmed;
+                                  }
+                              }
+                          } catch (e) {
+                              console.warn(`[AgentChannels] postProcessContent failed for ${safeAgentId}: ${e.message || e}`);
+                          }
+                      }
                       const content = fullResponse.trim() || '[No response]';
                       appendAgentChannelHistory(activeChannel.id, {
                           role: 'assistant',
@@ -8373,8 +9143,20 @@ wss.on('connection', (ws, req) => {
               if (ws.readyState !== WebSocket.OPEN) break;
 
               const agentName = getAgentDisplayName(agentId) || agentId;
+              const requiredHandoffTargetIds = (routeByMention && designatedByMentionMembers.length === 1
+                  ? explicitUserNextTargets.filter((id) => id && id !== agentId)
+                  : []);
+              const requiredHandoffTargetNames = requiredHandoffTargetIds
+                  .map((id) => getAgentDisplayName(id) || id)
+                  .filter(Boolean);
+              const requiredHandoffInstruction = requiredHandoffTargetNames.length > 0
+                  ? `\n\n[System Instruction: The user requested a multi-target handoff. You MUST include ALL required {next} directives in your final reply (one per line, exact format, no omissions):\n${requiredHandoffTargetNames.map((name) => `{next: "${name}"}`).join('\n')}\nDo not keep only one target. Keep all required targets.]`
+                  : '';
+              const mentionNoHandoffInstruction = (routeByMention && requiredHandoffTargetNames.length === 0)
+                  ? `\n\n[System Instruction: You were directly @mentioned by the user. Reply with your own answer only. Do NOT ask another member to continue, do NOT ask any other member a question, do NOT call out other members by name, and DO NOT include any {next: "..."} directive.]`
+                  : '';
               const agentInputText = (routeByNext || routeByMention)
-                  ? `${finalText}\n\n[System Instruction: You are explicitly designated by ${routeByNext ? '{next}' : '@ mention'}. Read the caller's full context carefully before replying. You may decide whether to reply (recommended to reply). If you reply, answer the caller's point directly first.]`
+                  ? `${finalText}\n\n[System Instruction: You are explicitly designated by ${routeByNext ? '{next}' : '@ mention'}. Read the caller's full context carefully before replying. You may decide whether to reply (recommended to reply). If you reply, answer the caller's point directly first.]${requiredHandoffInstruction}${mentionNoHandoffInstruction}`
                   : finalText;
               const multimodalMessages = hasMultimodalAttachments
                   ? buildOpenClawMultimodalMessages(agentInputText, binaryUploads, systemPaths)
@@ -8383,15 +9165,26 @@ wss.on('connection', (ws, req) => {
                   targetAgentId: agentId,
                   targetAgentName: agentName,
                   inputText: agentInputText,
-                  multimodalMessages
+                  multimodalMessages,
+                  postProcessContent: requiredHandoffTargetNames.length > 0
+                      ? (rawContent) => ensureAllRequiredNextDirectives(rawContent, requiredHandoffTargetNames)
+                      : (routeByMention ? (rawContent) => {
+                          const cleaned = stripNextDirectives(rawContent);
+                          return cleaned && cleaned.trim() ? cleaned : rawContent;
+                      } : null)
               });
 
               if (!channelRuleMode || !result.content) {
                   continue;
               }
 
+              // User explicit @mentions should end at direct recipients unless user also gave explicit {next} targets.
+              if (routeByMention && requiredHandoffTargetNames.length === 0) {
+                  continue;
+              }
+
               // Rule mode handoff: parse {next: "..."} from member replies, then relay to target(s) without the directive.
-              const forwardedTargets = resolveChannelDesignatedAgents(result.content, channelMembers)
+              const forwardedTargets = resolveChannelDesignatedAgentsInDirectiveOrder(result.content, channelMembers)
                   .filter((id) => id && id !== agentId);
               if (forwardedTargets.length === 0) {
                   continue;
@@ -8404,12 +9197,16 @@ wss.on('connection', (ws, req) => {
               for (const targetId of forwardedTargets) {
                   if (ws.readyState !== WebSocket.OPEN) break;
                   const targetName = getAgentDisplayName(targetId) || targetId;
-                  const relayInput = `${agentName} 给你转达了一条消息，请直接回应ta：\n${forwardedContent}\n\n[System Instruction: This is an automatic handoff triggered by {next}. The {next} directive has been removed before forwarding.]`;
+                  const relayInput = `${agentName} 给你转达了一条消息，请直接回应ta：\n${forwardedContent}\n\n[System Instruction: This is a terminal handoff triggered by {next}. The {next} directive has been removed before forwarding. In this reply, DO NOT add any {next: "..."} directive.]`;
                   await runChannelAgentTurn({
                       targetAgentId: targetId,
                       targetAgentName: targetName,
                       inputText: relayInput,
-                      multimodalMessages: null
+                      multimodalMessages: null,
+                      postProcessContent: (rawContent) => {
+                          const cleaned = stripNextDirectives(rawContent);
+                          return cleaned && cleaned.trim() ? cleaned : rawContent;
+                      }
                   });
               }
           }

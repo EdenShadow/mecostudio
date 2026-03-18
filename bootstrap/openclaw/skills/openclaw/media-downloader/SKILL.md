@@ -50,4 +50,7 @@ download_media <链接> --output ~/Downloads
 
 ## 配置
 
-API Key 已内置：8C1C697A1D9D3E1A891E88F5DB64F2B6-994a4ade05d06bd5aaa105d839bbbc28
+需要配置环境变量（由 Meco Studio API Keys 面板统一写入）：
+
+- `MEOWLOAD_API_KEY`（或兼容变量 `HENGHENGMAO_API_KEY`）
+- 可选：`MEOWLOAD_BASE_URL`（默认 `https://api.meowload.com`）
