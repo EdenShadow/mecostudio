@@ -21,6 +21,7 @@ app.use(express.json());
 const OPENCLAW_HTTP_TIMEOUT_MS = 120000;
 const OPENCLAW_FIRST_CHUNK_TIMEOUT_MS = 12000;
 const OPENCLAW_FIRST_CHUNK_TIMEOUT_ROUNDTABLE_MS = 45000;
+const OPENCLAW_FIRST_CHUNK_TIMEOUT_MULTIMODAL_MS = 65000;
 let wsConnectionSeq = 0;
 
 function getRuntimeSettings() {
@@ -222,8 +223,8 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith(':')) continue;
 
-        if (trimmed.startsWith('data: ')) {
-          const data = trimmed.slice(6);
+        if (trimmed.startsWith('data:')) {
+          const data = trimmed.slice(5).trimStart();
           if (data === '[DONE]') continue;
 
           try {
@@ -369,13 +370,23 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
     if (gatewayToken) {
       headers.Authorization = `Bearer ${gatewayToken}`;
     }
+    if (typeof options.gatewayAgentId === 'string' && options.gatewayAgentId.trim()) {
+      headers['x-openclaw-agent-id'] = options.gatewayAgentId.trim();
+    }
+    if (typeof options.sessionKey === 'string' && options.sessionKey.trim()) {
+      headers['x-openclaw-session-key'] = options.sessionKey.trim();
+    }
+
+    const outboundMessages = Array.isArray(options.messages) && options.messages.length > 0
+      ? options.messages
+      : buildMessages(agentId, userMessage);
 
     const response = await fetch(gatewayUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         model: options.model || defaultModel,
-        messages: buildMessages(agentId, userMessage),
+        messages: outboundMessages,
         stream: true,
         ...(options.reasoningEnabled ? { reasoning: { enabled: true } } : {})
       }),
@@ -408,9 +419,9 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
 
       for (const line of lines) {
         const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data: ')) continue;
+        if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data:')) continue;
 
-        const payload = trimmed.slice(6);
+        const payload = trimmed.slice(5).trimStart();
         if (payload === '[DONE]') continue;
 
         try {
@@ -942,7 +953,9 @@ if (!fs.existsSync(MEMORY_DIR)) {
 const memory = {};
 const MAX_MEMORY = 20;  // 保留最近20条，平衡记忆深度和推理速度
 const AGENTTOOLS_HISTORY_DIR = path.join(MEMORY_DIR, 'agenttools-history');
-const AGENTTOOLS_HISTORY_LIMIT = 20;
+const AGENTTOOLS_HISTORY_PAGE_SIZE = 20;
+const AGENTTOOLS_HISTORY_MAX_PAGES = 20;
+const AGENTTOOLS_HISTORY_LIMIT = AGENTTOOLS_HISTORY_PAGE_SIZE * AGENTTOOLS_HISTORY_MAX_PAGES;
 if (!fs.existsSync(AGENTTOOLS_HISTORY_DIR)) {
   fs.mkdirSync(AGENTTOOLS_HISTORY_DIR, { recursive: true });
 }
@@ -970,14 +983,121 @@ function getAgentToolsHistoryPath(agentId) {
   return path.join(AGENTTOOLS_HISTORY_DIR, `${agentId}.json`);
 }
 
+function normalizeHistoryFileItem(file) {
+  if (!file || typeof file !== 'object') return null;
+  const name = typeof file.name === 'string' ? file.name.trim() : '';
+  const normalizedType = typeof file.type === 'string' ? file.type.trim().toLowerCase() : '';
+  const url = typeof file.url === 'string' ? file.url.trim() : '';
+  const data = typeof file.data === 'string' ? file.data.trim() : '';
+  const thumbnail = typeof file.thumbnail === 'string' ? file.thumbnail.trim() : '';
+  const absPath = typeof file.path === 'string' ? file.path.trim() : '';
+  let pathType = '';
+  if (file.pathType === 'folder') {
+    pathType = 'folder';
+  } else if (file.pathType === 'file') {
+    pathType = 'file';
+  } else if (normalizedType === 'application/x-system-folder') {
+    pathType = 'folder';
+  } else if (normalizedType === 'application/x-system-file') {
+    pathType = 'file';
+  }
+  const normalized = {
+    name: name || (absPath ? path.basename(absPath) : 'attachment'),
+    type: normalizedType || 'application/octet-stream'
+  };
+  if (url && (/^(\/|https?:\/\/)/i.test(url) || /^data:image\//i.test(url))) {
+    normalized.url = url;
+  } else if (data && /^data:(image|video)\//i.test(data)) {
+    // Keep legacy inline previews if url is unavailable.
+    normalized.data = data;
+  }
+  if (thumbnail && /^data:image\//i.test(thumbnail)) {
+    normalized.thumbnail = thumbnail;
+  }
+  if (absPath) {
+    normalized.path = absPath;
+  }
+  if (pathType) {
+    normalized.pathType = pathType;
+  }
+  const size = Number(file.size);
+  if (Number.isFinite(size) && size >= 0) {
+    normalized.size = Math.floor(size);
+  }
+  return normalized;
+}
+
+function normalizeHistoryFiles(files) {
+  if (!Array.isArray(files) || files.length === 0) return [];
+  return files
+    .map(normalizeHistoryFileItem)
+    .filter(Boolean)
+    .slice(0, ATTACHMENT_MAX_FILES_PER_MESSAGE);
+}
+
+function buildPublicUploadUrl(filePath) {
+  const source = typeof filePath === 'string' ? filePath.trim() : '';
+  if (!source) return '';
+  const relative = path.relative(path.join(__dirname, 'public'), source);
+  if (!relative || relative.startsWith('..')) return '';
+  return `/${relative.split(path.sep).join('/')}`;
+}
+
+function buildHistoryFilesFromUploadsAndPaths(uploads, savedFiles, systemPaths) {
+  const historyFiles = [];
+  const uploadList = Array.isArray(uploads) ? uploads : [];
+  const savedList = Array.isArray(savedFiles) ? savedFiles : [];
+  let savedIndex = 0;
+
+  uploadList.forEach((upload) => {
+    if (!upload || typeof upload !== 'object') return;
+    const hasData = typeof upload.data === 'string' && /^data:/i.test(upload.data);
+    const base = {
+      name: (typeof upload.name === 'string' && upload.name.trim()) ? upload.name.trim() : 'upload.bin',
+      type: (typeof upload.type === 'string' && upload.type.trim()) ? upload.type.trim() : 'application/octet-stream',
+      thumbnail: (typeof upload.thumbnail === 'string' && upload.thumbnail.trim()) ? upload.thumbnail.trim() : '',
+      size: Number(upload.size) || undefined
+    };
+    if (hasData) {
+      const saved = savedList[savedIndex] || null;
+      savedIndex += 1;
+      if (saved && typeof saved.path === 'string' && saved.path.trim()) {
+        base.url = buildPublicUploadUrl(saved.path);
+      } else if (/^data:(image|video)\//i.test(upload.data)) {
+        base.data = upload.data;
+      }
+    }
+    const normalized = normalizeHistoryFileItem(base);
+    if (normalized) historyFiles.push(normalized);
+  });
+
+  (Array.isArray(systemPaths) ? systemPaths : []).forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    const absPath = typeof item.path === 'string' ? item.path.trim() : '';
+    if (!absPath) return;
+    const pathType = item.pathType === 'folder' ? 'folder' : 'file';
+    const normalized = normalizeHistoryFileItem({
+      name: path.basename(absPath) || absPath,
+      type: pathType === 'folder' ? 'application/x-system-folder' : 'application/x-system-file',
+      path: absPath,
+      pathType
+    });
+    if (normalized) historyFiles.push(normalized);
+  });
+
+  return normalizeHistoryFiles(historyFiles);
+}
+
 function normalizeAgentToolsHistoryItem(item) {
   if (!item || typeof item !== 'object') return null;
   const role = item.role === 'assistant' ? 'assistant' : (item.role === 'user' ? 'user' : null);
   const content = typeof item.content === 'string' ? item.content : '';
   if (!role || !content.trim()) return null;
+  const files = normalizeHistoryFiles(item.files);
   return {
     role,
     content,
+    files: files.length > 0 ? files : undefined,
     timestamp: typeof item.timestamp === 'string' ? item.timestamp : new Date().toISOString()
   };
 }
@@ -1015,14 +1135,16 @@ function saveAgentToolsHistory(agentId) {
   }
 }
 
-function appendAgentToolsHistory(agentId, role, content) {
+function appendAgentToolsHistory(agentId, role, content, files = []) {
   const normalizedRole = role === 'assistant' ? 'assistant' : (role === 'user' ? 'user' : null);
   const normalizedContent = typeof content === 'string' ? content.trim() : '';
   if (!normalizedRole || !normalizedContent) return;
+  const normalizedFiles = normalizeHistoryFiles(files);
   const history = getAgentToolsHistory(agentId);
   history.push({
     role: normalizedRole,
     content: normalizedContent,
+    files: normalizedFiles.length > 0 ? normalizedFiles : undefined,
     timestamp: new Date().toISOString()
   });
   if (history.length > AGENTTOOLS_HISTORY_LIMIT) {
@@ -1040,7 +1162,9 @@ function clearAgentToolsHistory(agentId) {
 
 const AGENT_CHANNELS_FILE = path.join(MEMORY_DIR, 'agent-channels.json');
 const AGENT_CHANNEL_HISTORY_DIR = path.join(MEMORY_DIR, 'agent-channel-history');
-const AGENT_CHANNEL_HISTORY_LIMIT = 200;
+const AGENT_CHANNEL_HISTORY_PAGE_SIZE = 20;
+const AGENT_CHANNEL_HISTORY_MAX_PAGES = 20;
+const AGENT_CHANNEL_HISTORY_LIMIT = AGENT_CHANNEL_HISTORY_PAGE_SIZE * AGENT_CHANNEL_HISTORY_MAX_PAGES;
 if (!fs.existsSync(AGENT_CHANNEL_HISTORY_DIR)) {
   fs.mkdirSync(AGENT_CHANNEL_HISTORY_DIR, { recursive: true });
 }
@@ -1131,6 +1255,16 @@ function extractNextDirectives(text) {
     }
   }
   return names;
+}
+
+function stripNextDirectives(text) {
+  const source = typeof text === 'string' ? text : '';
+  if (!source) return '';
+  return source
+    .replace(/\{next[:：]\s*["'“”‘’]?([^}"'“”‘’]+)["'“”‘’]?\s*\}/gi, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function escapeRegexLiteral(value) {
@@ -1240,12 +1374,14 @@ function normalizeAgentChannelHistoryItem(item) {
     ? item.senderName.trim()
     : (typeof item.agentName === 'string' ? item.agentName.trim() : '');
   const reasoning = typeof item.reasoning === 'string' ? item.reasoning : '';
+  const files = normalizeHistoryFiles(item.files);
   return {
     role,
     content,
     agentId: agentId || undefined,
     senderName: senderName || undefined,
     reasoning: reasoning || undefined,
+    files: files.length > 0 ? files : undefined,
     timestamp: typeof item.timestamp === 'string' ? item.timestamp : new Date().toISOString()
   };
 }
@@ -1306,6 +1442,50 @@ function clearAgentChannelHistory(channelId) {
   saveAgentChannelHistory(id);
 }
 
+function parseHistoryPaginationQuery(query, defaultPageSize, maxPages) {
+  const rawPage = Number.parseInt(query && query.page, 10);
+  const rawPageSize = Number.parseInt(query && query.pageSize, 10);
+  const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+  const pageSize = Number.isFinite(rawPageSize) && rawPageSize > 0
+    ? Math.min(rawPageSize, defaultPageSize)
+    : defaultPageSize;
+  const safeMaxPages = Number.isFinite(maxPages) && maxPages > 0 ? maxPages : 1;
+  return { page, pageSize, maxPages: safeMaxPages };
+}
+
+function paginateHistoryItems(items, page, pageSize, maxPages) {
+  const source = Array.isArray(items) ? items : [];
+  const safePage = Number.isFinite(page) && page > 0 ? page : 1;
+  const safePageSize = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 20;
+  const safeMaxPages = Number.isFinite(maxPages) && maxPages > 0 ? maxPages : 1;
+  const hardLimit = safePageSize * safeMaxPages;
+  const capped = source.slice(-hardLimit);
+  const total = capped.length;
+  const totalPages = total > 0 ? Math.ceil(total / safePageSize) : 0;
+  if (totalPages === 0) {
+    return {
+      history: [],
+      page: 1,
+      pageSize: safePageSize,
+      total,
+      totalPages,
+      hasMore: false
+    };
+  }
+  const normalizedPage = Math.min(safePage, totalPages);
+  const end = total - (normalizedPage - 1) * safePageSize;
+  const start = Math.max(0, end - safePageSize);
+  const history = capped.slice(start, end);
+  return {
+    history,
+    page: normalizedPage,
+    pageSize: safePageSize,
+    total,
+    totalPages,
+    hasMore: normalizedPage < totalPages
+  };
+}
+
 function saveUploadedFilesAndBuildContext(files) {
   const uploads = Array.isArray(files) ? files : [];
   if (uploads.length === 0) {
@@ -1327,15 +1507,413 @@ function saveUploadedFilesAndBuildContext(files) {
       const matches = f.data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
       if (!matches || matches.length !== 3) return;
       const buffer = Buffer.from(matches[2], 'base64');
-      const safeName = ((typeof f.name === 'string' ? f.name : 'upload.bin').replace(/[^a-zA-Z0-9.-]/g, '_'));
+      const safeName = ((typeof f.name === 'string' ? f.name : 'upload.bin').replace(/[^a-zA-Z0-9._-]/g, '_'));
       const filePath = path.join(uploadsDir, `${Date.now()}_${safeName}`);
       fs.writeFileSync(filePath, buffer);
-      savedFiles.push(filePath);
+      savedFiles.push({
+        path: filePath,
+        name: (typeof f.name === 'string' && f.name.trim()) ? f.name.trim() : safeName,
+        type: (typeof f.type === 'string' && f.type.trim()) ? f.type.trim() : 'application/octet-stream'
+      });
     } catch (e) {
       console.warn(`[Upload] Failed to save file ${(f && f.name) || 'unknown'}: ${e.message}`);
     }
   });
   return { savedFiles, fileNames };
+}
+
+function isImageMimeOrPath(mime, filePath) {
+  const type = typeof mime === 'string' ? mime.toLowerCase() : '';
+  if (type.startsWith('image/')) return true;
+  const ext = path.extname(String(filePath || '')).toLowerCase();
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'].includes(ext);
+}
+
+function buildOpenClawAttachmentContext(savedFiles, systemPaths) {
+  const fileEntries = [];
+  const folderEntries = [];
+
+  (Array.isArray(savedFiles) ? savedFiles : []).forEach((entry) => {
+    if (!entry || typeof entry.path !== 'string' || !entry.path.trim()) return;
+    fileEntries.push({
+      path: entry.path.trim(),
+      type: (typeof entry.type === 'string' && entry.type.trim()) ? entry.type.trim() : ''
+    });
+  });
+
+  (Array.isArray(systemPaths) ? systemPaths : []).forEach((item) => {
+    const absPath = item && typeof item.path === 'string' ? item.path.trim() : '';
+    if (!absPath) return;
+    if (item && item.pathType === 'folder') {
+      folderEntries.push(absPath);
+      return;
+    }
+    fileEntries.push({
+      path: absPath,
+      type: (item && typeof item.type === 'string' && item.type.trim()) ? item.type.trim() : ''
+    });
+  });
+
+  if (fileEntries.length === 0 && folderEntries.length === 0) return '';
+  const lines = [];
+
+  if (fileEntries.length === 1) {
+    const one = fileEntries[0];
+    const mimeHint = one.type ? ` (${one.type})` : '';
+    lines.push(`[media attached: ${one.path}${mimeHint}]`);
+  } else if (fileEntries.length > 1) {
+    lines.push(`[media attached: ${fileEntries.length} files]`);
+    fileEntries.forEach((entry, idx) => {
+      const mimeHint = entry.type ? ` (${entry.type})` : '';
+      lines.push(`[media attached ${idx + 1}/${fileEntries.length}: ${entry.path}${mimeHint}]`);
+    });
+  }
+
+  fileEntries.forEach((entry) => {
+    if (!isImageMimeOrPath(entry.type, entry.path)) return;
+    lines.push(`[Image: source: ${entry.path}]`);
+  });
+
+  folderEntries.forEach((folderPath) => {
+    lines.push(`[local folder attached: ${folderPath}]`);
+  });
+
+  return lines.join('\n');
+}
+
+const ATTACHMENT_MAX_INLINE_TEXT_BYTES = 512 * 1024;
+const ATTACHMENT_MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
+const ATTACHMENT_MAX_INLINE_TEXT_CHARS = 12000;
+const ATTACHMENT_MAX_FILES_PER_MESSAGE = 12;
+const ATTACHMENT_TEXT_MIME_PREFIXES = [
+  'text/',
+  'application/json',
+  'application/xml',
+  'application/javascript',
+  'application/x-javascript',
+  'application/typescript',
+  'application/x-yaml',
+  'application/yaml'
+];
+const ATTACHMENT_TEXT_EXTS = new Set([
+  '.txt', '.md', '.markdown', '.json', '.jsonl', '.csv', '.tsv', '.yaml', '.yml',
+  '.xml', '.html', '.htm', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+  '.py', '.java', '.go', '.rs', '.c', '.cc', '.cpp', '.h', '.hpp', '.sql',
+  '.sh', '.zsh', '.bash', '.ini', '.toml', '.log'
+]);
+const ATTACHMENT_MIME_BY_EXT = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+  '.avif': 'image/avif',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif'
+};
+const ATTACHMENT_SUPPORTED_IMAGE_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/heic',
+  'image/heif'
+]);
+
+function parseDataUriBase64(dataUri) {
+  if (typeof dataUri !== 'string') return null;
+  const trimmed = dataUri.trim();
+  const match = /^data:([^,]*?),(.+)$/is.exec(trimmed);
+  if (!match) return null;
+  const meta = (match[1] || '').trim();
+  if (!/;base64/i.test(meta)) return null;
+  const mime = meta.split(';')[0] || 'application/octet-stream';
+  const base64 = (match[2] || '').trim();
+  if (!base64) return null;
+  try {
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) return null;
+    return { mime: mime.toLowerCase(), base64, buffer };
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeAttachmentMime(mime, filePathOrName) {
+  const normalized = typeof mime === 'string' ? mime.split(';')[0].trim().toLowerCase() : '';
+  if (normalized) return normalized;
+  const ext = path.extname(String(filePathOrName || '')).toLowerCase();
+  return ATTACHMENT_MIME_BY_EXT[ext] || 'application/octet-stream';
+}
+
+function normalizeGatewayImageMime(mime) {
+  const normalized = normalizeAttachmentMime(mime, '');
+  if (normalized === 'image/jpg') return 'image/jpeg';
+  return normalized;
+}
+
+function isLikelyTextAttachment(mime, filePathOrName) {
+  const normalized = normalizeAttachmentMime(mime, filePathOrName);
+  if (ATTACHMENT_TEXT_MIME_PREFIXES.some((x) => normalized.startsWith(x))) return true;
+  const ext = path.extname(String(filePathOrName || '')).toLowerCase();
+  return ATTACHMENT_TEXT_EXTS.has(ext);
+}
+
+function decodeAttachmentText(buffer) {
+  if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) return '';
+  const content = buffer.toString('utf8');
+  // Drop binary-ish content quickly.
+  if (/\u0000/.test(content)) return '';
+  return content;
+}
+
+function truncateAttachmentText(text, limit = ATTACHMENT_MAX_INLINE_TEXT_CHARS) {
+  const source = typeof text === 'string' ? text.trim() : '';
+  if (!source) return '';
+  if (source.length <= limit) return source;
+  return `${source.slice(0, limit)}\n...[truncated]`;
+}
+
+function buildOpenClawMultimodalMessages(userText, uploads, systemPaths) {
+  const contentParts = [];
+  const attachmentTextBlocks = [];
+  const attachmentReferences = [];
+  let imageRefCount = 0;
+  let videoRefCount = 0;
+  let fileRefCount = 0;
+  let folderRefCount = 0;
+  const baseUserText = typeof userText === 'string' ? userText.trim() : '';
+  if (baseUserText) {
+    contentParts.push({ type: 'text', text: baseUserText });
+  }
+
+  const pushAttachmentText = (text) => {
+    const normalized = typeof text === 'string' ? text.trim() : '';
+    if (!normalized) return;
+    attachmentTextBlocks.push(normalized);
+  };
+  const pushAttachmentReference = (kind, name) => {
+    const normalizedName = typeof name === 'string' && name.trim() ? name.trim() : `${kind}_${attachmentReferences.length + 1}`;
+    let kindIndex = 0;
+    if (kind === 'image') {
+      imageRefCount += 1;
+      kindIndex = imageRefCount;
+    } else if (kind === 'video') {
+      videoRefCount += 1;
+      kindIndex = videoRefCount;
+    } else if (kind === 'folder') {
+      folderRefCount += 1;
+      kindIndex = folderRefCount;
+    } else {
+      fileRefCount += 1;
+      kindIndex = fileRefCount;
+    }
+    attachmentReferences.push({
+      globalIndex: attachmentReferences.length + 1,
+      kind,
+      kindIndex,
+      name: normalizedName
+    });
+  };
+
+  const files = [];
+  (Array.isArray(uploads) ? uploads : []).forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    if (typeof item.data !== 'string' || !/^data:/i.test(item.data)) return;
+    files.push({
+      source: 'upload',
+      name: (typeof item.name === 'string' && item.name.trim()) ? item.name.trim() : 'upload.bin',
+      mime: typeof item.type === 'string' ? item.type : '',
+      dataUri: item.data,
+      thumbnail: (typeof item.thumbnail === 'string' && item.thumbnail.trim()) ? item.thumbnail.trim() : ''
+    });
+  });
+
+  (Array.isArray(systemPaths) ? systemPaths : []).forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    const absPath = typeof item.path === 'string' ? item.path.trim() : '';
+    if (!absPath) return;
+    if (item.pathType === 'folder') {
+      pushAttachmentReference('folder', path.basename(absPath) || absPath);
+      pushAttachmentText(`[Attached local folder] ${absPath}`);
+      return;
+    }
+    files.push({
+      source: 'path',
+      name: path.basename(absPath) || absPath,
+      mime: typeof item.type === 'string' ? item.type : '',
+      absPath
+    });
+  });
+
+  for (const file of files.slice(0, ATTACHMENT_MAX_FILES_PER_MESSAGE)) {
+    if (file.source === 'upload') {
+      const parsed = parseDataUriBase64(file.dataUri);
+      if (!parsed) {
+        pushAttachmentReference('file', file.name);
+        pushAttachmentText(`[Attached file] ${file.name}`);
+        continue;
+      }
+      const mime = normalizeAttachmentMime(file.mime || parsed.mime, file.name);
+      if (isImageMimeOrPath(mime, file.name)) {
+        const imageMime = normalizeGatewayImageMime(parsed.mime || mime);
+        if (!ATTACHMENT_SUPPORTED_IMAGE_MIMES.has(imageMime)) {
+          pushAttachmentReference('image', file.name);
+          pushAttachmentText(`[Image attachment not supported by gateway MIME] ${file.name} (${imageMime || mime})`);
+          continue;
+        }
+        if (parsed.buffer.length > ATTACHMENT_MAX_INLINE_IMAGE_BYTES) {
+          pushAttachmentReference('image', file.name);
+          pushAttachmentText(`[Image attachment too large] ${file.name} (${Math.round(parsed.buffer.length / 1024 / 1024)}MB)`);
+          continue;
+        }
+        pushAttachmentReference('image', file.name);
+        contentParts.push({
+          type: 'image_url',
+          image_url: { url: file.dataUri }
+        });
+        continue;
+      }
+      if (mime.startsWith('video/')) {
+        pushAttachmentReference('video', file.name);
+        if (file.thumbnail && /^data:image\//i.test(file.thumbnail)) {
+          contentParts.push({
+            type: 'image_url',
+            image_url: { url: file.thumbnail }
+          });
+          pushAttachmentText(`[Video attachment] ${file.name} (thumbnail provided)`);
+        } else {
+          pushAttachmentText(`[Video attachment] ${file.name}`);
+        }
+        continue;
+      }
+      if (isLikelyTextAttachment(mime, file.name) && parsed.buffer.length <= ATTACHMENT_MAX_INLINE_TEXT_BYTES) {
+        const decoded = truncateAttachmentText(decodeAttachmentText(parsed.buffer));
+        if (decoded) {
+          pushAttachmentReference('file', file.name);
+          pushAttachmentText(`<file name="${file.name}">\n${decoded}\n</file>`);
+          continue;
+        }
+      }
+      pushAttachmentReference('file', file.name);
+      pushAttachmentText(`[File attachment] ${file.name} (${mime || 'application/octet-stream'})`);
+      continue;
+    }
+
+    const absPath = file.absPath;
+    if (!absPath || !fs.existsSync(absPath)) {
+      pushAttachmentReference('file', file.name || absPath);
+      pushAttachmentText(`[Attached local file] ${file.name}`);
+      continue;
+    }
+    let stat = null;
+    try {
+      stat = fs.statSync(absPath);
+    } catch (_) {
+      stat = null;
+    }
+    if (!stat || !stat.isFile()) {
+      pushAttachmentReference('file', path.basename(absPath) || absPath);
+      pushAttachmentText(`[Attached local file] ${absPath}`);
+      continue;
+    }
+    const mime = normalizeAttachmentMime(file.mime, absPath);
+    if (isImageMimeOrPath(mime, absPath) && stat.size <= ATTACHMENT_MAX_INLINE_IMAGE_BYTES) {
+      const imageMime = normalizeGatewayImageMime(mime);
+      if (!ATTACHMENT_SUPPORTED_IMAGE_MIMES.has(imageMime)) {
+        pushAttachmentReference('image', path.basename(absPath) || absPath);
+        pushAttachmentText(`[Attached local image not supported by gateway MIME] ${absPath} (${imageMime || mime})`);
+        continue;
+      }
+      try {
+        pushAttachmentReference('image', path.basename(absPath) || absPath);
+        const buf = fs.readFileSync(absPath);
+        const dataUri = `data:${imageMime};base64,${buf.toString('base64')}`;
+        contentParts.push({
+          type: 'image_url',
+          image_url: { url: dataUri }
+        });
+      } catch (_) {
+        pushAttachmentText(`[Attached local image] ${absPath}`);
+      }
+      continue;
+    }
+    if (isLikelyTextAttachment(mime, absPath) && stat.size <= ATTACHMENT_MAX_INLINE_TEXT_BYTES) {
+      try {
+        const decoded = truncateAttachmentText(decodeAttachmentText(fs.readFileSync(absPath)));
+        if (decoded) {
+          pushAttachmentReference('file', path.basename(absPath) || absPath);
+          pushAttachmentText(`<file path="${absPath}">\n${decoded}\n</file>`);
+          continue;
+        }
+      } catch (_) {}
+    }
+    pushAttachmentReference('file', path.basename(absPath) || absPath);
+    pushAttachmentText(`[Attached local file] ${absPath}`);
+  }
+
+  if (attachmentReferences.length > 0) {
+    const kindLabelMap = {
+      image: 'image',
+      video: 'video',
+      file: 'file',
+      folder: 'folder'
+    };
+    const referenceLines = attachmentReferences.map((ref) => {
+      const kindLabel = kindLabelMap[ref.kind] || 'file';
+      return `附件${ref.globalIndex} / Attachment ${ref.globalIndex}: ${ref.name} (${kindLabel})`;
+    });
+    const aliasLines = [];
+    attachmentReferences.forEach((ref) => {
+      if (ref.kind === 'image') {
+        aliasLines.push(`图${ref.kindIndex} -> 附件${ref.globalIndex}`);
+      } else if (ref.kind === 'video') {
+        aliasLines.push(`视频${ref.kindIndex} -> 附件${ref.globalIndex}`);
+      } else if (ref.kind === 'folder') {
+        aliasLines.push(`文件夹${ref.kindIndex} -> 附件${ref.globalIndex}`);
+      } else {
+        aliasLines.push(`文件${ref.kindIndex} -> 附件${ref.globalIndex}`);
+      }
+    });
+    const referenceText = [
+      '附件编号说明 / Attachment reference:',
+      ...referenceLines,
+      '可用引用 / Available aliases:',
+      ...aliasLines,
+      '当用户说“图1/视频1/文件1/附件1”时，请按以上映射理解并作答。'
+    ].join('\n');
+    if (baseUserText) {
+      contentParts.splice(1, 0, { type: 'text', text: referenceText });
+    } else {
+      contentParts.unshift({ type: 'text', text: referenceText });
+    }
+  }
+
+  if (attachmentTextBlocks.length > 0) {
+    contentParts.push({
+      type: 'text',
+      text: attachmentTextBlocks.join('\n\n')
+    });
+  }
+
+  if (contentParts.length === 0) {
+    return [{
+      role: 'user',
+      content: 'Please analyze the attached content.'
+    }];
+  }
+  if (contentParts.length === 1 && contentParts[0].type === 'text') {
+    return [{
+      role: 'user',
+      content: contentParts[0].text
+    }];
+  }
+  return [{
+    role: 'user',
+    content: contentParts
+  }];
 }
 
 // 保存记忆到文件
@@ -2257,8 +2835,8 @@ app.post('/api/agents', upload.fields([
                             const { presign_url, public_url } = presignResp.data.data;
                             const fileData = fs.readFileSync(avatarPath);
                             await axios.put(presign_url, fileData, { headers: { 'Content-Type': 'image/png' }, timeout: 30000, maxBodyLength: 50 * 1024 * 1024 });
-                            avatarPublicUrl = public_url;
-                            console.log(`[Create] 头像上传成功: ${public_url}`);
+                            avatarPublicUrl = normalizePodcastPublicUrl(public_url);
+                            console.log(`[Create] 头像上传成功: ${avatarPublicUrl}`);
                         }
                     }
                 } catch (uploadErr) {
@@ -2275,8 +2853,8 @@ app.post('/api/agents', upload.fields([
                             const { presign_url, public_url } = presignResp.data.data;
                             const fileData = fs.readFileSync(videoPath);
                             await axios.put(presign_url, fileData, { headers: { 'Content-Type': 'video/mp4' }, timeout: 60000, maxBodyLength: 200 * 1024 * 1024 });
-                            videoPublicUrl = public_url;
-                            console.log(`[Create] 视频上传成功: ${public_url}`);
+                            videoPublicUrl = normalizePodcastPublicUrl(public_url);
+                            console.log(`[Create] 视频上传成功: ${videoPublicUrl}`);
                         }
                     }
                 } catch (uploadErr) {
@@ -2359,8 +2937,269 @@ app.post('/api/agents', upload.fields([
     }
 });
 
+// Clone Agent
+app.post('/api/agents/:agentId/clone', async (req, res) => {
+    const { agentId } = req.params;
+    const requestedName = String(req.body?.name || '').trim();
+    if (!requestedName) {
+        return res.status(400).json({ error: 'Name is required' });
+    }
+
+    const sourceAgent = getAgentById(agentId);
+    if (!sourceAgent) {
+        return res.status(404).json({ error: 'Source agent not found' });
+    }
+
+    const safeReadJson = (filePath, fallback = {}) => {
+        try {
+            if (!filePath || !fs.existsSync(filePath)) return fallback;
+            return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        } catch (_) {
+            return fallback;
+        }
+    };
+
+    const safeReadText = (filePath) => {
+        try {
+            if (!filePath || !fs.existsSync(filePath)) return '';
+            return fs.readFileSync(filePath, 'utf-8').trim();
+        } catch (_) {
+            return '';
+        }
+    };
+
+    try {
+        const sourceLocalDir = findLocalAgentDir(agentId) || (fs.existsSync(path.join(DATA_AGENTS_DIR, agentId)) ? path.join(DATA_AGENTS_DIR, agentId) : null);
+        const sourceMetaPath = sourceLocalDir ? path.join(sourceLocalDir, 'meta.json') : '';
+        const sourceMeta = safeReadJson(sourceMetaPath, {});
+        const sourceWorkspace = typeof sourceAgent.workspace === 'string' ? sourceAgent.workspace : '';
+
+        const sourcePrompt = safeReadText(sourceLocalDir ? path.join(sourceLocalDir, 'prompt.txt') : '')
+            || safeReadText(sourceWorkspace ? path.join(sourceWorkspace, 'prompt.txt') : '')
+            || safeReadText(sourceWorkspace ? path.join(sourceWorkspace, 'SOUL.md') : '')
+            || sourceMeta.prompt
+            || sourceAgent.systemPrompt
+            || '';
+
+        const sourceVoiceJson = safeReadJson(sourceLocalDir ? path.join(sourceLocalDir, 'voice.json') : '', {});
+        let sourceVoiceId = sourceMeta.voiceId || sourceMeta.voice_id || sourceVoiceJson.voiceId || sourceVoiceJson.voice_id || '';
+        if (!sourceVoiceId) {
+            const wsVoiceJson = safeReadJson(sourceWorkspace ? path.join(sourceWorkspace, 'voice.json') : '', {});
+            sourceVoiceId = wsVoiceJson.voiceId || wsVoiceJson.voice_id || '';
+        }
+
+        console.log(`[Clone] Cloning agent ${agentId} -> "${requestedName}"`);
+        const created = await openclaw.createAgent(requestedName, sourcePrompt);
+        const newAgentId = created.id;
+        const newLocalDir = path.join(DATA_AGENTS_DIR, newAgentId);
+        const newWorkspaceDir = path.join(OPENCLAW_ROOT_DIR, `workspace-${newAgentId}`);
+        if (!fs.existsSync(newLocalDir)) fs.mkdirSync(newLocalDir, { recursive: true });
+        if (!fs.existsSync(newWorkspaceDir)) fs.mkdirSync(newWorkspaceDir, { recursive: true });
+
+        // 1) Clone local Meco files
+        if (sourceLocalDir && fs.existsSync(sourceLocalDir)) {
+            fs.cpSync(sourceLocalDir, newLocalDir, { recursive: true, force: true });
+        }
+
+        // 2) Clone OpenClaw workspace persona/config files
+        const workspaceFilesToClone = [
+            'SOUL.md', 'AGENTS.md', 'USER.md', 'MEMORY.md', 'prompt.txt',
+            'voice.json', 'voice.mp3', 'video.mp4',
+            'avatar.png', 'avatar.jpg', 'avatar.jpeg', 'avatar.webp', 'avatar.gif'
+        ];
+        workspaceFilesToClone.forEach((name) => {
+            if (!sourceWorkspace) return;
+            const src = path.join(sourceWorkspace, name);
+            const dst = path.join(newWorkspaceDir, name);
+            if (fs.existsSync(src)) {
+                fs.copyFileSync(src, dst);
+            }
+        });
+        const sourceWorkspaceAgentDir = sourceWorkspace ? path.join(sourceWorkspace, 'agent') : '';
+        const targetWorkspaceAgentDir = path.join(newWorkspaceDir, 'agent');
+        if (sourceWorkspaceAgentDir && fs.existsSync(sourceWorkspaceAgentDir)) {
+            fs.cpSync(sourceWorkspaceAgentDir, targetWorkspaceAgentDir, { recursive: true, force: true });
+        }
+
+        // 3) Keep identity name in sync with the new display name
+        const rewriteIdentityName = (identityPath, fallbackName) => {
+            if (!fs.existsSync(identityPath)) return;
+            try {
+                let content = fs.readFileSync(identityPath, 'utf-8');
+                if (/^#\s+.+/m.test(content)) {
+                    content = content.replace(/^#\s+.+/m, `# ${fallbackName}`);
+                } else {
+                    content = `# ${fallbackName}\n\n${content}`;
+                }
+                if (/^name:\s*.+$/mi.test(content)) {
+                    content = content.replace(/^name:\s*.+$/mi, `name: ${fallbackName}`);
+                } else {
+                    content = `${content}\nname: ${fallbackName}\n`;
+                }
+                fs.writeFileSync(identityPath, content);
+            } catch (e) {
+                console.warn(`[Clone] Failed to rewrite identity: ${identityPath} ${e.message}`);
+            }
+        };
+        rewriteIdentityName(path.join(newWorkspaceDir, 'IDENTITY.md'), requestedName);
+        rewriteIdentityName(path.join(newWorkspaceDir, 'agent', 'IDENTITY.md'), requestedName);
+
+        // 4) Normalize local metadata with new id/name and refresh prompt/voice
+        const newMetaPath = path.join(newLocalDir, 'meta.json');
+        const createdMeta = safeReadJson(newMetaPath, {});
+        const nextMeta = {
+            ...createdMeta,
+            ...sourceMeta,
+            displayName: requestedName,
+            originalId: newAgentId,
+            id: newAgentId,
+            createdAt: new Date().toISOString(),
+            source: 'openclaw_clone',
+            prompt: sourcePrompt || sourceMeta.prompt || createdMeta.prompt || ''
+        };
+        if (sourceVoiceId) nextMeta.voiceId = sourceVoiceId;
+        delete nextMeta.podcastApiKey;
+        delete nextMeta.podcastAgentId;
+        fs.writeFileSync(newMetaPath, JSON.stringify(nextMeta, null, 2));
+        if (sourcePrompt) {
+            fs.writeFileSync(path.join(newLocalDir, 'prompt.txt'), sourcePrompt);
+            fs.writeFileSync(path.join(newWorkspaceDir, 'prompt.txt'), sourcePrompt);
+        }
+
+        // 5) Register cloned agent to Podcast API (reuse voice/media metadata, no re-train/no re-upload)
+        let podcastApiKey = '';
+        let podcastAgentId = '';
+        let podcastSynced = false;
+        let podcastWarning = '';
+        try {
+            const axios = require('axios');
+            let sourceRemote = {};
+            if (sourceMeta.podcastApiKey) {
+                try {
+                    const sourceMe = await axios.get(`${PODCAST_API_BASE}/agent/me`, {
+                        headers: { 'X-API-Key': sourceMeta.podcastApiKey },
+                        timeout: 10000
+                    });
+                    sourceRemote = sourceMe.data?.data?.agent || sourceMe.data?.data || {};
+                } catch (e) {
+                    console.warn(`[Clone] Failed to read source podcast profile: ${e.message}`);
+                }
+            }
+
+            if (!sourceVoiceId) {
+                sourceVoiceId = sourceRemote.voice_id || sourceRemote.voiceId || '';
+            }
+
+            const registerBody = {
+                name: requestedName,
+                description: (sourcePrompt || '').slice(0, 500),
+                personality: (sourcePrompt || '').slice(0, 500),
+                prompt: sourcePrompt || '',
+                voice_id: sourceVoiceId || ''
+            };
+            const registerResp = await axios.post(`${PODCAST_API_BASE}/agent/register`, registerBody, { timeout: 10000 });
+            if (!registerResp.data || registerResp.data.code !== 200 || !registerResp.data.data) {
+                throw new Error(`register failed: ${JSON.stringify(registerResp.data)}`);
+            }
+            podcastApiKey = registerResp.data.data.api_key;
+            podcastAgentId = registerResp.data.data.agent?.agent_id || '';
+
+            const pickFirstUrl = (obj, keys) => {
+                for (const key of keys) {
+                    const value = obj && typeof obj[key] === 'string' ? obj[key].trim() : '';
+                    if (value) return value;
+                }
+                return '';
+            };
+            const avatarUrl = normalizePodcastPublicUrl(
+                pickFirstUrl(sourceRemote, ['avatar_url', 'avatarUrl', 'character_image_url', 'characterImageUrl'])
+            );
+            const characterImageUrl = normalizePodcastPublicUrl(
+                pickFirstUrl(sourceRemote, ['character_image_url', 'characterImageUrl', 'avatar_url', 'avatarUrl'])
+            );
+            const videoUrl = normalizePodcastPublicUrl(
+                pickFirstUrl(sourceRemote, ['character_video_url', 'characterVideoUrl'])
+            );
+
+            const updateBody = {};
+            if (avatarUrl) updateBody.avatar_url = avatarUrl;
+            if (characterImageUrl) updateBody.character_image_url = characterImageUrl;
+            if (videoUrl) updateBody.character_video_url = videoUrl;
+            if (Object.keys(updateBody).length > 0) {
+                await axios.put(`${PODCAST_API_BASE}/agent/me`, updateBody, {
+                    headers: { 'X-API-Key': podcastApiKey, 'Content-Type': 'application/json' },
+                    timeout: 10000
+                });
+            }
+            podcastSynced = true;
+        } catch (e) {
+            podcastWarning = e.message || 'podcast sync failed';
+            console.warn(`[Clone] Podcast registration failed (non-fatal): ${podcastWarning}`);
+        }
+
+        if (podcastApiKey && podcastAgentId) {
+            try {
+                const meta = safeReadJson(newMetaPath, {});
+                meta.podcastApiKey = podcastApiKey;
+                meta.podcastAgentId = podcastAgentId;
+                fs.writeFileSync(newMetaPath, JSON.stringify(meta, null, 2));
+            } catch (_) {}
+        }
+
+        // 6) Refresh runtime registry
+        const scanned = scanOpenClawAgents();
+        Object.keys(scanned).forEach((key) => {
+            AGENTS[key] = scanned[key];
+        });
+        refreshPersona(newAgentId);
+        refreshAgentNameMap();
+
+        res.json({
+            success: true,
+            id: newAgentId,
+            name: requestedName,
+            podcastSynced,
+            podcastWarning: podcastWarning || undefined
+        });
+    } catch (e) {
+        console.error(`[Clone] Failed to clone ${agentId}:`, e);
+        res.status(500).json({ error: e.message || 'clone failed' });
+    }
+});
+
 // === Podcast API 同步 Helper ===
-const PODCAST_API_BASE = 'http://192.168.2.19:8080';
+const PODCAST_API_BASE = 'https://api.circle-thinking.com';
+const PODCAST_OSS_PUBLIC_HOST = 'cos.circle-thinking.com';
+
+function normalizePodcastPublicUrl(rawUrl) {
+  const source = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!source) return '';
+  try {
+    const parsed = new URL(source);
+    parsed.protocol = 'https:';
+    parsed.hostname = PODCAST_OSS_PUBLIC_HOST;
+    return parsed.toString();
+  } catch (_) {
+    return source;
+  }
+}
+
+function normalizePodcastControlWsUrl(rawUrl) {
+  const source = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!source) return '';
+  try {
+    const parsed = new URL(source);
+    const apiBase = new URL(PODCAST_API_BASE);
+    if (apiBase.protocol === 'https:' && parsed.protocol === 'ws:') {
+      parsed.protocol = 'wss:';
+    } else if (apiBase.protocol === 'http:' && parsed.protocol === 'wss:') {
+      parsed.protocol = 'ws:';
+    }
+    return parsed.toString();
+  } catch (_) {
+    return source;
+  }
+}
 
 // ========== Podcast Pusher (Control Agent 推流到 Podcast 平台) ==========
 
@@ -2421,6 +3260,11 @@ class PodcastPusher {
         console.error('[Podcast] 无 WebSocket URL');
         return false;
       }
+      const normalizedWsUrl = normalizePodcastControlWsUrl(wsUrl);
+      if (normalizedWsUrl !== wsUrl) {
+        console.log(`[Podcast] 规范化控制连接地址: ${wsUrl} -> ${normalizedWsUrl}`);
+      }
+      wsUrl = normalizedWsUrl;
 
       // Step 2: 连接 WebSocket
       return new Promise((resolve) => {
@@ -2926,7 +3770,7 @@ async function podcastPresignUpload(apiKey, filePath, ext, contentType) {
         timeout: 60000,
         maxBodyLength: 200 * 1024 * 1024
     });
-    return public_url;
+    return normalizePodcastPublicUrl(public_url);
 }
 
 /**
@@ -3961,8 +4805,15 @@ async function reconnectPodcastPusher(channelId) {
 
   console.log(`[Podcast] 房间 ${channelId}, podcastRoomId=${podcastRoomId}, host=${room.hostAgentId}, agents=${agentIds}`);
 
-  // 尝试每个 agent 的 apiKey 连接（直到成功为止）
-  for (const agentId of agentIds) {
+  // 有 hostAgentId 时，严格只用 host 的 key 控制，避免误用其他角色 key。
+  const hostAgentId = typeof room.hostAgentId === 'string' ? room.hostAgentId.trim() : '';
+  const candidateAgentIds = hostAgentId ? [hostAgentId] : agentIds;
+  if (hostAgentId && !agentIds.includes(hostAgentId)) {
+    console.warn(`[Podcast] 房间 ${channelId}: host ${hostAgentId} 不在 agent 列表中，将仅尝试 host key`);
+  }
+
+  // 尝试候选 agent 的 apiKey 连接（直到成功为止）
+  for (const agentId of candidateAgentIds) {
     let apiKey = null;
     try {
       const metaPath = path.join(DATA_AGENTS_DIR, agentId, 'meta.json');
@@ -4048,7 +4899,11 @@ async function reconnectPodcastPusher(channelId) {
     pusher.disconnect();
   }
 
-  console.error(`[Podcast] 房间 ${channelId}: 所有 agent 均无法控制 ${podcastRoomId}`);
+  if (hostAgentId) {
+    console.error(`[Podcast] 房间 ${channelId}: host(${hostAgentId}) 无法控制 ${podcastRoomId}`);
+  } else {
+    console.error(`[Podcast] 房间 ${channelId}: 所有 agent 均无法控制 ${podcastRoomId}`);
+  }
 }
 
 // ========== Kimi CLI 麦序话题抓取 ==========
@@ -5940,7 +6795,7 @@ app.post('/api/podcast/room/create', upload.single('cover'), async (req, res) =>
                         headers: { 'Content-Type': req.file.mimetype || 'image/png' },
                         timeout: 30000, maxBodyLength: 50 * 1024 * 1024
                     });
-                    coverUrl = public_url;
+                    coverUrl = normalizePodcastPublicUrl(public_url);
                     console.log(`[PodcastRoom] 封面上传COS成功: ${coverUrl}`);
                 }
             } catch (e) {
@@ -6593,6 +7448,10 @@ app.delete('/api/agent-channels/:id', (req, res) => {
     saveAgentChannels();
 
     clearAgentChannelHistory(channelId);
+    if (channelRuntimeBusyCounters.has(channelId)) {
+        channelRuntimeBusyCounters.delete(channelId);
+        bumpAgentToolsStatusUpdatedAt();
+    }
     const historyPath = getAgentChannelHistoryPath(channelId);
     try {
         if (fs.existsSync(historyPath)) fs.unlinkSync(historyPath);
@@ -6610,8 +7469,132 @@ app.get('/api/agent-channels/:id/history', (req, res) => {
     if (!channel) {
         return res.status(404).json({ error: 'channel not found' });
     }
-    const history = getAgentChannelHistory(channelId).slice(-AGENT_CHANNEL_HISTORY_LIMIT);
-    res.json({ history });
+    const { page, pageSize, maxPages } = parseHistoryPaginationQuery(
+      req.query,
+      AGENT_CHANNEL_HISTORY_PAGE_SIZE,
+      AGENT_CHANNEL_HISTORY_MAX_PAGES
+    );
+    const allHistory = getAgentChannelHistory(channelId);
+    const paged = paginateHistoryItems(allHistory, page, pageSize, maxPages);
+    res.json({
+      history: paged.history,
+      page: paged.page,
+      pageSize: paged.pageSize,
+      total: paged.total,
+      totalPages: paged.totalPages,
+      hasMore: paged.hasMore,
+      maxPages
+    });
+});
+
+app.post('/api/agent-channels/:id/history/reset', (req, res) => {
+    const channelId = typeof req.params.id === 'string' ? req.params.id.trim() : '';
+    if (!channelId) {
+        return res.status(400).json({ error: 'channel id is required' });
+    }
+    const channel = findAgentChannelById(channelId);
+    if (!channel) {
+        return res.status(404).json({ error: 'channel not found' });
+    }
+
+    // Abort in-flight channel streams and clear busy states
+    for (const ws of wss.clients) {
+        if (!ws || ws._agentChannelId !== channelId) continue;
+        ws._agentChannelInFlight = false;
+        if (ws._agentChannelBusyMarked) {
+            markChannelRuntimeBusyEnd(channelId);
+            ws._agentChannelBusyMarked = false;
+        }
+        if (ws._agentChannelBusyAgents && ws._agentChannelBusyAgents.size > 0) {
+            for (const busyAgentId of ws._agentChannelBusyAgents) {
+                markAgentRuntimeBusyEnd(busyAgentId);
+            }
+            ws._agentChannelBusyAgents.clear();
+        }
+        if (ws._agentChannelStreamHandle && typeof ws._agentChannelStreamHandle.abort === 'function') {
+            try { ws._agentChannelStreamHandle.abort(); } catch (_) {}
+        }
+        ws._agentChannelStreamHandle = null;
+    }
+
+    clearAgentChannelHistory(channelId);
+    touchAgentChannel(channelId);
+
+    const body = JSON.stringify({
+        type: 'channel_conversation_reset',
+        channelId,
+        success: true
+    });
+    for (const ws of wss.clients) {
+        if (!ws || ws._agentChannelId !== channelId) continue;
+        if (ws.readyState === WebSocket.OPEN) {
+            try { ws.send(body); } catch (_) {}
+        }
+    }
+
+    res.json({ success: true, cleared: true, channelId });
+});
+
+const agentRuntimeBusyCounters = new Map();
+const channelRuntimeBusyCounters = new Map();
+let agentToolsStatusUpdatedAt = new Date().toISOString();
+
+function bumpAgentToolsStatusUpdatedAt() {
+  agentToolsStatusUpdatedAt = new Date().toISOString();
+}
+
+function updateBusyCounter(mapRef, rawKey, delta) {
+  const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+  if (!key) return;
+  const current = Number(mapRef.get(key) || 0);
+  const next = Math.max(0, current + delta);
+  if (next <= 0) {
+    if (mapRef.has(key)) {
+      mapRef.delete(key);
+      bumpAgentToolsStatusUpdatedAt();
+    }
+    return;
+  }
+  if (next !== current) {
+    mapRef.set(key, next);
+    bumpAgentToolsStatusUpdatedAt();
+  }
+}
+
+function markAgentRuntimeBusyStart(agentId) {
+  updateBusyCounter(agentRuntimeBusyCounters, agentId, 1);
+}
+
+function markAgentRuntimeBusyEnd(agentId) {
+  updateBusyCounter(agentRuntimeBusyCounters, agentId, -1);
+}
+
+function markChannelRuntimeBusyStart(channelId) {
+  updateBusyCounter(channelRuntimeBusyCounters, channelId, 1);
+}
+
+function markChannelRuntimeBusyEnd(channelId) {
+  updateBusyCounter(channelRuntimeBusyCounters, channelId, -1);
+}
+
+function buildAgentToolsStatusSnapshot() {
+  const agents = {};
+  const channels = {};
+  for (const [id, count] of agentRuntimeBusyCounters.entries()) {
+    if (count > 0) agents[id] = true;
+  }
+  for (const [id, count] of channelRuntimeBusyCounters.entries()) {
+    if (count > 0) channels[id] = true;
+  }
+  return {
+    updatedAt: agentToolsStatusUpdatedAt,
+    agents,
+    channels
+  };
+}
+
+app.get('/api/agent-tools/status', (req, res) => {
+  res.json(buildAgentToolsStatusSnapshot());
 });
 
 // Get Agent Details
@@ -6786,128 +7769,112 @@ app.get('/api/agents/:id/skills', async (req, res) => {
     }
 });
 
-// Get Agent Chat History (Last 20)
+// Get Agent Chat History (paginated; up to 20 pages retained)
 app.get('/api/agents/:id/history', async (req, res) => {
     const { id } = req.params;
+    const { page, pageSize, maxPages } = parseHistoryPaginationQuery(
+      req.query,
+      AGENTTOOLS_HISTORY_PAGE_SIZE,
+      AGENTTOOLS_HISTORY_MAX_PAGES
+    );
 
     const cachedHistory = getAgentToolsHistory(id);
     if (cachedHistory.length > 0) {
-        return res.json({ history: cachedHistory.slice(-20) });
+        const paged = paginateHistoryItems(cachedHistory, page, pageSize, maxPages);
+        return res.json({
+            history: paged.history,
+            page: paged.page,
+            pageSize: paged.pageSize,
+            total: paged.total,
+            totalPages: paged.totalPages,
+            hasMore: paged.hasMore,
+            maxPages
+        });
     }
-    
-    // We need to read the agent's memory file from the workspace.
-    // OpenClaw typically stores memories in MEMORY.json or similar, 
-    // but chat history specifically might be in a different log file or just part of memory.
-    // However, Meco Studio's `memory` object (in-memory) seems to load from `MEMORY.json`.
-    // Let's check `loadMemory` function implementation if available or just check the `memory` object.
-    
-    // Actually, `memory` object is initialized at start.
-    // Let's see if we can filter "chat" type memories or just return the raw list.
-    // But `memory` seems to be long-term memory.
-    // Chat history might be in `history` folder or `chat.log`.
-    
-    // Let's try to find a `history.json` or `chat.log` in the workspace.
-    // Use OPENCLAW_ROOT_DIR defined at the top
+
     const GLOBAL_AGENTS_DIR = path.join(OPENCLAW_ROOT_DIR, 'agents');
-    
     let agent = AGENTS[id];
-    
+
     // Fallback: If agent not in memory, check global disk
     if (!agent) {
         const localAgentDir = path.join(GLOBAL_AGENTS_DIR, id);
         if (fs.existsSync(localAgentDir)) {
              agent = {
                  id: id,
-                 workspace: path.join(OPENCLAW_ROOT_DIR, `workspace-${id}`), 
+                 workspace: path.join(OPENCLAW_ROOT_DIR, `workspace-${id}`),
                  name: id
              };
         }
     }
-    
+
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    
+
     let history = [];
 
-    // 1. Try to read from OpenClaw sessions (agents/ID/sessions/sessions.json)
+    // 1) Try OpenClaw sessions (agents/ID/sessions/sessions.json)
     const agentDir = path.join(GLOBAL_AGENTS_DIR, id);
     const sessionsJsonPath = path.join(agentDir, 'sessions', 'sessions.json');
-    
+
     if (fs.existsSync(sessionsJsonPath)) {
         try {
             const sessionsData = JSON.parse(fs.readFileSync(sessionsJsonPath, 'utf-8'));
-            // Find session with latest updatedAt
             let latestSession = null;
             Object.values(sessionsData).forEach(session => {
                 if (!latestSession || (session.updatedAt > latestSession.updatedAt)) {
                     latestSession = session;
                 }
             });
-            
+
             if (latestSession && latestSession.sessionFile && fs.existsSync(latestSession.sessionFile)) {
                 const lines = fs.readFileSync(latestSession.sessionFile, 'utf-8').split('\n').filter(l => l.trim());
-                // Parse lines (jsonl)
-                // OpenClaw session format: { type: 'message', role: 'user'|'assistant', content: '...' }
-                // or similar. Let's try to parse.
                 const parsedLines = lines.map(l => {
                     try { return JSON.parse(l); } catch(e) { return null; }
-                }).filter(l => l);
-                
+                }).filter(Boolean);
+
                 history = parsedLines.map(lineObj => {
-                    // Adapt to OpenClaw session format (v3)
-                    // Format: { type: 'message', message: { role: 'user', content: [...] } }
                     if (lineObj.type === 'message' && lineObj.message) {
                         const msg = lineObj.message;
                         if (msg.role) {
                              if (msg.role === 'system') return null;
-                             
+
                              let contentStr = '';
                              if (typeof msg.content === 'string') {
                                  contentStr = msg.content;
                              } else if (Array.isArray(msg.content)) {
-                                 // Extract text from blocks (type: 'text')
                                  contentStr = msg.content
                                     .filter(block => block.type === 'text')
                                     .map(block => block.text)
                                     .join('');
                              }
-                             
+
                              if (contentStr) {
                                 return { role: msg.role, content: contentStr };
                              }
                         }
                     }
-                    // Fallback for older formats or direct objects
                     if (lineObj.role && lineObj.content) {
                          if (lineObj.role === 'system') return null;
                          return { role: lineObj.role, content: lineObj.content };
                     }
                     return null;
-                }).filter(h => h);
-                
-                // Take last 20
-                if (history.length > 20) {
-                    history = history.slice(-20);
-                }
+                }).filter(Boolean);
             }
         } catch(e) {
             console.error(`[History] Failed to parse sessions for ${id}`, e);
         }
     }
-    
-    // Fallback: Check workspace history.json or chat.log if session not found
+
+    // 2) Fallback: workspace history.json or chat.log
     if (history.length === 0) {
         const workspace = agent.workspace;
         const historyPath = path.join(workspace, 'history.json');
-        
+
         if (fs.existsSync(historyPath)) {
             try {
                 const data = fs.readFileSync(historyPath, 'utf-8');
                 history = JSON.parse(data);
-            } catch (e) {
-                // console.error(`[History] Failed to parse history.json for ${id}`, e);
-            }
+            } catch (_) {}
         } else {
-            // Fallback: Check if there's a chat.log
             const logPath = path.join(workspace, 'chat.log');
             if (fs.existsSync(logPath)) {
                  try {
@@ -6918,16 +7885,24 @@ app.get('/api/agents/:id/history', async (req, res) => {
                         if (line.startsWith('AI:') || line.startsWith(agent.name + ':')) return { role: 'assistant', content: line.replace(/^(AI|[^:]+):/, '').trim() };
                         return { role: 'unknown', content: line };
                     }).filter(x => x.role !== 'unknown');
-                } catch (e) {}
+                } catch (_) {}
             }
         }
     }
-    
-    // If we have an in-memory chat history for the session (not persisted), we could use that.
-    // But for now let's just return what we found or empty.
-    
-    // Return last 20 items
-    res.json({ history: history.slice(-20) });
+
+    const normalizedHistory = (Array.isArray(history) ? history : [])
+      .map(normalizeAgentToolsHistoryItem)
+      .filter(Boolean);
+    const paged = paginateHistoryItems(normalizedHistory, page, pageSize, maxPages);
+    res.json({
+      history: paged.history,
+      page: paged.page,
+      pageSize: paged.pageSize,
+      total: paged.total,
+      totalPages: paged.totalPages,
+      hasMore: paged.hasMore,
+      maxPages
+    });
 });
 
 const agentToolsSocketsByAgent = new Map();
@@ -6959,6 +7934,10 @@ function abortAgentToolsStreams(agentId) {
         }
         ws._agentToolsStreamHandle = null;
         ws._agentToolsActiveRequestId = null;
+        if (ws && ws._agentToolsBusyMarked) {
+            markAgentRuntimeBusyEnd(agentId);
+            ws._agentToolsBusyMarked = false;
+        }
     }
 }
 
@@ -7134,6 +8113,8 @@ wss.on('connection', (ws, req) => {
       ws._agentChannelId = channel.id;
       ws._agentChannelStreamHandle = null;
       ws._agentChannelInFlight = false;
+      ws._agentChannelBusyMarked = false;
+      ws._agentChannelBusyAgents = new Set();
       console.log(`[AgentChannels] Connected: ${channel.id}`);
 
       ws.on('message', async (message) => {
@@ -7165,24 +8146,18 @@ wss.on('connection', (ws, req) => {
           if (!userText.trim() && uploads.length === 0 && systemPaths.length === 0) return;
 
           const binaryUploads = uploads.filter((f) => f && typeof f.data === 'string' && /^data:/i.test(f.data));
+          const hasMultimodalAttachments = binaryUploads.length > 0 || systemPaths.length > 0;
           const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(binaryUploads);
           let finalText = userText;
-          if (savedFiles.length > 0) {
-              finalText += `\n\n[System Notification: User uploaded ${savedFiles.length} files. The files are saved locally at the following absolute paths. Please use these paths if you need to process or view the images/files.]\n`;
-              savedFiles.forEach((p) => {
-                  finalText += `- ${p}\n`;
-              });
+          const attachmentContext = buildOpenClawAttachmentContext(savedFiles, systemPaths);
+          if (attachmentContext) {
+              finalText = finalText.trim()
+                  ? `${finalText}\n\n${attachmentContext}`
+                  : attachmentContext;
           } else if (binaryUploads.length > 0) {
-              finalText += `\n[User attached ${uploads.length} files${fileNames ? `: ${fileNames}` : ''}]`;
-          }
-          if (systemPaths.length > 0) {
-              finalText += `\n\n[System Notification: User attached ${systemPaths.length} local paths. Respect path type and use these absolute paths directly if needed.]\n`;
-              systemPaths.forEach((item, idx) => {
-                  const pathType = item && item.pathType === 'folder' ? '本地路径文件夹' : '本地路径文件';
-                  const absPath = item && typeof item.path === 'string' ? item.path : '';
-                  if (!absPath) return;
-                  finalText += `[${idx + 1}] ${pathType}: ${absPath}\n`;
-              });
+              finalText = finalText.trim()
+                  ? `${finalText}\n\n[media attached: ${binaryUploads.length} files${fileNames ? ` (${fileNames})` : ''}]`
+                  : `[media attached: ${binaryUploads.length} files${fileNames ? ` (${fileNames})` : ''}]`;
           }
 
           let historyUserText = userText.trim();
@@ -7193,28 +8168,207 @@ wss.on('connection', (ws, req) => {
                   historyUserText = `[Uploaded ${uploads.length} file(s)${fileNames ? `: ${fileNames}` : ''}]`;
               }
           }
+          const historyFiles = buildHistoryFilesFromUploadsAndPaths(uploads, savedFiles, systemPaths);
           appendAgentChannelHistory(activeChannel.id, {
               role: 'user',
-              content: historyUserText || '[empty message]'
+              content: historyUserText || '[empty message]',
+              files: historyFiles
           });
           touchAgentChannel(activeChannel.id);
 
           ws._agentChannelInFlight = true;
-          const channelMembers = Array.isArray(activeChannel.agentIds) ? activeChannel.agentIds : [];
-          const designatedByNextMembers = resolveChannelDesignatedAgents(finalText, channelMembers);
-          const designatedByMentionMembers = designatedByNextMembers.length === 0
-              ? resolveChannelMentionedAgents(finalText, channelMembers)
-              : [];
-          const effectiveMembers = designatedByNextMembers.length > 0
-              ? designatedByNextMembers
-              : (designatedByMentionMembers.length > 0 ? designatedByMentionMembers : channelMembers);
-          const routeByNext = designatedByNextMembers.length > 0;
-          const routeByMention = !routeByNext && designatedByMentionMembers.length > 0;
-          if (routeByNext) {
-              console.log(`[AgentChannels] 🎯 {next} 命中，仅向指定成员发送: ${designatedByNextMembers.join(', ')}`);
-          } else if (routeByMention) {
-              console.log(`[AgentChannels] 🎯 @mention 命中，仅向被@成员发送: ${designatedByMentionMembers.join(', ')}`);
+          if (!ws._agentChannelBusyMarked) {
+              markChannelRuntimeBusyStart(activeChannel.id);
+              ws._agentChannelBusyMarked = true;
           }
+          const channelMembers = Array.isArray(activeChannel.agentIds) ? activeChannel.agentIds : [];
+          const channelRuleMode = data.channelRuleMode !== false;
+          const routingText = typeof userText === 'string' ? userText : '';
+          let designatedByNextMembers = [];
+          let designatedByMentionMembers = [];
+          if (channelRuleMode) {
+              // Rule mode: @mention has higher priority than {next} for user-origin messages.
+              designatedByMentionMembers = resolveChannelMentionedAgents(routingText, channelMembers);
+              designatedByNextMembers = designatedByMentionMembers.length === 0
+                  ? resolveChannelDesignatedAgents(routingText, channelMembers)
+                  : [];
+          } else {
+              designatedByNextMembers = resolveChannelDesignatedAgents(routingText, channelMembers);
+              designatedByMentionMembers = designatedByNextMembers.length === 0
+                  ? resolveChannelMentionedAgents(routingText, channelMembers)
+                  : [];
+          }
+          const effectiveMembers = designatedByMentionMembers.length > 0
+              ? designatedByMentionMembers
+              : (designatedByNextMembers.length > 0 ? designatedByNextMembers : channelMembers);
+          const routeByMention = designatedByMentionMembers.length > 0;
+          const routeByNext = !routeByMention && designatedByNextMembers.length > 0;
+          if (routeByMention) {
+              console.log(`[AgentChannels] 🎯 @mention 命中，仅向被@成员发送: ${designatedByMentionMembers.join(', ')}`);
+          } else if (routeByNext) {
+              console.log(`[AgentChannels] 🎯 {next} 命中，仅向指定成员发送: ${designatedByNextMembers.join(', ')}`);
+          }
+
+          const runChannelAgentTurn = async ({ targetAgentId, targetAgentName, inputText, multimodalMessages = null }) => {
+              const safeAgentId = targetAgentId;
+              const safeAgentName = targetAgentName || getAgentDisplayName(targetAgentId) || targetAgentId;
+              let fullResponse = '';
+              let fullReasoning = '';
+              let hasStartedStreaming = false;
+              let agentBusyMarked = false;
+              const markAgentBusyStart = () => {
+                  if (agentBusyMarked) return;
+                  markAgentRuntimeBusyStart(safeAgentId);
+                  ws._agentChannelBusyAgents.add(safeAgentId);
+                  agentBusyMarked = true;
+              };
+              const markAgentBusyEnd = () => {
+                  if (!agentBusyMarked) return;
+                  markAgentRuntimeBusyEnd(safeAgentId);
+                  ws._agentChannelBusyAgents.delete(safeAgentId);
+                  agentBusyMarked = false;
+              };
+              markAgentBusyStart();
+
+              await new Promise((resolveAgent) => {
+                  const onChunk = (chunk) => {
+                      if (ws.readyState !== WebSocket.OPEN) return;
+                      const emitText = (content) => {
+                          if (typeof content !== 'string' || !content) return;
+                          const isNew = !hasStartedStreaming;
+                          hasStartedStreaming = true;
+                          fullResponse += content;
+                          ws.send(JSON.stringify({
+                              type: 'channel_text_stream',
+                              channelId: activeChannel.id,
+                              agentId: safeAgentId,
+                              agentName: safeAgentName,
+                              content,
+                              isNew
+                          }));
+                      };
+                      const emitReasoning = (content) => {
+                          if (typeof content !== 'string' || !content) return;
+                          const isNew = !hasStartedStreaming;
+                          hasStartedStreaming = true;
+                          fullReasoning += content;
+                          ws.send(JSON.stringify({
+                              type: 'channel_reasoning_stream',
+                              channelId: activeChannel.id,
+                              agentId: safeAgentId,
+                              agentName: safeAgentName,
+                              content,
+                              isNew
+                          }));
+                      };
+
+                      if (typeof chunk === 'string') {
+                          emitText(chunk);
+                          return;
+                      }
+                      if (!chunk || typeof chunk !== 'object') return;
+                      if (chunk.type === 'reasoning_stream' && typeof chunk.content === 'string') {
+                          emitReasoning(chunk.content);
+                          return;
+                      }
+                      if (chunk.type === 'text_stream' && typeof chunk.content === 'string') {
+                          emitText(chunk.content);
+                      }
+                  };
+
+                  const onDone = () => {
+                      ws._agentChannelStreamHandle = null;
+                      markAgentBusyEnd();
+                      const content = fullResponse.trim() || '[No response]';
+                      appendAgentChannelHistory(activeChannel.id, {
+                          role: 'assistant',
+                          content,
+                          agentId: safeAgentId,
+                          senderName: safeAgentName,
+                          reasoning: fullReasoning.trim()
+                      });
+                      if (ws.readyState === WebSocket.OPEN) {
+                          ws.send(JSON.stringify({
+                              type: 'channel_stream_done',
+                              channelId: activeChannel.id,
+                              agentId: safeAgentId,
+                              agentName: safeAgentName
+                          }));
+                      }
+                      resolveAgent();
+                  };
+
+                  const onError = (error) => {
+                      ws._agentChannelStreamHandle = null;
+                      markAgentBusyEnd();
+                      const errorText = `[Error: ${error.message}]`;
+                      fullResponse = errorText;
+                      if (ws.readyState === WebSocket.OPEN) {
+                          ws.send(JSON.stringify({
+                              type: 'channel_text_stream',
+                              channelId: activeChannel.id,
+                              agentId: safeAgentId,
+                              agentName: safeAgentName,
+                              content: errorText,
+                              isNew: !hasStartedStreaming
+                          }));
+                          ws.send(JSON.stringify({
+                              type: 'channel_stream_done',
+                              channelId: activeChannel.id,
+                              agentId: safeAgentId,
+                              agentName: safeAgentName
+                          }));
+                      }
+                      appendAgentChannelHistory(activeChannel.id, {
+                          role: 'assistant',
+                          content: errorText,
+                          agentId: safeAgentId,
+                          senderName: safeAgentName
+                      });
+                      resolveAgent();
+                  };
+
+                  if (multimodalMessages) {
+                      const controller = new AbortController();
+                      ws._agentChannelStreamHandle = { abort: () => controller.abort() };
+                      streamOpenClawHTTP(
+                          safeAgentId,
+                          inputText,
+                          {
+                              onText: (content) => onChunk({ type: 'text_stream', content }),
+                              onReasoning: (content) => onChunk({ type: 'reasoning_stream', content }),
+                              onDone: () => onDone(),
+                              onError: (error) => onError(error)
+                          },
+                          {
+                              controller,
+                              silentAbort: true,
+                              firstChunkTimeoutMs: OPENCLAW_FIRST_CHUNK_TIMEOUT_MULTIMODAL_MS,
+                              messages: multimodalMessages,
+                              model: `openclaw:${safeAgentId}`,
+                              gatewayAgentId: safeAgentId,
+                              sessionKey: `agent:${safeAgentId}:main`
+                          }
+                      );
+                      return;
+                  }
+
+                  ws._agentChannelStreamHandle = openclaw.sendMessageStream(
+                      safeAgentId,
+                      inputText,
+                      onChunk,
+                      onDone,
+                      onError,
+                      { thinking: 'medium' }
+                  );
+              });
+
+              return {
+                  content: fullResponse.trim(),
+                  reasoning: fullReasoning.trim()
+              };
+          };
+
           for (const agentId of effectiveMembers) {
               if (ws.readyState !== WebSocket.OPEN) break;
 
@@ -7222,111 +8376,49 @@ wss.on('connection', (ws, req) => {
               const agentInputText = (routeByNext || routeByMention)
                   ? `${finalText}\n\n[System Instruction: You are explicitly designated by ${routeByNext ? '{next}' : '@ mention'}. Read the caller's full context carefully before replying. You may decide whether to reply (recommended to reply). If you reply, answer the caller's point directly first.]`
                   : finalText;
-              let fullResponse = '';
-              let fullReasoning = '';
-              let hasStartedStreaming = false;
-
-              await new Promise((resolveAgent) => {
-                  ws._agentChannelStreamHandle = openclaw.sendMessageStream(
-                      agentId,
-                      agentInputText,
-                      (chunk) => {
-                          if (ws.readyState !== WebSocket.OPEN) return;
-                          const emitText = (content) => {
-                              if (typeof content !== 'string' || !content) return;
-                              const isNew = !hasStartedStreaming;
-                              hasStartedStreaming = true;
-                              fullResponse += content;
-                              ws.send(JSON.stringify({
-                                  type: 'channel_text_stream',
-                                  channelId: activeChannel.id,
-                                  agentId,
-                                  agentName,
-                                  content,
-                                  isNew
-                              }));
-                          };
-                          const emitReasoning = (content) => {
-                              if (typeof content !== 'string' || !content) return;
-                              const isNew = !hasStartedStreaming;
-                              hasStartedStreaming = true;
-                              fullReasoning += content;
-                              ws.send(JSON.stringify({
-                                  type: 'channel_reasoning_stream',
-                                  channelId: activeChannel.id,
-                                  agentId,
-                                  agentName,
-                                  content,
-                                  isNew
-                              }));
-                          };
-
-                          if (typeof chunk === 'string') {
-                              emitText(chunk);
-                              return;
-                          }
-                          if (!chunk || typeof chunk !== 'object') return;
-                          if (chunk.type === 'reasoning_stream' && typeof chunk.content === 'string') {
-                              emitReasoning(chunk.content);
-                              return;
-                          }
-                          if (chunk.type === 'text_stream' && typeof chunk.content === 'string') {
-                              emitText(chunk.content);
-                          }
-                      },
-                      () => {
-                          ws._agentChannelStreamHandle = null;
-                          const content = fullResponse.trim() || '[No response]';
-                          appendAgentChannelHistory(activeChannel.id, {
-                              role: 'assistant',
-                              content,
-                              agentId,
-                              senderName: agentName,
-                              reasoning: fullReasoning.trim()
-                          });
-                          if (ws.readyState === WebSocket.OPEN) {
-                              ws.send(JSON.stringify({
-                                  type: 'channel_stream_done',
-                                  channelId: activeChannel.id,
-                                  agentId,
-                                  agentName
-                              }));
-                          }
-                          resolveAgent();
-                      },
-                      (error) => {
-                          ws._agentChannelStreamHandle = null;
-                          const errorText = `[Error: ${error.message}]`;
-                          if (ws.readyState === WebSocket.OPEN) {
-                              ws.send(JSON.stringify({
-                                  type: 'channel_text_stream',
-                                  channelId: activeChannel.id,
-                                  agentId,
-                                  agentName,
-                                  content: errorText,
-                                  isNew: !hasStartedStreaming
-                              }));
-                              ws.send(JSON.stringify({
-                                  type: 'channel_stream_done',
-                                  channelId: activeChannel.id,
-                                  agentId,
-                                  agentName
-                              }));
-                          }
-                          appendAgentChannelHistory(activeChannel.id, {
-                              role: 'assistant',
-                              content: errorText,
-                              agentId,
-                              senderName: agentName
-                          });
-                          resolveAgent();
-                      },
-                      { thinking: 'medium' }
-                  );
+              const multimodalMessages = hasMultimodalAttachments
+                  ? buildOpenClawMultimodalMessages(agentInputText, binaryUploads, systemPaths)
+                  : null;
+              const result = await runChannelAgentTurn({
+                  targetAgentId: agentId,
+                  targetAgentName: agentName,
+                  inputText: agentInputText,
+                  multimodalMessages
               });
+
+              if (!channelRuleMode || !result.content) {
+                  continue;
+              }
+
+              // Rule mode handoff: parse {next: "..."} from member replies, then relay to target(s) without the directive.
+              const forwardedTargets = resolveChannelDesignatedAgents(result.content, channelMembers)
+                  .filter((id) => id && id !== agentId);
+              if (forwardedTargets.length === 0) {
+                  continue;
+              }
+              const forwardedContent = stripNextDirectives(result.content);
+              if (!forwardedContent) {
+                  continue;
+              }
+              console.log(`[AgentChannels] ↪️ ${agentId} 回复触发 {next} 转发: ${forwardedTargets.join(', ')}`);
+              for (const targetId of forwardedTargets) {
+                  if (ws.readyState !== WebSocket.OPEN) break;
+                  const targetName = getAgentDisplayName(targetId) || targetId;
+                  const relayInput = `${agentName} 给你转达了一条消息，请直接回应ta：\n${forwardedContent}\n\n[System Instruction: This is an automatic handoff triggered by {next}. The {next} directive has been removed before forwarding.]`;
+                  await runChannelAgentTurn({
+                      targetAgentId: targetId,
+                      targetAgentName: targetName,
+                      inputText: relayInput,
+                      multimodalMessages: null
+                  });
+              }
           }
 
           ws._agentChannelInFlight = false;
+          if (ws._agentChannelBusyMarked) {
+              markChannelRuntimeBusyEnd(activeChannel.id);
+              ws._agentChannelBusyMarked = false;
+          }
           touchAgentChannel(activeChannel.id);
           if (ws.readyState === WebSocket.OPEN) {
               try {
@@ -7340,6 +8432,16 @@ wss.on('connection', (ws, req) => {
 
       ws.on('close', () => {
           ws._agentChannelInFlight = false;
+          if (ws._agentChannelBusyMarked) {
+              markChannelRuntimeBusyEnd(channel.id);
+              ws._agentChannelBusyMarked = false;
+          }
+          if (ws._agentChannelBusyAgents && ws._agentChannelBusyAgents.size > 0) {
+              for (const busyAgentId of ws._agentChannelBusyAgents) {
+                  markAgentRuntimeBusyEnd(busyAgentId);
+              }
+              ws._agentChannelBusyAgents.clear();
+          }
           if (ws._agentChannelStreamHandle && typeof ws._agentChannelStreamHandle.abort === 'function') {
               try { ws._agentChannelStreamHandle.abort(); } catch (_) {}
           }
@@ -7357,6 +8459,7 @@ wss.on('connection', (ws, req) => {
           return;
       }
       ws._agentToolsAgentId = agentId;
+      ws._agentToolsBusyMarked = false;
       trackAgentToolsSocket(agentId, ws);
       
       console.log(`[AgentTools] Connected to ${agentId}`);
@@ -7365,33 +8468,37 @@ wss.on('connection', (ws, req) => {
           try {
               const data = JSON.parse(message);
               if (data.type === 'message') {
-                  const userText = data.content;
+                  const userText = typeof data.content === 'string' ? data.content : '';
                   console.log(`[AgentTools] ${agentId} received: ${userText}`);
                   
                   // Handle files if present
                   let finalText = userText;
                   const uploads = Array.isArray(data.files) ? data.files : [];
                   const systemPaths = Array.isArray(data.systemPaths) ? data.systemPaths : [];
+                  const binaryUploads = uploads.filter((f) => f && typeof f.data === 'string' && /^data:/i.test(f.data));
+                  const hasMultimodalAttachments = binaryUploads.length > 0 || systemPaths.length > 0;
+                  const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(binaryUploads);
+                  const multimodalMessages = hasMultimodalAttachments
+                      ? buildOpenClawMultimodalMessages(userText, binaryUploads, systemPaths)
+                      : null;
                   if (uploads.length > 0) {
-                      const binaryUploads = uploads.filter((f) => f && typeof f.data === 'string' && /^data:/i.test(f.data));
-                      const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(binaryUploads);
-                      if (savedFiles.length > 0) {
-                          finalText += `\n\n[System Notification: User uploaded ${savedFiles.length} files. The files are saved locally at the following absolute paths. Please use these paths if you need to process or view the images/files.]\n`;
-                          savedFiles.forEach((p) => {
-                              finalText += `- ${p}\n`;
-                          });
+                      const attachmentContext = buildOpenClawAttachmentContext(savedFiles, systemPaths);
+                      if (attachmentContext) {
+                          finalText = finalText.trim()
+                              ? `${finalText}\n\n${attachmentContext}`
+                              : attachmentContext;
                       } else if (binaryUploads.length > 0) {
-                          finalText += `\n[User attached ${binaryUploads.length} files${fileNames ? `: ${fileNames}` : ''}]`;
+                          finalText = finalText.trim()
+                              ? `${finalText}\n\n[media attached: ${binaryUploads.length} files${fileNames ? ` (${fileNames})` : ''}]`
+                              : `[media attached: ${binaryUploads.length} files${fileNames ? ` (${fileNames})` : ''}]`;
                       }
-                  }
-                  if (systemPaths.length > 0) {
-                      finalText += `\n\n[System Notification: User attached ${systemPaths.length} local paths. Respect path type and use these absolute paths directly if needed.]\n`;
-                      systemPaths.forEach((item, idx) => {
-                          const pathType = item && item.pathType === 'folder' ? '本地路径文件夹' : '本地路径文件';
-                          const absPath = item && typeof item.path === 'string' ? item.path : '';
-                          if (!absPath) return;
-                          finalText += `[${idx + 1}] ${pathType}: ${absPath}\n`;
-                      });
+                  } else if (systemPaths.length > 0) {
+                      const attachmentContext = buildOpenClawAttachmentContext([], systemPaths);
+                      if (attachmentContext) {
+                          finalText = finalText.trim()
+                              ? `${finalText}\n\n${attachmentContext}`
+                              : attachmentContext;
+                      }
                   }
 
                   let historyUserText = typeof userText === 'string' ? userText.trim() : '';
@@ -7403,7 +8510,8 @@ wss.on('connection', (ws, req) => {
                           historyUserText = `[Uploaded ${uploads.length} file(s)${fileNames ? `: ${fileNames}` : ''}]`;
                       }
                   }
-                  appendAgentToolsHistory(agentId, 'user', historyUserText);
+                  const historyFiles = buildHistoryFilesFromUploadsAndPaths(uploads, savedFiles, systemPaths);
+                  appendAgentToolsHistory(agentId, 'user', historyUserText, historyFiles);
 
                   // Stream Response (OpenClaw CLI streaming)
                   let fullResponse = '';
@@ -7414,18 +8522,21 @@ wss.on('connection', (ws, req) => {
                   if (ws._agentToolsStreamHandle && typeof ws._agentToolsStreamHandle.abort === 'function') {
                       try { ws._agentToolsStreamHandle.abort(); } catch(e) {}
                   }
+                  if (ws._agentToolsBusyMarked) {
+                      markAgentRuntimeBusyEnd(agentId);
+                      ws._agentToolsBusyMarked = false;
+                  }
                   const requestId = `${agentId}-${Date.now()}`;
                   ws._agentToolsActiveRequestId = requestId;
+                  markAgentRuntimeBusyStart(agentId);
+                  ws._agentToolsBusyMarked = true;
 
                   const streamOptions = {};
                   if (thinkingLevel && thinkingLevel !== 'off') {
                       streamOptions.thinking = thinkingLevel;
                   }
 
-                  ws._agentToolsStreamHandle = openclaw.sendMessageStream(
-                      agentId,
-                      finalText,
-                      (chunk) => {
+                  const onChunk = (chunk) => {
                           if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
                           const emitText = (content) => {
                               if (typeof content !== 'string' || !content) return;
@@ -7453,11 +8564,15 @@ wss.on('connection', (ws, req) => {
                           if (chunk.type === 'text_stream') {
                               emitText(chunk.content);
                           }
-                      },
-                      () => {
+                      };
+                  const onDone = () => {
                           if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
                           ws._agentToolsStreamHandle = null;
                           ws._agentToolsActiveRequestId = null;
+                          if (ws._agentToolsBusyMarked) {
+                              markAgentRuntimeBusyEnd(agentId);
+                              ws._agentToolsBusyMarked = false;
+                          }
                           console.log(`[AgentTools] Response complete`);
                           if (fullResponse.trim()) {
                               appendAgentToolsHistory(agentId, 'assistant', fullResponse);
@@ -7478,16 +8593,51 @@ wss.on('connection', (ws, req) => {
                                   }
                               });
                           }
-                      },
-                      (error) => {
+                      };
+                  const onError = (error) => {
                           if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
                           ws._agentToolsStreamHandle = null;
                           ws._agentToolsActiveRequestId = null;
+                          if (ws._agentToolsBusyMarked) {
+                              markAgentRuntimeBusyEnd(agentId);
+                              ws._agentToolsBusyMarked = false;
+                          }
                           ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
                           ws.send(JSON.stringify({ type: 'stream_done' }));
-                      },
-                      streamOptions
-                  );
+                      };
+
+                  if (multimodalMessages) {
+                      const controller = new AbortController();
+                      ws._agentToolsStreamHandle = { abort: () => controller.abort() };
+                      streamOpenClawHTTP(
+                          agentId,
+                          userText,
+                          {
+                              onText: (content) => onChunk({ type: 'text_stream', content }),
+                              onReasoning: (content) => onChunk({ type: 'reasoning_stream', content }),
+                              onDone: () => onDone(),
+                              onError: (error) => onError(error)
+                          },
+                          {
+                              controller,
+                              silentAbort: true,
+                              firstChunkTimeoutMs: OPENCLAW_FIRST_CHUNK_TIMEOUT_MULTIMODAL_MS,
+                              messages: multimodalMessages,
+                              model: `openclaw:${agentId}`,
+                              gatewayAgentId: agentId,
+                              sessionKey: `agent:${agentId}:main`
+                          }
+                      );
+                  } else {
+                      ws._agentToolsStreamHandle = openclaw.sendMessageStream(
+                          agentId,
+                          finalText,
+                          onChunk,
+                          onDone,
+                          onError,
+                          streamOptions
+                      );
+                  }
               }
           } catch (e) {
               console.error('[AgentTools] Message error', e);
@@ -7500,6 +8650,10 @@ wss.on('connection', (ws, req) => {
               ws._agentToolsStreamHandle = null;
           }
           ws._agentToolsActiveRequestId = null;
+          if (ws._agentToolsBusyMarked) {
+              markAgentRuntimeBusyEnd(agentId);
+              ws._agentToolsBusyMarked = false;
+          }
           untrackAgentToolsSocket(agentId, ws);
       });
       return;

@@ -331,6 +331,7 @@
         let allAgents = []; 
         let atChannels = [];
         let agentToDeleteId = null;
+        let agentToCloneId = null;
         let currentAgentToolId = null;
         let currentChannelId = null;
         let atSocket = null;
@@ -342,7 +343,18 @@
         let atSoundEnabled = false;
         let atMiniMaxConfigured = false;
         let atPersonaRefreshInProgress = false;
+        let atChannelRefreshInProgress = false;
+        let atChannelRuleMode = true;
+        let atSingleChatImmersive = false;
         const AT_SOUND_PREF_KEY = 'meco.agenttools.soundEnabled';
+        const AT_CHANNEL_RULE_MODE_PREF_KEY = 'meco.agenttools.channelRuleMode';
+        const AT_IMMERSIVE_PREF_KEY = 'meco.agenttools.singleChatImmersive';
+        const AT_SENT_INPUT_HISTORY_LIMIT = 20;
+        const AT_HISTORY_PAGE_SIZE = 20;
+        const AT_HISTORY_MAX_PAGES = 20;
+        const AT_HISTORY_TOTAL_LIMIT = AT_HISTORY_PAGE_SIZE * AT_HISTORY_MAX_PAGES;
+        const AT_STATUS_PREF_KEY = 'meco.agenttools.runtimeStatus';
+        const AT_STATUS_POLL_INTERVAL_MS = 2500;
         let atCurrentAudioSource = null;
         let atAudioContext = null;
         let atAudioQueue = [];
@@ -361,6 +373,8 @@
         const AT_AUDIO_START_LEAD_SEC = 0.26;
         const AT_AUDIO_RECOVERY_LEAD_SEC = 0.2;
         const AT_AUDIO_IDLE_RESET_MS = 900;
+        const AT_TYPING_CHARS_PER_TICK = 6;
+        const AT_TYPING_TICK_MS = 20;
         let currentMessageDiv = null;
         let currentAgentAvatarUrl = null;
         let appRuntimeSettings = null;
@@ -372,6 +386,13 @@
         let atMentionCandidates = [];
         let atMentionSelectedIndex = 0;
         let atMentionMode = 'mention';
+        let atRemoteRuntimeStatus = { agents: {}, channels: {}, updatedAt: '' };
+        let atRuntimeStatusPollTimer = null;
+        let atHistoryScrollTicking = false;
+        const atAgentTypingTimers = new Map();
+        const atChannelTypingTimers = new Map();
+        const atAgentSentInputHistory = new Map();
+        const atChannelSentInputHistory = new Map();
 
         function setSidebarSelectedAgent(agentId) {
             sidebarActiveAgentId = agentId || null;
@@ -432,6 +453,9 @@
                     ttsStreamingActive: false,
                     streamMessageIndex: null,
                     historyLoaded: false,
+                    historyPage: 0,
+                    hasMoreHistory: false,
+                    historyLoading: false,
                     pendingQueue: []
                 };
             }
@@ -443,6 +467,9 @@
                     ttsStreamingActive: false,
                     streamMessageIndex: null,
                     historyLoaded: false,
+                    historyPage: 0,
+                    hasMoreHistory: false,
+                    historyLoading: false,
                     pendingQueue: []
                 });
             }
@@ -453,6 +480,9 @@
             if (typeof state.ttsStreamingActive !== 'boolean') state.ttsStreamingActive = false;
             if (!Array.isArray(state.pendingQueue)) state.pendingQueue = [];
             if (typeof state.historyLoaded !== 'boolean') state.historyLoaded = false;
+            if (!Number.isInteger(state.historyPage) || state.historyPage < 0) state.historyPage = 0;
+            if (typeof state.hasMoreHistory !== 'boolean') state.hasMoreHistory = false;
+            if (typeof state.historyLoading !== 'boolean') state.historyLoading = false;
             if (!Number.isInteger(state.streamMessageIndex)) state.streamMessageIndex = null;
             return state;
         }
@@ -465,6 +495,9 @@
                     loading: false,
                     inFlight: false,
                     historyLoaded: false,
+                    historyPage: 0,
+                    hasMoreHistory: false,
+                    historyLoading: false,
                     pendingQueue: [],
                     streamMessageIndexByAgent: {}
                 };
@@ -475,6 +508,9 @@
                     loading: false,
                     inFlight: false,
                     historyLoaded: false,
+                    historyPage: 0,
+                    hasMoreHistory: false,
+                    historyLoading: false,
                     pendingQueue: [],
                     streamMessageIndexByAgent: {}
                 });
@@ -484,11 +520,210 @@
             if (typeof state.loading !== 'boolean') state.loading = false;
             if (typeof state.inFlight !== 'boolean') state.inFlight = false;
             if (typeof state.historyLoaded !== 'boolean') state.historyLoaded = false;
+            if (!Number.isInteger(state.historyPage) || state.historyPage < 0) state.historyPage = 0;
+            if (typeof state.hasMoreHistory !== 'boolean') state.hasMoreHistory = false;
+            if (typeof state.historyLoading !== 'boolean') state.historyLoading = false;
             if (!Array.isArray(state.pendingQueue)) state.pendingQueue = [];
             if (!state.streamMessageIndexByAgent || typeof state.streamMessageIndexByAgent !== 'object') {
                 state.streamMessageIndexByAgent = {};
             }
             return state;
+        }
+
+        function ensureSentInputHistoryState(mapRef, rawKey) {
+            const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+            if (!key) return null;
+            if (!mapRef.has(key)) {
+                mapRef.set(key, {
+                    items: [],
+                    navIndex: -1,
+                    draft: ''
+                });
+            }
+            const state = mapRef.get(key);
+            if (!Array.isArray(state.items)) state.items = [];
+            if (!Number.isInteger(state.navIndex)) state.navIndex = -1;
+            if (typeof state.draft !== 'string') state.draft = '';
+            return state;
+        }
+
+        function pushSentInputHistory(mapRef, rawKey, rawText) {
+            const state = ensureSentInputHistoryState(mapRef, rawKey);
+            if (!state) return;
+            const text = typeof rawText === 'string' ? rawText.trim() : '';
+            if (!text) {
+                state.navIndex = -1;
+                state.draft = '';
+                return;
+            }
+            const last = state.items[state.items.length - 1] || '';
+            if (last !== text) {
+                state.items.push(text);
+                if (state.items.length > AT_SENT_INPUT_HISTORY_LIMIT) {
+                    state.items = state.items.slice(-AT_SENT_INPUT_HISTORY_LIMIT);
+                }
+            }
+            state.navIndex = -1;
+            state.draft = '';
+        }
+
+        function navigateSentInputHistory(mapRef, rawKey, direction, getText, setText) {
+            const state = ensureSentInputHistoryState(mapRef, rawKey);
+            if (!state || state.items.length === 0) return false;
+            const dir = direction === 'down' ? 'down' : 'up';
+            if (dir === 'up') {
+                if (state.navIndex === -1) {
+                    state.draft = typeof getText === 'function' ? String(getText() || '') : '';
+                    state.navIndex = state.items.length - 1;
+                } else if (state.navIndex > 0) {
+                    state.navIndex -= 1;
+                }
+                const next = state.items[state.navIndex] || '';
+                if (typeof setText === 'function') setText(next);
+                return true;
+            }
+            if (state.navIndex === -1) return false;
+            if (state.navIndex < state.items.length - 1) {
+                state.navIndex += 1;
+                const next = state.items[state.navIndex] || '';
+                if (typeof setText === 'function') setText(next);
+                return true;
+            }
+            state.navIndex = -1;
+            const draft = state.draft || '';
+            state.draft = '';
+            if (typeof setText === 'function') setText(draft);
+            return true;
+        }
+
+        function advanceStreamingDisplay(message, step = AT_TYPING_CHARS_PER_TICK) {
+            if (!message || typeof message !== 'object') return false;
+            const safeStep = Number.isFinite(step) && step > 0 ? Math.floor(step) : 1;
+            let changed = false;
+            const targetContent = typeof message.content === 'string' ? message.content : '';
+            const targetReasoning = typeof message.reasoning === 'string' ? message.reasoning : '';
+            if (typeof message.displayContent !== 'string') {
+                message.displayContent = '';
+            }
+            if (typeof message.displayReasoning !== 'string') {
+                message.displayReasoning = '';
+            }
+            if (message.displayContent.length < targetContent.length) {
+                message.displayContent = targetContent.slice(0, message.displayContent.length + safeStep);
+                changed = true;
+            }
+            if (message.displayReasoning.length < targetReasoning.length) {
+                message.displayReasoning = targetReasoning.slice(0, message.displayReasoning.length + safeStep);
+                changed = true;
+            }
+            return changed;
+        }
+
+        function syncStreamingDisplayNow(message) {
+            if (!message || typeof message !== 'object') return;
+            message.displayContent = typeof message.content === 'string' ? message.content : '';
+            message.displayReasoning = typeof message.reasoning === 'string' ? message.reasoning : '';
+        }
+
+        function normalizeRuntimeBusyMap(rawMap) {
+            const normalized = {};
+            if (!rawMap || typeof rawMap !== 'object') return normalized;
+            Object.entries(rawMap).forEach(([key, value]) => {
+                const id = typeof key === 'string' ? key.trim() : '';
+                if (!id) return;
+                normalized[id] = !!value;
+            });
+            return normalized;
+        }
+
+        function persistAgentToolsRuntimeStatus() {
+            try {
+                localStorage.setItem(AT_STATUS_PREF_KEY, JSON.stringify({
+                    updatedAt: atRemoteRuntimeStatus.updatedAt || '',
+                    agents: normalizeRuntimeBusyMap(atRemoteRuntimeStatus.agents),
+                    channels: normalizeRuntimeBusyMap(atRemoteRuntimeStatus.channels)
+                }));
+            } catch (_) {}
+        }
+
+        function loadAgentToolsRuntimeStatusPref() {
+            try {
+                const raw = localStorage.getItem(AT_STATUS_PREF_KEY);
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                atRemoteRuntimeStatus = {
+                    updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+                    agents: normalizeRuntimeBusyMap(parsed.agents),
+                    channels: normalizeRuntimeBusyMap(parsed.channels)
+                };
+            } catch (_) {}
+        }
+
+        function isAgentBusyNow(agentId) {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            if (!id) return false;
+            const local = atAgentChatState.has(id)
+                ? (() => {
+                    const state = getAgentChatState(id);
+                    return !!(state.inFlight || state.loading || state.historyLoading);
+                })()
+                : false;
+            const remote = !!(atRemoteRuntimeStatus.agents && atRemoteRuntimeStatus.agents[id]);
+            return local || remote;
+        }
+
+        function isChannelBusyNow(channelId) {
+            const id = typeof channelId === 'string' ? channelId.trim() : '';
+            if (!id) return false;
+            const local = atChannelChatState.has(id)
+                ? (() => {
+                    const state = getChannelChatState(id);
+                    return !!(state.inFlight || state.loading || state.historyLoading);
+                })()
+                : false;
+            const remote = !!(atRemoteRuntimeStatus.channels && atRemoteRuntimeStatus.channels[id]);
+            return local || remote;
+        }
+
+        function updateSidebarBusyIndicators() {
+            const agentItems = document.querySelectorAll('#sidebar-agent-list [data-agent-id]');
+            agentItems.forEach((item) => {
+                const id = item.dataset.agentId || '';
+                const busy = isAgentBusyNow(id);
+                const badge = item.querySelector('.js-busy-badge');
+                if (!badge) return;
+                badge.classList.toggle('hidden', !busy);
+            });
+            const channelItems = document.querySelectorAll('#sidebar-channel-list [data-channel-id]');
+            channelItems.forEach((item) => {
+                const id = item.dataset.channelId || '';
+                const busy = isChannelBusyNow(id);
+                const badge = item.querySelector('.js-busy-badge');
+                if (!badge) return;
+                badge.classList.toggle('hidden', !busy);
+            });
+        }
+
+        async function fetchAgentToolsRuntimeStatus() {
+            try {
+                const res = await fetch('/api/agent-tools/status');
+                const data = await readJsonResponse(res, 'status fetch failed');
+                atRemoteRuntimeStatus = {
+                    updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : '',
+                    agents: normalizeRuntimeBusyMap(data.agents),
+                    channels: normalizeRuntimeBusyMap(data.channels)
+                };
+                persistAgentToolsRuntimeStatus();
+                updateSidebarBusyIndicators();
+            } catch (_) {}
+        }
+
+        function startAgentToolsRuntimeStatusPolling() {
+            if (atRuntimeStatusPollTimer) return;
+            fetchAgentToolsRuntimeStatus();
+            atRuntimeStatusPollTimer = setInterval(() => {
+                fetchAgentToolsRuntimeStatus();
+            }, AT_STATUS_POLL_INTERVAL_MS);
         }
 
         function shouldPlayForegroundAudio(agentId) {
@@ -535,12 +770,14 @@
             if (!wrap || !icon || !text || !btn) return;
 
             if (currentChannelId) {
-                wrap.classList.add('hidden');
+                wrap.classList.remove('hidden');
+                btn.classList.add('hidden');
                 return;
             }
 
             wrap.classList.remove('hidden');
-            btn.disabled = !atMiniMaxConfigured;
+            btn.classList.remove('hidden');
+            btn.disabled = false;
             if (atSoundEnabled) {
                 icon.textContent = 'volume_up';
                 text.textContent = 'Sound On';
@@ -550,11 +787,7 @@
             } else {
                 icon.textContent = 'volume_off';
                 text.textContent = 'Enable Sound';
-                btn.classList.remove('bg-primary/20', 'text-primary', 'border-primary/40');
-                btn.classList.add('bg-white/5', 'text-gray-300', 'border-white/10');
-            }
-            if (!atMiniMaxConfigured) {
-                btn.classList.add('opacity-60', 'cursor-not-allowed');
+                btn.classList.remove('opacity-60', 'cursor-not-allowed');
                 btn.classList.remove('bg-primary/20', 'text-primary', 'border-primary/40');
                 btn.classList.add('bg-white/5', 'text-gray-300', 'border-white/10');
             }
@@ -575,18 +808,106 @@
             } catch (_) {}
         }
 
+        function persistAgentToolsChannelRuleModePref() {
+            try {
+                localStorage.setItem(AT_CHANNEL_RULE_MODE_PREF_KEY, atChannelRuleMode ? '1' : '0');
+            } catch (_) {}
+        }
+
+        function loadAgentToolsChannelRuleModePref() {
+            try {
+                const raw = localStorage.getItem(AT_CHANNEL_RULE_MODE_PREF_KEY);
+                if (raw === '1' || raw === '0') {
+                    atChannelRuleMode = raw === '1';
+                } else {
+                    atChannelRuleMode = true;
+                }
+            } catch (_) {
+                atChannelRuleMode = true;
+            }
+        }
+
+        function updateAgentToolsChannelRuleModeUi() {
+            const btn = document.getElementById('at-channel-rule-mode-btn');
+            const icon = document.getElementById('at-channel-rule-mode-icon');
+            const text = document.getElementById('at-channel-rule-mode-text');
+            if (!btn || !icon || !text) return;
+            const inChannel = !!currentChannelId;
+            btn.classList.toggle('hidden', !inChannel);
+            if (!inChannel) return;
+
+            const enabled = !!atChannelRuleMode;
+            btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+            icon.textContent = enabled ? 'rule' : 'rule_folder';
+            text.textContent = enabled ? 'Rule On' : 'Rule Off';
+            btn.classList.toggle('bg-primary/20', enabled);
+            btn.classList.toggle('text-primary', enabled);
+            btn.classList.toggle('border-primary/40', enabled);
+            btn.classList.toggle('bg-white/5', !enabled);
+            btn.classList.toggle('text-gray-300', !enabled);
+            btn.classList.toggle('border-white/10', !enabled);
+        }
+
+        function persistAgentToolsImmersivePref() {
+            try {
+                localStorage.setItem(AT_IMMERSIVE_PREF_KEY, atSingleChatImmersive ? '1' : '0');
+            } catch (_) {}
+        }
+
+        function loadAgentToolsImmersivePref() {
+            try {
+                const raw = localStorage.getItem(AT_IMMERSIVE_PREF_KEY);
+                if (raw === '1' || raw === '0') {
+                    atSingleChatImmersive = raw === '1';
+                }
+            } catch (_) {}
+        }
+
+        function updateAgentToolsImmersiveToggleUi() {
+            const btn = document.getElementById('at-immersive-toggle-btn');
+            const icon = document.getElementById('at-immersive-toggle-icon');
+            if (!btn || !icon) return;
+            const enabled = !!atSingleChatImmersive;
+            btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+            btn.title = enabled ? 'Exit immersive chat' : 'Enable immersive chat';
+            icon.textContent = enabled ? 'fullscreen_exit' : 'fullscreen';
+            btn.classList.toggle('text-primary', enabled);
+            btn.classList.toggle('border-primary/40', enabled);
+            btn.classList.toggle('bg-primary/15', enabled);
+            btn.classList.toggle('text-gray-500', !enabled);
+            btn.classList.toggle('border-transparent', !enabled);
+            btn.classList.toggle('hover:text-primary', !enabled);
+            btn.classList.toggle('hover:bg-white/5', !enabled);
+        }
+
+        window.toggleAgentToolsImmersiveMode = function() {
+            atSingleChatImmersive = !atSingleChatImmersive;
+            persistAgentToolsImmersivePref();
+            updateAgentToolsImmersiveToggleUi();
+            if (window.location.hash !== '#agenttools') return;
+            applyAgentToolsLayoutMode();
+            if (currentChannelId) {
+                renderAgentToolsChannelChat(currentChannelId);
+            } else if (currentAgentToolId) {
+                renderAgentToolsChat(currentAgentToolId);
+            }
+        };
+
         function updateAgentToolsPersonaRefreshUi() {
             const btn = document.getElementById('at-persona-refresh-btn');
             const icon = document.getElementById('at-persona-refresh-icon');
             if (!btn || !icon) return;
-            const isAvailable = !!currentAgentToolId && !currentChannelId;
-            btn.disabled = !isAvailable || atPersonaRefreshInProgress;
+            const isChannelMode = !!currentChannelId;
+            const isAvailable = isChannelMode ? true : !!currentAgentToolId;
+            const isLoading = isChannelMode ? atChannelRefreshInProgress : atPersonaRefreshInProgress;
+            btn.title = isChannelMode ? 'Clear channel chat history' : 'Reload persona and clear session';
+            btn.disabled = !isAvailable || isLoading;
             if (btn.disabled) {
                 btn.classList.add('opacity-60', 'cursor-not-allowed');
             } else {
                 btn.classList.remove('opacity-60', 'cursor-not-allowed');
             }
-            if (atPersonaRefreshInProgress) {
+            if (isLoading) {
                 icon.classList.add('animate-spin');
             } else {
                 icon.classList.remove('animate-spin');
@@ -600,11 +921,6 @@
                 const settings = (data && data.settings) ? data.settings : {};
                 appRuntimeSettings = settings;
                 atMiniMaxConfigured = !!(typeof settings.minimaxApiKey === 'string' && settings.minimaxApiKey.trim());
-                if (!atMiniMaxConfigured) {
-                    atSoundEnabled = false;
-                    stopAgentToolsAudioPlayback();
-                    persistAgentToolsSoundPref();
-                }
                 updateAgentToolsSoundToggleUi();
                 updateAgentToolsPersonaRefreshUi();
             } catch (e) {
@@ -614,7 +930,6 @@
 
         window.toggleAgentToolsSound = function() {
             if (currentChannelId) return;
-            if (!atMiniMaxConfigured) return;
             atSoundEnabled = !atSoundEnabled;
             persistAgentToolsSoundPref();
             if (!atSoundEnabled) {
@@ -627,8 +942,29 @@
             updateAgentToolsSoundToggleUi();
         };
 
+        window.toggleAgentToolsChannelRuleMode = function() {
+            if (!currentChannelId) return;
+            atChannelRuleMode = !atChannelRuleMode;
+            persistAgentToolsChannelRuleModePref();
+            updateAgentToolsChannelRuleModeUi();
+        };
+
         window.reloadAgentToolsPersonaSession = async function() {
-            if (currentChannelId) return;
+            if (currentChannelId) {
+                const channelId = currentChannelId;
+                if (!channelId || atChannelRefreshInProgress) return;
+                atChannelRefreshInProgress = true;
+                updateAgentToolsPersonaRefreshUi();
+                try {
+                    await resetAgentToolsChannelConversation(channelId);
+                } catch (e) {
+                    alert(`刷新失败: ${e.message}`);
+                } finally {
+                    atChannelRefreshInProgress = false;
+                    updateAgentToolsPersonaRefreshUi();
+                }
+                return;
+            }
             const agentId = currentAgentToolId;
             if (!agentId) return;
             if (atPersonaRefreshInProgress) return;
@@ -747,8 +1083,8 @@
 
         function matchNextTrigger(text) {
             if (typeof text !== 'string') return null;
-            // Trigger on '>' unless it's part of an ASCII token.
-            return text.match(/(^|[^A-Za-z0-9_])>([^\s>@]{0,32})$/);
+            // Trigger on '>' / '≥' / '＞' unless it's part of an ASCII token.
+            return text.match(/(^|[^A-Za-z0-9_])[>≥＞]([^\s>@≥＞]{0,32})$/);
         }
 
         function parseComposerTrigger(text) {
@@ -1049,11 +1385,106 @@
             return text.trim();
         }
 
+        function isTextareaCaretOnFirstLine(textarea) {
+            if (!textarea) return false;
+            if (textarea.selectionStart !== textarea.selectionEnd) return false;
+            const caretPos = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : 0;
+            const beforeCaret = (textarea.value || '').slice(0, Math.max(0, caretPos));
+            return !beforeCaret.includes('\n');
+        }
+
+        function isContentEditableCaretOnFirstLine(editor) {
+            if (!editor) return false;
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return false;
+            const range = selection.getRangeAt(0);
+            if (!editor.contains(range.startContainer)) return false;
+            const preRange = range.cloneRange();
+            preRange.selectNodeContents(editor);
+            preRange.setEnd(range.startContainer, range.startOffset);
+            const beforeCaret = (preRange.toString() || '').replace(/\u200B/g, '');
+            return !beforeCaret.includes('\n');
+        }
+
         function clearChannelComposer() {
             const editor = getChannelInputElement();
             if (!editor) return;
             editor.innerHTML = '';
             hideMentionPopup();
+        }
+
+        function setChannelComposerText(text) {
+            const editor = getChannelInputElement();
+            if (!editor) return;
+            const safeText = typeof text === 'string' ? text : '';
+            editor.textContent = safeText;
+            placeCaretAtEnd(editor);
+            hideMentionPopup();
+        }
+
+        function setAgentComposerText(text) {
+            const input = getAgentTextInputElement();
+            if (!input) return;
+            input.value = typeof text === 'string' ? text : '';
+            autosizeAgentToolsTextarea();
+        }
+
+        function insertTextareaLineBreak(textarea) {
+            if (!textarea) return;
+            const value = typeof textarea.value === 'string' ? textarea.value : '';
+            const start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : value.length;
+            const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : value.length;
+            const safeStart = Math.max(0, Math.min(start, value.length));
+            const safeEnd = Math.max(safeStart, Math.min(end, value.length));
+            const nextValue = `${value.slice(0, safeStart)}\n${value.slice(safeEnd)}`;
+            textarea.value = nextValue;
+            const caret = safeStart + 1;
+            textarea.selectionStart = caret;
+            textarea.selectionEnd = caret;
+            autosizeAgentToolsTextarea();
+        }
+
+        function tryNavigateAgentSentInputHistory(direction) {
+            const agentId = typeof currentAgentToolId === 'string' ? currentAgentToolId.trim() : '';
+            if (!agentId || currentChannelId) return false;
+            const input = getAgentTextInputElement();
+            if (!input) return false;
+            const state = ensureSentInputHistoryState(atAgentSentInputHistory, agentId);
+            if (!state) return false;
+            if (direction === 'up' && state.navIndex === -1) {
+                const currentText = input.value || '';
+                const canStartFromEmpty = currentText.length === 0;
+                const canStartFromTopLine = isTextareaCaretOnFirstLine(input);
+                if (!canStartFromEmpty && !canStartFromTopLine) return false;
+            }
+            return navigateSentInputHistory(
+                atAgentSentInputHistory,
+                agentId,
+                direction,
+                () => input.value || '',
+                (nextText) => setAgentComposerText(nextText)
+            );
+        }
+
+        function tryNavigateChannelSentInputHistory(direction) {
+            const channelId = typeof currentChannelId === 'string' ? currentChannelId.trim() : '';
+            if (!channelId) return false;
+            const state = ensureSentInputHistoryState(atChannelSentInputHistory, channelId);
+            if (!state) return false;
+            const currentText = getChannelComposerText();
+            if (direction === 'up' && state.navIndex === -1) {
+                const canStartFromEmpty = currentText.length === 0;
+                const editor = getChannelInputElement();
+                const canStartFromTopLine = isContentEditableCaretOnFirstLine(editor);
+                if (!canStartFromEmpty && !canStartFromTopLine) return false;
+            }
+            return navigateSentInputHistory(
+                atChannelSentInputHistory,
+                channelId,
+                direction,
+                () => getChannelComposerText(),
+                (nextText) => setChannelComposerText(nextText)
+            );
         }
 
         function getChannelMemberProfiles(channel) {
@@ -1161,6 +1592,7 @@
 
         function applyAgentToolsLayoutMode() {
             const isChannelMode = !!currentChannelId;
+            const isImmersiveSingle = !isChannelMode && !!atSingleChatImmersive;
             const colBrain = document.getElementById('at-col-brain');
             const colChat = document.getElementById('at-col-chat');
             const colConnectivity = document.getElementById('at-col-connectivity');
@@ -1238,9 +1670,63 @@
                 if (chatInput) chatInput.classList.add('hidden');
                 if (channelInputWrap) channelInputWrap.classList.remove('hidden');
                 if (channelInput) channelInput.setAttribute('contenteditable', 'true');
-                if (soundWrap) soundWrap.classList.add('hidden');
                 updateAgentToolsPersonaRefreshUi();
+                updateAgentToolsChannelRuleModeUi();
+                updateAgentToolsImmersiveToggleUi();
+                updateAgentToolsSoundToggleUi();
                 currentAgentAvatarUrl = null;
+                return;
+            }
+
+            if (isImmersiveSingle) {
+                if (colBrain) colBrain.style.display = 'none';
+                if (colConnectivity) colConnectivity.style.display = 'none';
+                if (colChat) {
+                    colChat.style.width = '100%';
+                    colChat.style.borderRight = 'none';
+                    colChat.style.background = 'transparent';
+                }
+                if (stage) {
+                    stage.style.padding = '0';
+                    stage.style.alignItems = 'stretch';
+                    stage.style.justifyContent = 'stretch';
+                }
+                if (container) {
+                    container.style.maxWidth = 'none';
+                    container.style.maxHeight = 'none';
+                    container.style.borderRadius = '0';
+                    container.style.border = 'none';
+                    container.style.boxShadow = 'none';
+                    container.style.background = 'transparent';
+                }
+                if (avatarImg) {
+                    avatarImg.style.display = 'none';
+                    avatarImg.removeAttribute('src');
+                }
+                if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                if (avatarOverlay) avatarOverlay.style.display = 'none';
+                if (channelBanner) channelBanner.classList.add('hidden');
+                if (memberStrip) {
+                    memberStrip.classList.add('hidden');
+                    memberStrip.innerHTML = '';
+                    memberStrip.style.paddingTop = '';
+                }
+                if (chatMessages) {
+                    chatMessages.style.paddingTop = '24px';
+                    chatMessages.style.paddingLeft = '24px';
+                    chatMessages.style.paddingRight = '24px';
+                }
+                if (select) select.disabled = false;
+                if (chatInput) chatInput.placeholder = 'Message agent...';
+                if (chatInput) chatInput.classList.remove('hidden');
+                autosizeAgentToolsTextarea();
+                if (channelInputWrap) channelInputWrap.classList.add('hidden');
+                if (channelInput) channelInput.setAttribute('contenteditable', 'false');
+                hideMentionPopup();
+                updateAgentToolsSoundToggleUi();
+                updateAgentToolsPersonaRefreshUi();
+                updateAgentToolsChannelRuleModeUi();
+                updateAgentToolsImmersiveToggleUi();
                 return;
             }
 
@@ -1249,6 +1735,7 @@
             if (colChat) {
                 colChat.style.width = '';
                 colChat.style.borderRight = '';
+                colChat.style.background = '';
             }
             if (stage) {
                 stage.style.padding = '';
@@ -1259,6 +1746,45 @@
                 container.style.maxWidth = '';
                 container.style.maxHeight = '';
                 container.style.borderRadius = '';
+                container.style.border = '';
+                container.style.boxShadow = '';
+                container.style.background = '';
+            }
+            const activeAgent = currentAgentToolId ? getAgentById(currentAgentToolId) : null;
+            const activeName = (activeAgent && (activeAgent.displayName || activeAgent.name))
+                ? (activeAgent.displayName || activeAgent.name)
+                : 'Agent';
+            const activeAvatarUrl = (activeAgent && typeof activeAgent.avatarUrl === 'string' && activeAgent.avatarUrl && !activeAgent.avatarUrl.includes('googleusercontent.com'))
+                ? activeAgent.avatarUrl
+                : (currentAgentAvatarUrl || '');
+            if (avatarImg && activeAvatarUrl) {
+                avatarImg.src = activeAvatarUrl;
+                avatarImg.style.display = 'block';
+                avatarImg.onerror = () => {
+                    avatarImg.onerror = null;
+                    avatarImg.style.display = 'none';
+                    avatarImg.removeAttribute('src');
+                    if (avatarPlaceholder) {
+                        const colorClass = getRandomColor(activeName);
+                        avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                        avatarPlaceholder.innerText = activeName.charAt(0).toUpperCase();
+                        avatarPlaceholder.style.display = 'flex';
+                    }
+                };
+                if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                currentAgentAvatarUrl = activeAvatarUrl;
+            } else {
+                if (avatarImg) {
+                    avatarImg.style.display = 'none';
+                    avatarImg.removeAttribute('src');
+                    avatarImg.onerror = null;
+                }
+                if (avatarPlaceholder) {
+                    const colorClass = getRandomColor(activeName);
+                    avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                    avatarPlaceholder.innerText = activeName.charAt(0).toUpperCase();
+                    avatarPlaceholder.style.display = 'flex';
+                }
             }
             if (avatarOverlay) avatarOverlay.style.display = '';
             if (channelBanner) channelBanner.classList.add('hidden');
@@ -1281,6 +1807,8 @@
             hideMentionPopup();
             updateAgentToolsSoundToggleUi();
             updateAgentToolsPersonaRefreshUi();
+            updateAgentToolsChannelRuleModeUi();
+            updateAgentToolsImmersiveToggleUi();
         }
 
         function renderSidebarChannels() {
@@ -1297,7 +1825,14 @@
                 item.className = 'group flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent cursor-pointer';
                 item.dataset.channelId = channel.id;
                 const memberCount = Array.isArray(channel.agentIds) ? channel.agentIds.length : 0;
-                item.appendChild(buildChannelCompositeAvatarNode(channel));
+                const avatarWrap = document.createElement('div');
+                avatarWrap.className = 'relative w-9 h-9 shrink-0';
+                avatarWrap.appendChild(buildChannelCompositeAvatarNode(channel));
+                const busyBadge = document.createElement('span');
+                busyBadge.className = 'js-busy-badge hidden absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full border border-blue-300/40 border-t-blue-400 bg-[#050505] animate-spin shadow-[0_0_8px_rgba(96,165,250,0.85)]';
+                busyBadge.title = 'Processing';
+                avatarWrap.appendChild(busyBadge);
+                item.appendChild(avatarWrap);
 
                 const textWrap = document.createElement('div');
                 textWrap.className = 'min-w-0 flex-1';
@@ -1332,6 +1867,7 @@
             if (sidebarActiveChannelId) {
                 setSidebarSelectedChannel(sidebarActiveChannelId);
             }
+            updateSidebarBusyIndicators();
         }
 
         async function fetchAgentChannels() {
@@ -1657,6 +2193,117 @@
             }
         }
 
+        function generateCloneSuffix(len = 3) {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+            let suffix = '';
+            for (let i = 0; i < len; i++) {
+                suffix += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return suffix;
+        }
+
+        function openCloneAgentModal(agentId, sourceName) {
+            agentToCloneId = agentId || null;
+            const modal = document.getElementById('clone-agent-modal');
+            const input = document.getElementById('clone-agent-name-input');
+            const errorEl = document.getElementById('clone-agent-error');
+            if (!modal || !input) return;
+            const baseName = (sourceName || 'Agent').trim();
+            input.value = `${baseName}${generateCloneSuffix(3)}`;
+            if (errorEl) {
+                errorEl.textContent = '';
+                errorEl.classList.add('hidden');
+            }
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 40);
+        }
+
+        function closeCloneAgentModal() {
+            const modal = document.getElementById('clone-agent-modal');
+            const input = document.getElementById('clone-agent-name-input');
+            const errorEl = document.getElementById('clone-agent-error');
+            if (modal) modal.classList.add('hidden');
+            if (input) input.value = '';
+            if (errorEl) {
+                errorEl.textContent = '';
+                errorEl.classList.add('hidden');
+            }
+            agentToCloneId = null;
+        }
+
+        async function confirmCloneAgent() {
+            if (!agentToCloneId) return;
+            const cloneFromId = agentToCloneId;
+            const input = document.getElementById('clone-agent-name-input');
+            const errorEl = document.getElementById('clone-agent-error');
+            const confirmBtn = document.getElementById('clone-agent-confirm-btn');
+            const newName = (input && input.value ? input.value : '').trim();
+            if (!newName) {
+                if (errorEl) {
+                    errorEl.textContent = '请输入新智能体名字';
+                    errorEl.classList.remove('hidden');
+                }
+                return;
+            }
+
+            if (confirmBtn) {
+                confirmBtn.disabled = true;
+                confirmBtn.textContent = '复制中...';
+            }
+            if (errorEl) {
+                errorEl.textContent = '';
+                errorEl.classList.add('hidden');
+            }
+
+            const loading = document.getElementById('loading-overlay');
+            const loadingText = loading ? loading.querySelector('h3') : null;
+            const loadingDesc = loading ? loading.querySelector('p') : null;
+
+            try {
+                closeCloneAgentModal();
+                if (loading && loadingText && loadingDesc) {
+                    loadingText.textContent = 'Cloning Agent...';
+                    loadingDesc.textContent = 'Creating OpenClaw + Room profiles';
+                    loading.classList.remove('hidden');
+                }
+
+                const res = await fetch(`/api/agents/${encodeURIComponent(cloneFromId)}/clone`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: newName })
+                });
+                const data = await readJsonResponse(res, 'clone agent failed');
+                if (!data.success || !data.id) {
+                    throw new Error(data.error || 'clone agent failed');
+                }
+
+                if (loading && loadingText && loadingDesc) {
+                    loadingText.textContent = 'Cloned!';
+                    loadingDesc.textContent = `${data.name || newName} is ready`;
+                }
+                await fetchAgents();
+                if (window.location.hash !== '#agenttools') {
+                    switchView('agenttools');
+                }
+                loadAgentTools(data.id);
+            } catch (e) {
+                console.error(e);
+                alert(`复制失败: ${e.message}`);
+            } finally {
+                if (loading) {
+                    setTimeout(() => loading.classList.add('hidden'), 400);
+                }
+                if (confirmBtn) {
+                    confirmBtn.disabled = false;
+                    confirmBtn.textContent = '确定复制';
+                }
+                agentToCloneId = null;
+            }
+        }
+
         // Data Fetching
         async function fetchAgents() {
             console.log("Fetching agents...");
@@ -1919,9 +2566,34 @@
                     }, 100);
                 };
                 sidebarItem.innerHTML = `
-                    ${sidebarAvatarHtml}
-                    <span class="text-sm truncate font-medium">${displayName}</span>
+                    <div class="relative w-8 h-8 shrink-0">
+                        ${sidebarAvatarHtml}
+                        <span class="js-busy-badge hidden absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full border border-blue-300/40 border-t-blue-400 bg-[#050505] animate-spin shadow-[0_0_8px_rgba(96,165,250,0.85)]" title="Processing"></span>
+                    </div>
+                    <span class="text-sm truncate font-medium flex-1 min-w-0">${displayName}</span>
+                    <div class="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button class="js-agent-clone-btn text-gray-500 hover:text-cyan-300 transition-colors" title="复制智能体">
+                            <span class="material-icons-round text-sm">content_copy</span>
+                        </button>
+                        <button class="js-agent-delete-btn text-gray-500 hover:text-red-400 transition-colors" title="删除智能体">
+                            <span class="material-icons-round text-sm">close</span>
+                        </button>
+                    </div>
                 `;
+                const cloneBtn = sidebarItem.querySelector('.js-agent-clone-btn');
+                if (cloneBtn) {
+                    cloneBtn.onclick = (event) => {
+                        event.stopPropagation();
+                        openCloneAgentModal(agent.id, displayName);
+                    };
+                }
+                const deleteBtn = sidebarItem.querySelector('.js-agent-delete-btn');
+                if (deleteBtn) {
+                    deleteBtn.onclick = (event) => {
+                        event.stopPropagation();
+                        deleteAgent(agent.id);
+                    };
+                }
                 sidebarList.appendChild(sidebarItem);
             });
 
@@ -1929,6 +2601,7 @@
                 setSidebarSelectedAgent(sidebarActiveAgentId);
             }
             renderSidebarChannels();
+            updateSidebarBusyIndicators();
         }
 
         function renderContextSelection() {
@@ -2241,6 +2914,135 @@
             }
         }
 
+        async function fetchAgentHistoryPage(agentId, page = 1) {
+            const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+            const res = await fetch(`/api/agents/${agentId}/history?page=${safePage}&pageSize=${AT_HISTORY_PAGE_SIZE}`);
+            const data = await readJsonResponse(res, 'Failed to load history');
+            return {
+                history: Array.isArray(data.history) ? data.history : [],
+                page: Number.isFinite(data.page) ? Number(data.page) : safePage,
+                hasMore: !!data.hasMore
+            };
+        }
+
+        async function fetchChannelHistoryPage(channelId, page = 1) {
+            const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+            const res = await fetch(`/api/agent-channels/${channelId}/history?page=${safePage}&pageSize=${AT_HISTORY_PAGE_SIZE}`);
+            const data = await readJsonResponse(res, 'Failed to load channel history');
+            return {
+                history: Array.isArray(data.history) ? data.history : [],
+                page: Number.isFinite(data.page) ? Number(data.page) : safePage,
+                hasMore: !!data.hasMore
+            };
+        }
+
+        async function loadOlderAgentHistoryPage(agentId) {
+            if (!agentId) return;
+            const state = getAgentChatState(agentId);
+            if (!state.historyLoaded || state.historyLoading || !state.hasMoreHistory) return;
+            const chatContainer = document.getElementById('at-chat-messages');
+            const prevTop = chatContainer ? chatContainer.scrollTop : 0;
+            const prevHeight = chatContainer ? chatContainer.scrollHeight : 0;
+            state.historyLoading = true;
+            updateSidebarBusyIndicators();
+            try {
+                const nextPage = (state.historyPage || 1) + 1;
+                const pageData = await fetchAgentHistoryPage(agentId, nextPage);
+                const normalizedHistory = pageData.history
+                    .filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
+                    .map(msg => ({
+                        role: msg.role,
+                        content: msg.content,
+                        reasoning: '',
+                        files: normalizeMessageFiles(msg.files)
+                    }));
+                if (normalizedHistory.length > 0) {
+                    state.messages = [...normalizedHistory, ...state.messages];
+                    if (state.messages.length > AT_HISTORY_TOTAL_LIMIT) {
+                        state.messages = state.messages.slice(-AT_HISTORY_TOTAL_LIMIT);
+                    }
+                }
+                state.historyPage = pageData.page || nextPage;
+                state.hasMoreHistory = !!pageData.hasMore;
+                if (currentAgentToolId === agentId) {
+                    renderAgentToolsChat(agentId, {
+                        preserveScrollAnchor: true,
+                        previousScrollTop: prevTop,
+                        previousScrollHeight: prevHeight
+                    });
+                }
+            } catch (e) {
+                console.error('Failed to load older history', e);
+            } finally {
+                state.historyLoading = false;
+                updateSidebarBusyIndicators();
+            }
+        }
+
+        async function loadOlderChannelHistoryPage(channelId) {
+            if (!channelId) return;
+            const state = getChannelChatState(channelId);
+            if (!state.historyLoaded || state.historyLoading || !state.hasMoreHistory) return;
+            const chatContainer = document.getElementById('at-chat-messages');
+            const prevTop = chatContainer ? chatContainer.scrollTop : 0;
+            const prevHeight = chatContainer ? chatContainer.scrollHeight : 0;
+            state.historyLoading = true;
+            updateSidebarBusyIndicators();
+            try {
+                const nextPage = (state.historyPage || 1) + 1;
+                const pageData = await fetchChannelHistoryPage(channelId, nextPage);
+                const normalizedHistory = pageData.history
+                    .filter((msg) => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
+                    .map((msg) => ({
+                        role: msg.role,
+                        content: msg.content,
+                        senderName: msg.senderName || '',
+                        agentId: msg.agentId || '',
+                        reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : '',
+                        files: normalizeMessageFiles(msg.files)
+                    }));
+                if (normalizedHistory.length > 0) {
+                    state.messages = [...normalizedHistory, ...state.messages];
+                    if (state.messages.length > AT_HISTORY_TOTAL_LIMIT) {
+                        state.messages = state.messages.slice(-AT_HISTORY_TOTAL_LIMIT);
+                    }
+                }
+                state.historyPage = pageData.page || nextPage;
+                state.hasMoreHistory = !!pageData.hasMore;
+                if (currentChannelId === channelId) {
+                    renderAgentToolsChannelChat(channelId, {
+                        preserveScrollAnchor: true,
+                        previousScrollTop: prevTop,
+                        previousScrollHeight: prevHeight
+                    });
+                }
+            } catch (e) {
+                console.error('Failed to load older channel history', e);
+            } finally {
+                state.historyLoading = false;
+                updateSidebarBusyIndicators();
+            }
+        }
+
+        function maybeLoadOlderHistoryOnScroll() {
+            if (atHistoryScrollTicking) return;
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return;
+            if (chatContainer.scrollTop > 22) return;
+            atHistoryScrollTicking = true;
+            Promise.resolve().then(async () => {
+                try {
+                    if (currentChannelId) {
+                        await loadOlderChannelHistoryPage(currentChannelId);
+                    } else if (currentAgentToolId) {
+                        await loadOlderAgentHistoryPage(currentAgentToolId);
+                    }
+                } finally {
+                    atHistoryScrollTicking = false;
+                }
+            });
+        }
+
         async function loadAgentTools(agentId) {
             if (!agentId) return;
             if (currentChannelId) {
@@ -2265,7 +3067,20 @@
             const avatarImg = document.getElementById('at-avatar-img');
             const avatarPlaceholder = document.getElementById('at-avatar-placeholder');
             const state = getAgentChatState(agentId);
+            const isImmersiveSingleMode = () => !currentChannelId && !!atSingleChatImmersive;
             const applyAgentToolsLetterAvatar = (displayName) => {
+                if (isImmersiveSingleMode()) {
+                    if (avatarImg) {
+                        avatarImg.style.display = 'none';
+                        avatarImg.removeAttribute('src');
+                        avatarImg.onerror = null;
+                    }
+                    if (avatarPlaceholder) {
+                        avatarPlaceholder.style.display = 'none';
+                    }
+                    currentAgentAvatarUrl = null;
+                    return;
+                }
                 const name = (displayName && String(displayName).trim()) ? String(displayName).trim() : 'Agent';
                 if (avatarImg) {
                     avatarImg.style.display = 'none';
@@ -2285,6 +3100,14 @@
             const applyAgentToolsAvatar = (avatarUrl, displayName) => {
                 if (!avatarImg) return;
                 const safeUrl = (avatarUrl && typeof avatarUrl === 'string') ? avatarUrl : '';
+                if (isImmersiveSingleMode()) {
+                    avatarImg.style.display = 'none';
+                    avatarImg.removeAttribute('src');
+                    avatarImg.onerror = null;
+                    if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
+                    currentAgentAvatarUrl = safeUrl || null;
+                    return;
+                }
                 if (!safeUrl) {
                     applyAgentToolsLetterAvatar(displayName);
                     return;
@@ -2352,8 +3175,7 @@
                 // Load History
                 if (!state.historyLoaded) {
                     try {
-                        const historyRes = await fetch(`/api/agents/${agentId}/history`);
-                        const historyData = await historyRes.json();
+                        const historyData = await fetchAgentHistoryPage(agentId, 1);
                         if (historyData.history && Array.isArray(historyData.history)) {
                             const normalizedHistory = historyData.history
                                 .filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
@@ -2361,21 +3183,28 @@
                                     role: msg.role,
                                     content: msg.content,
                                     reasoning: '',
-                                    files: []
+                                    files: normalizeMessageFiles(msg.files)
                                 }));
                             if (normalizedHistory.length > 0) {
                                 state.messages = state.messages.length === 0
                                     ? normalizedHistory
                                     : [...normalizedHistory, ...state.messages];
+                                if (state.messages.length > AT_HISTORY_TOTAL_LIMIT) {
+                                    state.messages = state.messages.slice(-AT_HISTORY_TOTAL_LIMIT);
+                                }
                             }
                         }
+                        state.historyPage = historyData.page || 1;
+                        state.hasMoreHistory = !!historyData.hasMore;
                     } catch (e) {
                         console.error('Failed to load history', e);
                     } finally {
                         state.historyLoaded = true;
+                        state.historyLoading = false;
                         if (currentAgentToolId === agentId) {
                             renderAgentToolsChat(agentId);
                         }
+                        updateSidebarBusyIndicators();
                     }
                 }
                 
@@ -2413,8 +3242,20 @@
                     finalizeChannelAgentStream(channelId, data.agentId);
                 } else if (data.type === 'channel_round_done') {
                     finalizeChannelRound(channelId);
+                } else if (data.type === 'channel_conversation_reset') {
+                    clearChannelConversationState(channelId, { render: true });
+                    clearChannelComposer();
+                    clearPendingAttachments();
+                    scrollAgentToolsChatToBottom();
                 } else if (data.type === 'channel_error') {
                     const state = getChannelChatState(channelId);
+                    Object.keys(state.streamMessageIndexByAgent || {}).forEach((agentKey) => {
+                        const idx = state.streamMessageIndexByAgent[agentKey];
+                        if (Number.isInteger(idx) && state.messages[idx]) {
+                            syncStreamingDisplayNow(state.messages[idx]);
+                        }
+                        clearChannelTypingTimer(channelId, agentKey);
+                    });
                     state.messages.push({
                         role: 'assistant',
                         content: `[Channel Error: ${data.message || 'unknown'}]`,
@@ -2424,6 +3265,7 @@
                     });
                     state.inFlight = false;
                     state.loading = false;
+                    updateSidebarBusyIndicators();
                     if (currentChannelId === channelId) {
                         renderAgentToolsChannelChat(channelId);
                     }
@@ -2436,6 +3278,13 @@
                 }
                 const state = getChannelChatState(channelId);
                 if (state.inFlight) {
+                    Object.keys(state.streamMessageIndexByAgent || {}).forEach((agentKey) => {
+                        const idx = state.streamMessageIndexByAgent[agentKey];
+                        if (Number.isInteger(idx) && state.messages[idx]) {
+                            syncStreamingDisplayNow(state.messages[idx]);
+                        }
+                        clearChannelTypingTimer(channelId, agentKey);
+                    });
                     state.inFlight = false;
                     state.loading = false;
                     state.messages.push({
@@ -2448,6 +3297,7 @@
                     if (currentChannelId === channelId) {
                         renderAgentToolsChannelChat(channelId);
                     }
+                    updateSidebarBusyIndicators();
                 }
             };
 
@@ -2492,12 +3342,12 @@
 
             const state = getChannelChatState(channel.id);
             renderAgentToolsChannelChat(channel.id);
+            scrollAgentToolsChatToBottom();
 
             connectAgentChannelSocket(channel.id);
             if (!state.historyLoaded) {
                 try {
-                    const res = await fetch(`/api/agent-channels/${channel.id}/history`);
-                    const data = await res.json();
+                    const data = await fetchChannelHistoryPage(channel.id, 1);
                     const normalized = Array.isArray(data.history) ? data.history
                         .filter((msg) => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
                         .map((msg) => ({
@@ -2506,19 +3356,29 @@
                             senderName: msg.senderName || '',
                             agentId: msg.agentId || '',
                             reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : '',
-                            files: []
+                            files: normalizeMessageFiles(msg.files)
                         })) : [];
                     if (normalized.length > 0) {
                         state.messages = normalized;
+                        if (state.messages.length > AT_HISTORY_TOTAL_LIMIT) {
+                            state.messages = state.messages.slice(-AT_HISTORY_TOTAL_LIMIT);
+                        }
                     }
+                    state.historyPage = data.page || 1;
+                    state.hasMoreHistory = !!data.hasMore;
                 } catch (e) {
                     console.error('Failed to load channel history', e);
                 } finally {
                     state.historyLoaded = true;
+                    state.historyLoading = false;
                     if (currentChannelId === channel.id) {
                         renderAgentToolsChannelChat(channel.id);
+                        scrollAgentToolsChatToBottom();
                     }
+                    updateSidebarBusyIndicators();
                 }
+            } else {
+                scrollAgentToolsChatToBottom();
             }
         }
 
@@ -2536,11 +3396,93 @@
                     senderName: agentName || agentId || 'Agent',
                     agentId: agentId || '',
                     reasoning: '',
-                    files: []
+                    files: [],
+                    displayContent: '',
+                    displayReasoning: ''
                 });
                 state.streamMessageIndexByAgent[key] = state.messages.length - 1;
             }
             return state;
+        }
+
+        function patchStreamingChannelAssistantDom(channelId, agentId) {
+            if (!channelId || currentChannelId !== channelId) return;
+            const state = getChannelChatState(channelId);
+            const key = agentId || 'unknown';
+            const idx = state.streamMessageIndexByAgent[key];
+            if (!Number.isInteger(idx) || !state.messages[idx]) return;
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return;
+            let messageDiv = chatContainer.querySelector(`[data-msg-index=\"${idx}\"]`);
+            if (!messageDiv) {
+                renderAgentToolsChannelChat(channelId);
+                messageDiv = chatContainer.querySelector(`[data-msg-index=\"${idx}\"]`);
+            }
+            if (!messageDiv) return;
+
+            const loadingIndicator = document.getElementById('at-loading-indicator');
+            if (loadingIndicator) loadingIndicator.remove();
+            const msg = state.messages[idx];
+            const contentDiv = messageDiv.querySelector('.message-content');
+            if (contentDiv) {
+                contentDiv.textContent = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+            }
+            const reasoningContainer = messageDiv.querySelector('.reasoning-container');
+            const reasoningDiv = messageDiv.querySelector('.reasoning-content');
+            const reasoningText = (typeof msg.displayReasoning === 'string')
+                ? msg.displayReasoning
+                : (typeof msg.reasoning === 'string' ? msg.reasoning : '');
+            if (reasoningContainer && reasoningDiv) {
+                if (reasoningText.trim()) {
+                    reasoningContainer.classList.remove('hidden');
+                    reasoningDiv.textContent = reasoningText;
+                } else {
+                    reasoningContainer.classList.add('hidden');
+                    reasoningDiv.textContent = '';
+                }
+            }
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function scheduleChannelTypingRender(channelId, agentId) {
+            const channelKey = String(channelId || '').trim();
+            const memberKey = String(agentId || 'unknown').trim() || 'unknown';
+            if (!channelKey) return;
+            const timerKey = `${channelKey}:${memberKey}`;
+            if (atChannelTypingTimers.has(timerKey)) return;
+            const tick = () => {
+                const state = getChannelChatState(channelKey);
+                const idx = state.streamMessageIndexByAgent[memberKey];
+                const msg = Number.isInteger(idx) ? state.messages[idx] : null;
+                if (!msg || msg.role !== 'assistant') {
+                    atChannelTypingTimers.delete(timerKey);
+                    return;
+                }
+                const changed = advanceStreamingDisplay(msg);
+                if (currentChannelId === channelKey) {
+                    patchStreamingChannelAssistantDom(channelKey, memberKey);
+                }
+                if (changed) {
+                    const timer = setTimeout(tick, AT_TYPING_TICK_MS);
+                    atChannelTypingTimers.set(timerKey, timer);
+                } else {
+                    atChannelTypingTimers.delete(timerKey);
+                }
+            };
+            const timer = setTimeout(tick, 0);
+            atChannelTypingTimers.set(timerKey, timer);
+        }
+
+        function clearChannelTypingTimer(channelId, agentId) {
+            const channelKey = String(channelId || '').trim();
+            const memberKey = String(agentId || 'unknown').trim() || 'unknown';
+            if (!channelKey) return;
+            const timerKey = `${channelKey}:${memberKey}`;
+            const timer = atChannelTypingTimers.get(timerKey);
+            if (timer) {
+                clearTimeout(timer);
+                atChannelTypingTimers.delete(timerKey);
+            }
         }
 
         function appendChannelText(channelId, agentId, agentName, text, isNew) {
@@ -2552,7 +3494,9 @@
             state.messages[idx].content += text;
             state.loading = false;
             if (currentChannelId === channelId) {
-                renderAgentToolsChannelChat(channelId);
+                scheduleChannelTypingRender(channelId, key);
+            } else {
+                syncStreamingDisplayNow(state.messages[idx]);
             }
         }
 
@@ -2565,13 +3509,20 @@
             state.messages[idx].reasoning = (state.messages[idx].reasoning || '') + text;
             state.loading = false;
             if (currentChannelId === channelId) {
-                renderAgentToolsChannelChat(channelId);
+                scheduleChannelTypingRender(channelId, key);
+            } else {
+                syncStreamingDisplayNow(state.messages[idx]);
             }
         }
 
         function finalizeChannelAgentStream(channelId, agentId) {
             const state = getChannelChatState(channelId);
             const key = agentId || 'unknown';
+            const idx = state.streamMessageIndexByAgent[key];
+            clearChannelTypingTimer(channelId, key);
+            if (Number.isInteger(idx) && state.messages[idx]) {
+                syncStreamingDisplayNow(state.messages[idx]);
+            }
             delete state.streamMessageIndexByAgent[key];
             if (currentChannelId === channelId) {
                 renderAgentToolsChannelChat(channelId);
@@ -2580,9 +3531,17 @@
 
         function finalizeChannelRound(channelId) {
             const state = getChannelChatState(channelId);
+            Object.keys(state.streamMessageIndexByAgent || {}).forEach((agentKey) => {
+                const idx = state.streamMessageIndexByAgent[agentKey];
+                if (Number.isInteger(idx) && state.messages[idx]) {
+                    syncStreamingDisplayNow(state.messages[idx]);
+                }
+                clearChannelTypingTimer(channelId, agentKey);
+            });
             state.inFlight = false;
             state.loading = false;
             state.streamMessageIndexByAgent = {};
+            updateSidebarBusyIndicators();
             if (currentChannelId === channelId) {
                 renderAgentToolsChannelChat(channelId);
             }
@@ -2592,23 +3551,30 @@
             fetchAgentChannels();
         }
 
-        function renderAgentToolsChannelChat(channelId) {
+        function renderAgentToolsChannelChat(channelId, options = {}) {
             if (!channelId || currentChannelId !== channelId) return;
             const chatContainer = document.getElementById('at-chat-messages');
             if (!chatContainer) return;
             const state = getChannelChatState(channelId);
+            const preserveScrollAnchor = !!(options && options.preserveScrollAnchor);
+            const previousScrollTop = Number(options && options.previousScrollTop) || 0;
+            const previousScrollHeight = Number(options && options.previousScrollHeight) || 0;
             chatContainer.innerHTML = '';
             currentMessageDiv = null;
 
-            state.messages.forEach((msg) => {
+            state.messages.forEach((msg, idx) => {
                 const channelAgent = (msg.role === 'assistant' && msg.agentId) ? getAgentById(msg.agentId) : null;
                 const channelAvatarUrl = (channelAgent && typeof channelAgent.avatarUrl === 'string' && channelAgent.avatarUrl && !channelAgent.avatarUrl.includes('googleusercontent.com'))
                     ? channelAgent.avatarUrl
                     : '';
+                const renderedContent = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+                const renderedReasoning = (typeof msg.displayReasoning === 'string') ? msg.displayReasoning : (msg.reasoning || '');
                 appendMessage(msg.role, msg.content || '', msg.files || [], {
+                    messageIndex: idx,
                     senderName: msg.senderName || '',
                     avatarUrl: channelAvatarUrl,
-                    reasoning: msg.reasoning || '',
+                    reasoning: renderedReasoning,
+                    renderedContent,
                     skipScroll: true
                 });
             });
@@ -2616,8 +3582,13 @@
                 showLoadingIndicator();
             }
             requestAnimationFrame(() => {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-                setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
+                if (preserveScrollAnchor) {
+                    const nextHeight = chatContainer.scrollHeight;
+                    chatContainer.scrollTop = Math.max(0, nextHeight - previousScrollHeight + previousScrollTop);
+                } else {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
+                }
             });
         }
 
@@ -2630,6 +3601,7 @@
             state.inFlight = true;
             state.loading = true;
             state.streamMessageIndexByAgent = {};
+            updateSidebarBusyIndicators();
             if (currentChannelId === channelId) {
                 renderAgentToolsChannelChat(channelId);
             }
@@ -2642,6 +3614,7 @@
                 state.inFlight = false;
                 state.loading = false;
                 state.streamMessageIndexByAgent = {};
+                updateSidebarBusyIndicators();
                 state.messages.push({
                     role: 'assistant',
                     content: `[Error: ${e.message}]`,
@@ -2808,6 +3781,7 @@
                     finalizeAgentStream(agentId);
                 } else if (data.type === 'conversation_reset') {
                     const state = getAgentChatState(agentId);
+                    clearAgentTypingTimer(agentId);
                     finalizeAgentTtsStream(agentId);
                     const commandText = typeof data.command === 'string' ? data.command.trim() : '';
                     state.messages = commandText ? [{
@@ -2821,10 +3795,14 @@
                     state.ttsStreamingActive = false;
                     state.streamMessageIndex = null;
                     state.historyLoaded = true;
+                    state.historyPage = 1;
+                    state.hasMoreHistory = false;
+                    state.historyLoading = false;
                     state.pendingQueue = [];
                     if (currentAgentToolId === agentId) {
                         renderAgentToolsChat(agentId);
                     }
+                    updateSidebarBusyIndicators();
                 } else if (data.type === 'skills_updated' || data.type === 'state_updated') {
                     if (currentAgentToolId === agentId) {
                         refreshAgentSkills();
@@ -2851,6 +3829,7 @@
                 updateAgentToolsPersonaRefreshUi();
                 const state = getAgentChatState(agentId);
                 if (state.inFlight) {
+                    clearAgentTypingTimer(agentId);
                     finalizeAgentTtsStream(agentId);
                     state.inFlight = false;
                     state.loading = false;
@@ -2869,6 +3848,7 @@
                         setTimeout(() => processAgentSendQueue(agentId), 0);
                     }
                 }
+                updateSidebarBusyIndicators();
             };
 
             socket.onerror = (e) => {
@@ -3049,6 +4029,160 @@
             };
         }
 
+        function getAttachmentExt(nameOrPath) {
+            const source = String(nameOrPath || '').trim();
+            if (!source) return '';
+            const clean = source.split('?')[0].split('#')[0];
+            const dot = clean.lastIndexOf('.');
+            if (dot < 0 || dot === clean.length - 1) return '';
+            return clean.slice(dot + 1).toLowerCase();
+        }
+
+        function escapeHtml(raw) {
+            const text = String(raw || '');
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function normalizeMessageFiles(files) {
+            if (!Array.isArray(files) || files.length === 0) return [];
+            return files
+                .map((file) => {
+                    if (!file || typeof file !== 'object') return null;
+                    const normalized = {
+                        name: (typeof file.name === 'string' && file.name.trim()) ? file.name.trim() : 'attachment',
+                        type: (typeof file.type === 'string' && file.type.trim()) ? file.type.trim() : 'application/octet-stream'
+                    };
+                    const url = typeof file.url === 'string' ? file.url.trim() : '';
+                    const data = typeof file.data === 'string' ? file.data.trim() : '';
+                    if (url && (/^(\/|https?:\/\/)/i.test(url) || /^data:/i.test(url))) {
+                        normalized.url = url;
+                    } else if (data && /^data:/i.test(data)) {
+                        normalized.data = data;
+                    }
+                    const thumbnail = typeof file.thumbnail === 'string' ? file.thumbnail.trim() : '';
+                    if (thumbnail && /^data:image\//i.test(thumbnail)) {
+                        normalized.thumbnail = thumbnail;
+                    }
+                    const localPath = typeof file.path === 'string' ? file.path.trim() : '';
+                    if (localPath) normalized.path = localPath;
+                    if (file.pathType === 'folder' || file.pathType === 'file') {
+                        normalized.pathType = file.pathType;
+                    }
+                    const size = Number(file.size);
+                    if (Number.isFinite(size) && size >= 0) {
+                        normalized.size = Math.floor(size);
+                    }
+                    return normalized;
+                })
+                .filter(Boolean);
+        }
+
+        function resolveAttachmentVisualMeta(fileLike) {
+            const fileType = (fileLike && typeof fileLike.type === 'string') ? fileLike.type.toLowerCase() : '';
+            const name = (fileLike && typeof fileLike.name === 'string') ? fileLike.name : '';
+            const ext = getAttachmentExt(name);
+
+            const isPdf = fileType.includes('pdf') || ext === 'pdf';
+            if (isPdf) return { icon: 'picture_as_pdf', color: 'text-red-300', tag: 'PDF' };
+
+            const isWord = ['doc', 'docx', 'odt', 'rtf'].includes(ext) ||
+                fileType.includes('word') || fileType.includes('officedocument.wordprocessingml');
+            if (isWord) return { icon: 'article', color: 'text-blue-300', tag: 'DOC' };
+
+            const isSheet = ['xls', 'xlsx', 'csv', 'ods'].includes(ext) ||
+                fileType.includes('spreadsheet') || fileType.includes('excel') || fileType.includes('csv');
+            if (isSheet) return { icon: 'grid_on', color: 'text-emerald-300', tag: 'XLS' };
+
+            const isSlides = ['ppt', 'pptx', 'odp', 'key'].includes(ext) ||
+                fileType.includes('presentation') || fileType.includes('powerpoint');
+            if (isSlides) return { icon: 'slideshow', color: 'text-orange-300', tag: 'PPT' };
+
+            const isArchive = ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz'].includes(ext) ||
+                fileType.includes('zip') || fileType.includes('compressed') || fileType.includes('gzip');
+            if (isArchive) return { icon: 'folder_zip', color: 'text-amber-300', tag: 'ZIP' };
+
+            const isAudio = fileType.startsWith('audio/') ||
+                ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac', 'opus', 'wma'].includes(ext);
+            if (isAudio) return { icon: 'audiotrack', color: 'text-fuchsia-300', tag: 'AUDIO' };
+
+            const isImage = fileType.startsWith('image/') ||
+                ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif', 'bmp', 'heic', 'heif'].includes(ext);
+            if (isImage) return { icon: 'image', color: 'text-cyan-300', tag: 'IMG' };
+
+            const isVideo = fileType.startsWith('video/') ||
+                ['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v', 'mkv', 'avi', 'wmv', 'flv'].includes(ext);
+            if (isVideo) return { icon: 'movie', color: 'text-rose-300', tag: 'VIDEO' };
+
+            const isCode = ['js', 'jsx', 'ts', 'tsx', 'py', 'java', 'go', 'rs', 'cpp', 'c', 'h', 'hpp', 'php', 'rb', 'swift', 'kt', 'sh', 'bash', 'zsh', 'json', 'yaml', 'yml', 'toml', 'xml', 'html', 'css', 'scss', 'md', 'txt', 'log'].includes(ext);
+            if (isCode) return { icon: 'code', color: 'text-violet-300', tag: 'CODE' };
+
+            return { icon: 'description', color: 'text-gray-300', tag: ext ? ext.toUpperCase().slice(0, 5) : 'FILE' };
+        }
+
+        function createVideoBubbleElement(file, maybeUrl) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'w-full';
+            const videoPoster = (file && typeof file.thumbnail === 'string' && file.thumbnail.trim())
+                ? file.thumbnail.trim()
+                : ((file && typeof file.poster === 'string' && file.poster.trim()) ? file.poster.trim() : '');
+            const displayName = (file && typeof file.name === 'string' && file.name.trim()) ? file.name.trim() : 'video';
+            const safeDisplayName = escapeHtml(displayName);
+
+            const mountVideoPlayer = () => {
+                wrapper.innerHTML = '';
+                const video = document.createElement('video');
+                video.className = 'max-w-full rounded-xl border border-black/10 dark:border-white/10 max-h-80 bg-black/50';
+                video.controls = true;
+                video.preload = 'metadata';
+                video.playsInline = true;
+                if (videoPoster && /^data:image\//i.test(videoPoster)) {
+                    video.poster = videoPoster;
+                }
+                let localObjectUrl = '';
+                if (maybeUrl) {
+                    video.src = maybeUrl;
+                } else if (file instanceof File) {
+                    localObjectUrl = URL.createObjectURL(file);
+                    video.src = localObjectUrl;
+                }
+                video.onloadeddata = () => {
+                    if (localObjectUrl) {
+                        URL.revokeObjectURL(localObjectUrl);
+                        localObjectUrl = '';
+                    }
+                    const chatContainer = document.getElementById('at-chat-messages');
+                    if (chatContainer) {
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
+                };
+                wrapper.appendChild(video);
+            };
+
+            if (videoPoster && /^data:image\//i.test(videoPoster)) {
+                const coverBtn = document.createElement('button');
+                coverBtn.type = 'button';
+                coverBtn.className = 'relative w-full rounded-xl overflow-hidden border border-black/10 dark:border-white/10 bg-black/40 text-left';
+                coverBtn.innerHTML = `
+                    <img src="${videoPoster}" class="w-full max-h-72 object-cover block" alt="${safeDisplayName}">
+                    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <span class="material-icons-round text-white text-[28px] bg-black/50 rounded-full p-2">play_arrow</span>
+                    </div>
+                    <div class="absolute bottom-0 inset-x-0 bg-black/55 text-[11px] text-gray-100 px-2 py-1 truncate">${safeDisplayName}</div>
+                `;
+                coverBtn.onclick = () => mountVideoPlayer();
+                wrapper.appendChild(coverBtn);
+                return wrapper;
+            }
+
+            mountVideoPlayer();
+            return wrapper;
+        }
+
         function appendMediaToBubble(bubble, files = [], assistantImageUrls = [], assistantVideoUrls = []) {
             if (!bubble) return;
             const mediaItems = [];
@@ -3085,32 +4219,7 @@
                     /^https?:\/\/.+\.(png|jpe?g|gif|webp|svg)(\?.*)?$/i.test(maybeUrl);
 
                 if (isVideo) {
-                    const videoWrap = document.createElement('div');
-                    videoWrap.className = 'w-full';
-                    const video = document.createElement('video');
-                    video.className = 'max-w-full rounded-xl border border-black/10 dark:border-white/10 max-h-80 bg-black/50';
-                    video.controls = true;
-                    video.preload = 'metadata';
-                    video.playsInline = true;
-                    let localObjectUrl = '';
-                    if (maybeUrl) {
-                        video.src = maybeUrl;
-                    } else if (file instanceof File) {
-                        localObjectUrl = URL.createObjectURL(file);
-                        video.src = localObjectUrl;
-                    }
-                    video.onloadeddata = () => {
-                        if (localObjectUrl) {
-                            URL.revokeObjectURL(localObjectUrl);
-                            localObjectUrl = '';
-                        }
-                        const chatContainer = document.getElementById('at-chat-messages');
-                        if (chatContainer) {
-                            chatContainer.scrollTop = chatContainer.scrollHeight;
-                        }
-                    };
-                    videoWrap.appendChild(video);
-                    filesContainer.appendChild(videoWrap);
+                    filesContainer.appendChild(createVideoBubbleElement(file, maybeUrl));
                     return;
                 }
 
@@ -3139,13 +4248,17 @@
                 const fileDiv = document.createElement('div');
                 fileDiv.className = 'flex items-center gap-2 p-3 bg-black/10 dark:bg-white/10 rounded-xl text-xs font-mono border border-black/5 dark:border-white/5';
                 const displayName = (file && file.name) ? file.name : 'file';
+                const safeDisplayName = escapeHtml(displayName);
+                const visual = resolveAttachmentVisualMeta(file);
                 const icon = isSystemFolder
-                    ? '<span class="material-icons-round text-[16px] opacity-80">folder</span>'
-                    : '<svg class="w-4 h-4 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>';
-                const badge = (isSystemFolder || isSystemFile)
+                    ? '<span class="material-icons-round text-[16px] text-yellow-300">folder</span>'
+                    : `<span class="material-icons-round text-[16px] ${visual.color}">${visual.icon}</span>`;
+                const badge = isSystemFolder
                     ? '<span class="px-1.5 py-0.5 rounded bg-white/10 border border-white/10 text-[10px] uppercase tracking-wide">SYS</span>'
-                    : '';
-                fileDiv.innerHTML = `${icon} <span class="truncate max-w-[150px]">${displayName}</span> ${badge}`;
+                    : (isSystemFile
+                        ? '<span class="px-1.5 py-0.5 rounded bg-white/10 border border-white/10 text-[10px] uppercase tracking-wide">SYS</span>'
+                        : `<span class="px-1.5 py-0.5 rounded bg-white/10 border border-white/10 text-[10px] uppercase tracking-wide">${visual.tag}</span>`);
+                fileDiv.innerHTML = `${icon} <span class="truncate max-w-[150px]">${safeDisplayName}</span> ${badge}`;
                 filesContainer.appendChild(fileDiv);
             });
 
@@ -3158,6 +4271,9 @@
             
             const isUser = role === 'user';
             const div = document.createElement('div');
+            if (Number.isInteger(options.messageIndex)) {
+                div.dataset.msgIndex = String(options.messageIndex);
+            }
             div.setAttribute('data-role', isUser ? 'user' : 'assistant');
             // Remove mb-6 to avoid large gaps, add specific margins
             div.className = `flex gap-4 max-w-[90%] ${isUser ? 'ml-auto flex-row-reverse' : ''} mb-4 animate-scale-in group`;
@@ -3196,7 +4312,8 @@
             `;
             
             const contentDiv = div.querySelector('.message-content');
-            const parsedAssistant = isUser ? { text: text || '', imageUrls: [], videoUrls: [] } : parseAssistantImageUrls(text || '');
+            const rawRenderText = typeof options.renderedContent === 'string' ? options.renderedContent : (text || '');
+            const parsedAssistant = isUser ? { text: rawRenderText, imageUrls: [], videoUrls: [] } : parseAssistantImageUrls(rawRenderText);
             contentDiv.textContent = parsedAssistant.text;
             const senderLabel = div.querySelector('.sender-label');
             const senderName = (!isUser && typeof options.senderName === 'string') ? options.senderName.trim() : '';
@@ -3230,18 +4347,25 @@
             return div;
         }
 
-        function renderAgentToolsChat(agentId) {
+        function renderAgentToolsChat(agentId, options = {}) {
             if (!agentId || currentAgentToolId !== agentId) return;
             const chatContainer = document.getElementById('at-chat-messages');
             if (!chatContainer) return;
 
             const state = getAgentChatState(agentId);
+            const preserveScrollAnchor = !!(options && options.preserveScrollAnchor);
+            const previousScrollTop = Number(options && options.previousScrollTop) || 0;
+            const previousScrollHeight = Number(options && options.previousScrollHeight) || 0;
             chatContainer.innerHTML = '';
             currentMessageDiv = null;
 
-            state.messages.forEach((msg) => {
+            state.messages.forEach((msg, idx) => {
+                const contentToRender = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+                const reasoningToRender = (typeof msg.displayReasoning === 'string') ? msg.displayReasoning : (msg.reasoning || '');
                 appendMessage(msg.role, msg.content || '', msg.files || [], {
-                    reasoning: msg.reasoning || '',
+                    messageIndex: idx,
+                    reasoning: reasoningToRender,
+                    renderedContent: contentToRender,
                     skipScroll: true
                 });
             });
@@ -3251,8 +4375,13 @@
             }
 
             requestAnimationFrame(() => {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-                setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
+                if (preserveScrollAnchor) {
+                    const nextHeight = chatContainer.scrollHeight;
+                    chatContainer.scrollTop = Math.max(0, nextHeight - previousScrollHeight + previousScrollTop);
+                } else {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
+                }
             });
         }
 
@@ -3261,10 +4390,91 @@
             const currentIndex = state.streamMessageIndex;
             const current = Number.isInteger(currentIndex) ? state.messages[currentIndex] : null;
             if (isNew || !current || current.role !== 'assistant') {
-                state.messages.push({ role: 'assistant', content: '', reasoning: '', files: [] });
+                state.messages.push({ role: 'assistant', content: '', reasoning: '', files: [], displayContent: '', displayReasoning: '' });
                 state.streamMessageIndex = state.messages.length - 1;
             }
             return state;
+        }
+
+        function ensureStreamingAssistantDom(agentId) {
+            if (currentAgentToolId !== agentId) return false;
+            const state = getAgentChatState(agentId);
+            const streamIndex = state.streamMessageIndex;
+            if (!Number.isInteger(streamIndex)) return false;
+            if (!currentMessageDiv || Number(currentMessageDiv.dataset.msgIndex) !== streamIndex) {
+                renderAgentToolsChat(agentId);
+            }
+            return !!currentMessageDiv && Number(currentMessageDiv.dataset.msgIndex) === streamIndex;
+        }
+
+        function patchStreamingAssistantDom(agentId) {
+            if (!ensureStreamingAssistantDom(agentId)) return;
+            const state = getAgentChatState(agentId);
+            const streamIndex = state.streamMessageIndex;
+            if (!Number.isInteger(streamIndex)) return;
+            const msg = state.messages[streamIndex];
+            if (!msg || msg.role !== 'assistant') return;
+
+            const loadingIndicator = document.getElementById('at-loading-indicator');
+            if (loadingIndicator) loadingIndicator.remove();
+
+            const contentDiv = currentMessageDiv.querySelector('.message-content');
+            if (contentDiv) {
+                contentDiv.textContent = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
+            }
+            const reasoningContainer = currentMessageDiv.querySelector('.reasoning-container');
+            const reasoningDiv = currentMessageDiv.querySelector('.reasoning-content');
+            const reasoningText = (typeof msg.displayReasoning === 'string') ? msg.displayReasoning : (typeof msg.reasoning === 'string' ? msg.reasoning : '');
+            if (reasoningContainer && reasoningDiv) {
+                if (reasoningText.trim()) {
+                    reasoningContainer.classList.remove('hidden');
+                    reasoningDiv.textContent = reasoningText;
+                } else {
+                    reasoningContainer.classList.add('hidden');
+                    reasoningDiv.textContent = '';
+                }
+            }
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (chatContainer) {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+
+        function scheduleAgentTypingRender(agentId) {
+            const key = String(agentId || '').trim();
+            if (!key) return;
+            if (atAgentTypingTimers.has(key)) return;
+            const tick = () => {
+                const state = getAgentChatState(key);
+                const idx = state.streamMessageIndex;
+                const msg = Number.isInteger(idx) ? state.messages[idx] : null;
+                if (!msg || msg.role !== 'assistant') {
+                    atAgentTypingTimers.delete(key);
+                    return;
+                }
+                const changed = advanceStreamingDisplay(msg);
+                if (currentAgentToolId === key) {
+                    patchStreamingAssistantDom(key);
+                }
+                if (changed) {
+                    const timer = setTimeout(tick, AT_TYPING_TICK_MS);
+                    atAgentTypingTimers.set(key, timer);
+                } else {
+                    atAgentTypingTimers.delete(key);
+                }
+            };
+            const timer = setTimeout(tick, 0);
+            atAgentTypingTimers.set(key, timer);
+        }
+
+        function clearAgentTypingTimer(agentId) {
+            const key = String(agentId || '').trim();
+            if (!key) return;
+            const timer = atAgentTypingTimers.get(key);
+            if (timer) {
+                clearTimeout(timer);
+                atAgentTypingTimers.delete(key);
+            }
         }
 
         function appendAgentText(agentId, text, isNew) {
@@ -3275,7 +4485,9 @@
             streamAgentTtsText(agentId, text, isNew);
             state.loading = false;
             if (currentAgentToolId === agentId) {
-                renderAgentToolsChat(agentId);
+                scheduleAgentTypingRender(agentId);
+            } else {
+                syncStreamingDisplayNow(msg);
             }
         }
 
@@ -3286,16 +4498,24 @@
             msg.reasoning += text;
             state.loading = false;
             if (currentAgentToolId === agentId) {
-                renderAgentToolsChat(agentId);
+                scheduleAgentTypingRender(agentId);
+            } else {
+                syncStreamingDisplayNow(msg);
             }
         }
 
         function finalizeAgentStream(agentId) {
             const state = getAgentChatState(agentId);
             finalizeAgentTtsStream(agentId);
+            clearAgentTypingTimer(agentId);
+            const idx = state.streamMessageIndex;
+            if (Number.isInteger(idx) && state.messages[idx]) {
+                syncStreamingDisplayNow(state.messages[idx]);
+            }
             state.inFlight = false;
             state.loading = false;
             state.streamMessageIndex = null;
+            updateSidebarBusyIndicators();
             if (currentAgentToolId === agentId) {
                 renderAgentToolsChat(agentId);
             }
@@ -3313,6 +4533,7 @@
             state.inFlight = true;
             state.loading = true;
             state.streamMessageIndex = null;
+            updateSidebarBusyIndicators();
             if (currentAgentToolId === agentId) {
                 renderAgentToolsChat(agentId);
             }
@@ -3326,6 +4547,7 @@
                 state.inFlight = false;
                 state.loading = false;
                 state.streamMessageIndex = null;
+                updateSidebarBusyIndicators();
                 state.messages.push({
                     role: 'assistant',
                     content: `[Error: ${e.message}]`,
@@ -3350,7 +4572,7 @@
              
              const div = document.createElement('div');
              div.id = 'at-loading-indicator';
-             div.className = 'flex gap-4 max-w-[90%] mb-6 animate-pulse';
+             div.className = 'flex gap-4 max-w-[90%] mb-6';
              
              // ... avatar code ...
              
@@ -3366,10 +4588,8 @@
              
              div.innerHTML = `
                 ${avatarHtml}
-                <div class="bg-white/5 text-gray-400 border border-white/5 p-4 rounded-3xl rounded-tl-sm backdrop-blur-md min-w-[60px] flex items-center gap-2">
-                    <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0s"></span>
-                    <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></span>
-                    <span class="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.4s"></span>
+                <div class="bg-white/5 text-gray-400 border border-white/5 p-4 rounded-3xl rounded-tl-sm backdrop-blur-md min-w-[60px] flex items-center justify-center">
+                    <span class="inline-block w-3 h-3 rounded-full border border-blue-300/40 border-t-blue-400 animate-spin shadow-[0_0_8px_rgba(96,165,250,0.9)]"></span>
                 </div>
              `;
              
@@ -3381,6 +4601,7 @@
 
         let atPendingFiles = [];
         let atPendingAttachmentSeq = 0;
+        let atReplacingAttachmentId = null;
 
         function buildPendingAttachmentId() {
             atPendingAttachmentSeq += 1;
@@ -3410,9 +4631,12 @@
 
         function clearPendingAttachments() {
             atPendingFiles = [];
+            atReplacingAttachmentId = null;
             renderPendingAttachments();
             const fileInput = document.getElementById('at-file-input');
             if (fileInput) fileInput.value = '';
+            const replaceInput = document.getElementById('at-replace-file-input');
+            if (replaceInput) replaceInput.value = '';
         }
 
         function getPendingDisplayName(item) {
@@ -3431,10 +4655,15 @@
                 const card = document.createElement('div');
                 card.className = 'relative group w-16 h-16 rounded-xl overflow-hidden border border-white/10 bg-black/30';
                 const displayName = getPendingDisplayName(item);
-                const safeName = displayName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const safeName = escapeHtml(displayName);
                 const removeBtn = `
                     <button onclick="removeFile('${item.id}')" class="absolute top-0 right-0 w-5 h-5 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                         <span class="material-icons-round text-white text-[12px]">close</span>
+                    </button>
+                `;
+                const replaceBtn = `
+                    <button onclick="replacePendingAttachment('${item.id}')" class="absolute top-0 left-0 w-5 h-5 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" title="Replace video">
+                        <span class="material-icons-round text-white text-[12px]">swap_horiz</span>
                     </button>
                 `;
 
@@ -3443,6 +4672,20 @@
                     card.innerHTML = `
                         <img src="${objectUrl}" class="w-full h-full object-cover" onload="URL.revokeObjectURL('${objectUrl}')">
                         ${removeBtn}
+                        <div class="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-gray-200 px-1 truncate">${safeName}</div>
+                    `;
+                } else if (item.mode === 'web' && item.file instanceof File && item.file.type && item.file.type.startsWith('video/')) {
+                    const thumb = (typeof item.thumbnail === 'string' && item.thumbnail.trim()) ? item.thumbnail.trim() : '';
+                    card.innerHTML = `
+                        ${thumb
+                            ? `<img src="${thumb}" class="w-full h-full object-cover">`
+                            : `<div class="w-full h-full flex items-center justify-center bg-black/40"><span class="material-icons-round text-gray-200 text-[24px]">movie</span></div>`
+                        }
+                        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <span class="material-icons-round text-white text-[16px] bg-black/50 rounded-full p-1">play_arrow</span>
+                        </div>
+                        ${removeBtn}
+                        ${replaceBtn}
                         <div class="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-gray-200 px-1 truncate">${safeName}</div>
                     `;
                 } else if (item.mode === 'system' && item.kind === 'folder') {
@@ -3455,10 +4698,11 @@
                         <div class="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-gray-200 px-1 truncate">${safeName}</div>
                     `;
                 } else {
+                    const visual = resolveAttachmentVisualMeta(item);
                     card.innerHTML = `
                         <div class="w-full h-full flex flex-col items-center justify-center gap-1">
-                            <span class="material-icons-round text-gray-300 text-[22px]">description</span>
-                            ${item.mode === 'system' ? '<span class="text-[9px] text-gray-300">SYS</span>' : ''}
+                            <span class="material-icons-round ${visual.color} text-[22px]">${visual.icon}</span>
+                            <span class="text-[9px] text-gray-300">${item.mode === 'system' ? 'SYS' : visual.tag}</span>
                         </div>
                         ${removeBtn}
                         <div class="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-gray-200 px-1 truncate">${safeName}</div>
@@ -3468,20 +4712,197 @@
             });
         }
 
-        function addWebFilesToPending(files) {
-            if (!files || files.length === 0) return;
-            Array.from(files).forEach((file) => {
-                addPendingAttachment({
-                    id: buildPendingAttachmentId(),
-                    mode: 'web',
-                    kind: 'file',
-                    name: file.name || 'file',
-                    type: file.type || 'application/octet-stream',
-                    size: Number(file.size) || 0,
-                    lastModified: Number(file.lastModified) || 0,
-                    file
+        function createVideoThumbnail(file) {
+            return new Promise((resolve) => {
+                if (!(file instanceof File) || !file.type || !file.type.startsWith('video/')) {
+                    resolve('');
+                    return;
+                }
+                let objectUrl = '';
+                let done = false;
+                const finish = (value = '') => {
+                    if (done) return;
+                    done = true;
+                    if (objectUrl) {
+                        URL.revokeObjectURL(objectUrl);
+                        objectUrl = '';
+                    }
+                    resolve(value || '');
+                };
+                const withTimeout = (promise, ms, fallbackValue = null) => {
+                    return Promise.race([
+                        promise,
+                        new Promise((r) => setTimeout(() => r(fallbackValue), ms))
+                    ]);
+                };
+                const waitEvent = (target, okEvent, failEvent) => new Promise((resolveEvent) => {
+                    let settled = false;
+                    const doneEvent = (value) => {
+                        if (settled) return;
+                        settled = true;
+                        target.removeEventListener(okEvent, onOk);
+                        if (failEvent) target.removeEventListener(failEvent, onFail);
+                        resolveEvent(value);
+                    };
+                    const onOk = () => doneEvent(true);
+                    const onFail = () => doneEvent(false);
+                    target.addEventListener(okEvent, onOk, { once: true });
+                    if (failEvent) target.addEventListener(failEvent, onFail, { once: true });
                 });
+                const isCanvasFrameUsable = (ctx, width, height) => {
+                    try {
+                        const imageData = ctx.getImageData(0, 0, width, height).data;
+                        const pixelCount = width * height;
+                        if (!pixelCount || !imageData || !imageData.length) return false;
+                        const sampleStep = Math.max(1, Math.floor(pixelCount / 9000));
+                        let sampled = 0;
+                        let luminanceSum = 0;
+                        let nonDark = 0;
+                        for (let i = 0; i < pixelCount; i += sampleStep) {
+                            const base = i * 4;
+                            const r = imageData[base];
+                            const g = imageData[base + 1];
+                            const b = imageData[base + 2];
+                            const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                            luminanceSum += luma;
+                            sampled += 1;
+                            if (luma > 28) nonDark += 1;
+                        }
+                        if (!sampled) return false;
+                        const avgLuma = luminanceSum / sampled;
+                        const nonDarkRatio = nonDark / sampled;
+                        return avgLuma > 24 && nonDarkRatio > 0.09;
+                    } catch (_) {
+                        return false;
+                    }
+                };
+                try {
+                    const video = document.createElement('video');
+                    video.preload = 'auto';
+                    video.muted = true;
+                    video.playsInline = true;
+                    video.setAttribute('playsinline', 'true');
+                    video.pause();
+                    objectUrl = URL.createObjectURL(file);
+                    video.src = objectUrl;
+                    void (async () => {
+                        try {
+                            const metadataOk = await withTimeout(waitEvent(video, 'loadedmetadata', 'error'), 2200, false);
+                            if (!metadataOk) {
+                                finish('');
+                                return;
+                            }
+                            const width = Number(video.videoWidth) || 0;
+                            const height = Number(video.videoHeight) || 0;
+                            if (!width || !height) {
+                                finish('');
+                                return;
+                            }
+                            const maxEdge = 320;
+                            const scale = Math.min(1, maxEdge / Math.max(width, height));
+                            const canvas = document.createElement('canvas');
+                            canvas.width = Math.max(1, Math.round(width * scale));
+                            canvas.height = Math.max(1, Math.round(height * scale));
+                            const ctx = canvas.getContext('2d');
+                            if (!ctx) {
+                                finish('');
+                                return;
+                            }
+
+                            const duration = Number(video.duration);
+                            const hasDuration = Number.isFinite(duration) && duration > 0;
+                            const maxSeek = hasDuration ? Math.max(0.01, duration - 0.05) : 2.8;
+                            const candidateTimes = [];
+                            const pushTime = (value) => {
+                                const t = Number(value);
+                                if (!Number.isFinite(t)) return;
+                                const clamped = Math.max(0, Math.min(maxSeek, t));
+                                const rounded = Math.round(clamped * 100) / 100;
+                                if (!candidateTimes.includes(rounded)) candidateTimes.push(rounded);
+                            };
+                            pushTime(0.2);
+                            pushTime(0.8);
+                            pushTime(1.4);
+                            pushTime(2.2);
+                            if (hasDuration) {
+                                pushTime(duration * 0.12);
+                                pushTime(duration * 0.26);
+                                pushTime(duration * 0.4);
+                                pushTime(duration * 0.58);
+                                pushTime(duration * 0.76);
+                            }
+                            if (candidateTimes.length === 0) pushTime(0);
+
+                            let fallbackDataUrl = '';
+                            for (const t of candidateTimes) {
+                                try {
+                                    const seekPromise = waitEvent(video, 'seeked', 'error');
+                                    video.currentTime = t;
+                                    const seekOk = await withTimeout(seekPromise, 1400, false);
+                                    if (!seekOk) continue;
+                                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                                    const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+                                    if (!fallbackDataUrl && dataUrl) fallbackDataUrl = dataUrl;
+                                    if (isCanvasFrameUsable(ctx, canvas.width, canvas.height)) {
+                                        finish(dataUrl);
+                                        return;
+                                    }
+                                } catch (_) {}
+                            }
+
+                            finish(fallbackDataUrl || '');
+                        } catch (_) {
+                            finish('');
+                        }
+                    })();
+                } catch (_) {
+                    finish('');
+                }
             });
+        }
+
+        async function createPendingWebAttachment(file, currentId = '') {
+            if (!(file instanceof File)) return null;
+            const normalizedType = file.type || 'application/octet-stream';
+            let thumbnail = '';
+            if (normalizedType.startsWith('video/')) {
+                thumbnail = await createVideoThumbnail(file);
+            }
+            return {
+                id: currentId || buildPendingAttachmentId(),
+                mode: 'web',
+                kind: 'file',
+                name: file.name || 'file',
+                type: normalizedType,
+                size: Number(file.size) || 0,
+                lastModified: Number(file.lastModified) || 0,
+                thumbnail,
+                file
+            };
+        }
+
+        async function addWebFilesToPending(files) {
+            if (!files || files.length === 0) return;
+            const incoming = Array.from(files).filter((file) => file instanceof File);
+            if (incoming.length === 0) return;
+            const incomingSingleVideo = incoming.length === 1 && incoming[0].type && incoming[0].type.startsWith('video/');
+            const existingVideoIndex = atPendingFiles.findIndex((item) => item && item.mode === 'web' && item.file instanceof File && item.file.type && item.file.type.startsWith('video/'));
+
+            if (incomingSingleVideo && existingVideoIndex >= 0) {
+                const oldItem = atPendingFiles[existingVideoIndex];
+                const replacement = await createPendingWebAttachment(incoming[0], oldItem && oldItem.id ? oldItem.id : '');
+                if (replacement) {
+                    atPendingFiles[existingVideoIndex] = replacement;
+                }
+                renderPendingAttachments();
+                return;
+            }
+
+            for (const file of incoming) {
+                const item = await createPendingWebAttachment(file);
+                addPendingAttachment(item);
+            }
             renderPendingAttachments();
         }
 
@@ -3489,12 +4910,43 @@
             const id = String(attachmentId || '').trim();
             if (!id) return;
             atPendingFiles = atPendingFiles.filter((x) => x.id !== id);
+            if (atReplacingAttachmentId === id) {
+                atReplacingAttachmentId = null;
+            }
+            renderPendingAttachments();
+        };
+
+        window.replacePendingAttachment = function(attachmentId) {
+            const id = String(attachmentId || '').trim();
+            if (!id) return;
+            const target = atPendingFiles.find((x) => x && x.id === id);
+            if (!target || !(target.file instanceof File) || !target.file.type || !target.file.type.startsWith('video/')) return;
+            atReplacingAttachmentId = id;
+            const input = document.getElementById('at-replace-file-input');
+            if (!input) return;
+            input.value = '';
+            input.click();
+        };
+
+        window.handleReplaceFileUpload = async function(files) {
+            const replaceId = atReplacingAttachmentId ? String(atReplacingAttachmentId).trim() : '';
+            atReplacingAttachmentId = null;
+            const input = document.getElementById('at-replace-file-input');
+            if (input) input.value = '';
+            if (!replaceId || !files || files.length === 0) return;
+            const nextFile = Array.from(files).find((file) => file instanceof File && file.type && file.type.startsWith('video/'));
+            if (!nextFile) return;
+            const idx = atPendingFiles.findIndex((x) => x && x.id === replaceId);
+            if (idx < 0) return;
+            const nextItem = await createPendingWebAttachment(nextFile, replaceId);
+            if (!nextItem) return;
+            atPendingFiles[idx] = nextItem;
             renderPendingAttachments();
         };
 
         window.handleFileUpload = function(files) {
             if (!files || files.length === 0) return;
-            addWebFilesToPending(files);
+            void addWebFilesToPending(files);
             const fileInput = document.getElementById('at-file-input');
             if (fileInput) fileInput.value = '';
         };
@@ -3508,7 +4960,7 @@
             }
             const dt = event.dataTransfer;
             if (!dt) return;
-            addWebFilesToPending(dt.files);
+            await addWebFilesToPending(dt.files);
         };
 
         async function encodePendingFiles(files) {
@@ -3522,17 +4974,84 @@
                     reader.onload = (e) => resolve({
                         name: item.name || file.name,
                         type: item.type || file.type,
+                        thumbnail: (typeof item.thumbnail === 'string' && item.thumbnail.trim()) ? item.thumbnail.trim() : '',
                         data: e.target.result
                     });
                     reader.onerror = () => resolve({
                         name: item.name || file.name,
                         type: item.type || file.type,
+                        thumbnail: (typeof item.thumbnail === 'string' && item.thumbnail.trim()) ? item.thumbnail.trim() : '',
                         data: ''
                     });
                     reader.readAsDataURL(file);
                 });
             });
             return Promise.all(filePromises);
+        }
+
+        function scrollAgentToolsChatToBottom() {
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return;
+            requestAnimationFrame(() => {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                setTimeout(() => {
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                }, 80);
+            });
+        }
+
+        function clearChannelConversationState(channelId, options = {}) {
+            const shouldRender = options && Object.prototype.hasOwnProperty.call(options, 'render')
+                ? !!options.render
+                : true;
+            const state = getChannelChatState(channelId);
+            Object.keys(state.streamMessageIndexByAgent || {}).forEach((agentKey) => {
+                clearChannelTypingTimer(channelId, agentKey);
+            });
+            state.messages = [];
+            state.loading = false;
+            state.inFlight = false;
+            state.historyLoaded = true;
+            state.historyPage = 0;
+            state.hasMoreHistory = false;
+            state.historyLoading = false;
+            state.pendingQueue = [];
+            state.streamMessageIndexByAgent = {};
+            if (shouldRender && currentChannelId === channelId) {
+                renderAgentToolsChannelChat(channelId);
+            }
+            updateSidebarBusyIndicators();
+        }
+
+        async function resetAgentToolsChannelConversation(channelId) {
+            const id = typeof channelId === 'string' ? channelId.trim() : '';
+            if (!id) {
+                throw new Error('channel id is required');
+            }
+            const socket = atChannelSockets.get(id);
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                try { socket.close(); } catch (_) {}
+            }
+            atChannelSockets.delete(id);
+
+            clearChannelConversationState(id, { render: true });
+            clearChannelComposer();
+            clearPendingAttachments();
+
+            const res = await fetch(`/api/agent-channels/${encodeURIComponent(id)}/history/reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.success) {
+                throw new Error(body.error || 'reset channel failed');
+            }
+
+            if (currentChannelId === id) {
+                connectAgentChannelSocket(id);
+                scrollAgentToolsChatToBottom();
+            }
+            return body;
         }
 
         async function resetAgentToolsConversation(agentId, commandText = '/new', options = {}) {
@@ -3556,10 +5075,14 @@
             state.ttsStreamingActive = false;
             state.streamMessageIndex = null;
             state.historyLoaded = true;
+            state.historyPage = normalizedCommand ? 1 : 0;
+            state.hasMoreHistory = false;
+            state.historyLoading = false;
             state.pendingQueue = [];
             if (currentAgentToolId === agentId) {
                 renderAgentToolsChat(agentId);
             }
+            updateSidebarBusyIndicators();
 
             const res = await fetch(`/api/agents/${agentId}/history/reset`, {
                 method: 'POST',
@@ -3610,6 +5133,10 @@
             const attachmentFallbackText = payload.files.length > 0 ? `[Uploaded ${payload.files.length} file(s)]` : '';
 
             if (channelId) {
+                payload.channelRuleMode = !!atChannelRuleMode;
+                if (text) {
+                    pushSentInputHistory(atChannelSentInputHistory, channelId, text);
+                }
                 const state = getChannelChatState(channelId);
                 state.messages.push({
                     role: 'user',
@@ -3628,6 +5155,9 @@
                 return;
             }
 
+            if (text) {
+                pushSentInputHistory(atAgentSentInputHistory, agentId, text);
+            }
             const state = getAgentChatState(agentId);
             state.messages.push({
                 role: 'user',
@@ -3795,11 +5325,22 @@
         
         document.addEventListener('DOMContentLoaded', () => {
             loadAgentToolsSoundPref();
+            loadAgentToolsChannelRuleModePref();
+            loadAgentToolsImmersivePref();
+            loadAgentToolsRuntimeStatusPref();
+            updateAgentToolsImmersiveToggleUi();
+            updateAgentToolsChannelRuleModeUi();
+            updateSidebarBusyIndicators();
+            startAgentToolsRuntimeStatusPolling();
             const input = document.getElementById('search-input');
             if (input) {
                 input.addEventListener('input', (e) => {
                     filterAgents(e.target.value);
                 });
+            }
+            const chatScroll = document.getElementById('at-chat-messages');
+            if (chatScroll) {
+                chatScroll.addEventListener('scroll', maybeLoadOlderHistoryOnScroll, { passive: true });
             }
             document.addEventListener('click', (e) => {
                 const root = document.getElementById('profile-menu-root');
@@ -3868,6 +5409,14 @@
                         moveMentionSelection(-1);
                         return;
                     }
+                    if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !atMentionPopupVisible && !hasModifier) {
+                        if (atChannelComposing || event.isComposing || event.keyCode === 229 || event.which === 229) return;
+                        const direction = event.key === 'ArrowUp' ? 'up' : 'down';
+                        if (tryNavigateChannelSentInputHistory(direction)) {
+                            event.preventDefault();
+                            return;
+                        }
+                    }
                     if ((event.key === 'Tab' || (event.key === 'Enter' && !hasModifier)) && atMentionPopupVisible) {
                         event.preventDefault();
                         commitSelectedMention();
@@ -3916,8 +5465,17 @@
                         atAltPressed ||
                         (typeof event.getModifierState === 'function' && event.getModifierState('AltGraph'))
                     );
+                    if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !hasModifier) {
+                        if (event.isComposing || event.keyCode === 229 || event.which === 229) return;
+                        const direction = event.key === 'ArrowUp' ? 'up' : 'down';
+                        if (tryNavigateAgentSentInputHistory(direction)) {
+                            event.preventDefault();
+                            return;
+                        }
+                    }
                     if (event.key === 'Enter' && hasModifier) {
-                        setTimeout(() => autosizeAgentToolsTextarea(), 0);
+                        event.preventDefault();
+                        insertTextareaLineBreak(atTextInput);
                         return;
                     }
                     if (event.key === 'Enter' && !hasModifier) {
@@ -3929,9 +5487,13 @@
                 autosizeAgentToolsTextarea();
             }
             window.addEventListener('resize', () => {
-                if (window.location.hash === '#agenttools' && currentChannelId) {
+                if (window.location.hash === '#agenttools' && (currentChannelId || currentAgentToolId)) {
                     applyAgentToolsLayoutMode();
-                    renderAgentToolsChannelChat(currentChannelId);
+                    if (currentChannelId) {
+                        renderAgentToolsChannelChat(currentChannelId);
+                    } else if (currentAgentToolId) {
+                        renderAgentToolsChat(currentAgentToolId);
+                    }
                 }
             });
             refreshAgentToolsSoundAvailability();
@@ -4017,7 +5579,21 @@
         <div class="border-t border-white/5 my-2 mx-6"></div>
         <div class="px-6 py-4 flex items-center justify-between">
             <span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Character Library</span>
-            <span class="material-icons-outlined text-gray-500 text-sm cursor-pointer hover:text-primary transition-colors" onclick="openCreateModal()">add</span>
+            <div class="flex items-center gap-2">
+                <button id="at-immersive-toggle-btn"
+                        type="button"
+                        title="Enable immersive chat"
+                        aria-pressed="false"
+                        onclick="toggleAgentToolsImmersiveMode()"
+                        class="material-icons-outlined text-gray-500 text-sm cursor-pointer hover:text-primary transition-colors border border-transparent rounded-md w-6 h-6 flex items-center justify-center">
+                    <span id="at-immersive-toggle-icon" class="material-icons-outlined text-sm leading-none">fullscreen</span>
+                </button>
+                <button type="button"
+                        onclick="openCreateModal()"
+                        class="material-icons-outlined text-gray-500 text-sm cursor-pointer hover:text-primary transition-colors">
+                    add
+                </button>
+            </div>
         </div>
         <div id="sidebar-agent-list" class="px-4 space-y-1">
             <!-- Dynamic Agent List -->
@@ -4178,6 +5754,15 @@
                                  <span id="at-sound-toggle-icon" class="material-icons-round text-[18px]">volume_off</span>
                                  <span id="at-sound-toggle-text" class="text-sm font-medium">Enable Sound</span>
                              </button>
+                             <button id="at-channel-rule-mode-btn"
+                                     type="button"
+                                     onclick="toggleAgentToolsChannelRuleMode()"
+                                     aria-pressed="true"
+                                     title="Channel rule mode"
+                                     class="hidden inline-flex items-center gap-2 h-9 px-4 rounded-full border bg-primary/20 text-primary border-primary/40 hover:bg-primary/25 transition-colors">
+                                 <span id="at-channel-rule-mode-icon" class="material-icons-round text-[18px]">rule</span>
+                                 <span id="at-channel-rule-mode-text" class="text-sm font-medium">Rule On</span>
+                             </button>
                              <button id="at-persona-refresh-btn"
                                      type="button"
                                      onclick="reloadAgentToolsPersonaSession()"
@@ -4193,6 +5778,7 @@
                              <span class="material-icons-round text-xl">attach_file</span>
                          </button>
                          <input type="file" id="at-file-input" multiple class="hidden" onchange="handleFileUpload(this.files)">
+                         <input type="file" id="at-replace-file-input" accept="video/*" class="hidden" onchange="handleReplaceFileUpload(this.files)">
 
                          <div class="flex-1 relative bg-white/5 border border-white/10 rounded-[28px] focus-within:bg-white/10 focus-within:border-primary/50 transition-all shadow-lg flex flex-col justify-center"
                               ondragover="event.preventDefault(); this.classList.add('border-primary', 'bg-white/10')"
@@ -4393,6 +5979,37 @@
             </button>
             <button onclick="confirmDelete()" class="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium transition-colors shadow-lg shadow-red-600/20">
                 Delete
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Clone Agent Modal -->
+<div id="clone-agent-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeCloneAgentModal()"></div>
+    <div class="relative w-full max-w-md bg-[#0a0a0a] rounded-3xl p-7 border border-white/10 shadow-2xl animate-scale-in mx-4">
+        <div class="flex items-center gap-3 mb-5">
+            <div class="w-10 h-10 rounded-full bg-primary/15 flex items-center justify-center">
+                <span class="material-icons-round text-primary">content_copy</span>
+            </div>
+            <div>
+                <h3 class="text-lg font-bold text-white">复制智能体</h3>
+                <p class="text-xs text-gray-400">将创建一个新的名字和 ID</p>
+            </div>
+        </div>
+        <div class="space-y-3">
+            <label class="text-xs uppercase text-gray-500 font-bold tracking-wider block">新智能体名字</label>
+            <input id="clone-agent-name-input" type="text" maxlength="80"
+                class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 outline-none transition-colors"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();confirmCloneAgent();}">
+            <p id="clone-agent-error" class="hidden text-xs text-red-400"></p>
+        </div>
+        <div class="flex gap-4 w-full mt-7">
+            <button onclick="closeCloneAgentModal()" class="flex-1 py-3 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium transition-colors border border-white/5">
+                取消
+            </button>
+            <button id="clone-agent-confirm-btn" onclick="confirmCloneAgent()" class="flex-1 py-3 rounded-xl bg-primary hover:bg-primaryHover text-black font-semibold transition-colors shadow-lg shadow-primary/20">
+                确定复制
             </button>
         </div>
     </div>

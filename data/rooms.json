@@ -1,14 +1,14 @@
 [
   {
-    "roomId": "room_64124f33",
-    "name": "科技圈大师议事厅",
-    "description": "全是史诗级大佬,关注全球最新前沿科技新闻",
+    "roomId": "room_5d5edfaf",
+    "name": "大师圆桌谈伊朗",
+    "description": "关注伊朗战争最新前沿",
     "category": "technology",
     "maxAgents": 5,
-    "coverUrl": "https://cos.mecoai.com/agents/agent_1cb8a458/upload_57ada6e2.jpg",
-    "coverLocal": "/room-covers/cover_1773758847913.jpg",
+    "coverUrl": "https://cos.circle-thinking.com/agents/agent_9cc387f8/upload_04916df6.jpg",
+    "coverLocal": "/room-covers/cover_1773829850512.jpg",
     "hlsUrl": "",
-    "roundtableUrl": "/roundtable/?characters=gates%2Chawking%2Cjobs%2Ckobe%2Cmunger&character_voices=bill_v1_hd%2Chawking_v1_hd%2Cjobs_voice_20260115_v3%2Ckobe_v1_hd%2Ccharles_munger_v1_hd&room_id=room_64124f33&category=technology",
+    "roundtableUrl": "/roundtable/?characters=gates%2Chawking%2Cjobs%2Ckobe%2Cmunger&character_voices=bill_v1_hd%2Chawking_v1_hd%2Cjobs_voice_20260115_v3%2Ckobe_v1_hd%2Ccharles_munger_v1_hd&room_id=room_5d5edfaf&category=technology",
     "agentIds": [
       "gates",
       "hawking",
@@ -19,30 +19,30 @@
     "joinResults": [
       {
         "id": "hawking",
-        "agentId": "agent_c920dcb0",
+        "agentId": "agent_3d73279d",
         "name": "Stephen Hawking",
         "status": "joined"
       },
       {
         "id": "jobs",
-        "agentId": "agent_048d7572",
+        "agentId": "agent_45cb7233",
         "name": "Steve Jobs",
         "status": "joined"
       },
       {
         "id": "kobe",
-        "agentId": "agent_94a100de",
+        "agentId": "agent_af42b288",
         "name": "Kobe Bryant",
         "status": "joined"
       },
       {
         "id": "munger",
-        "agentId": "agent_9ca6351b",
+        "agentId": "agent_8d8dd6b4",
         "name": "Charlie Munger",
         "status": "joined"
       }
     ],
-    "hostApiKey": "ak_live_2545d7f8-1bd1-4537-8304-5a2b84066d1d",
-    "createdAt": "2026-03-17T14:47:28.535Z"
+    "hostApiKey": "ak_live_8f262a62-02c5-4047-9954-dbf2d528bac3",
+    "createdAt": "2026-03-18T10:30:53.297Z"
   }
 ]

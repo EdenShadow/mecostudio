@@ -274,11 +274,11 @@ You have the ability to update your own persona/system prompt (SOUL.md).
 Run the following command:
 \`\`\`bash
 const personaManagerPath = path.join(__dirname, '../data/skills/persona-manager/manage_persona.py');
-  // python3 "${personaManagerPath}" ${agentId} --content "New content..."
+  // python3 "\${personaManagerPath}" ${agentId} --content "New content..."
 \`\`\`
 Or if the content is long, write it to a file first:
 \`\`\`bash
-// python3 "${personaManagerPath}" ${agentId} --file /path/to/new_soul.md
+// python3 "\${personaManagerPath}" ${agentId} --file /path/to/new_soul.md
 \`\`\`
 `;
     await fs.writeFile(soulPath, soulContent);

@@ -846,8 +846,14 @@
             var isRateLimit = statusMsg.indexOf('rate limit') !== -1;
             if (!self._ttsRetryCount) self._ttsRetryCount = 0;
 
-            // 限流错误：等待后重试（最多 2 次）
-            if (isRateLimit && self._ttsRetryCount < 2 && !self._muted) {
+            // 限流错误：仅在“尚未产出任何音频”时重试，避免已播内容被重放两遍
+            var hasAudioOutput = !!(
+              self.audioStarted ||
+              self.activeSources > 0 ||
+              (self.audioChunks && self.audioChunks.length > 0) ||
+              audioChunkCount > 0
+            );
+            if (isRateLimit && self._ttsRetryCount < 2 && !self._muted && !hasAudioOutput) {
               self._ttsRetryCount++;
               var delay = 3000 * self._ttsRetryCount;
               console.warn('[' + self.agentId + '] TTS 被限流，' + (delay/1000) + '秒后重试 (' + self._ttsRetryCount + '/2)');
@@ -867,6 +873,9 @@
                 self.connectWS(); // onopen 会自动发送 pendingTexts + end 信号
               }, delay);
               return; // 不标记 taskFinished，不触发兜底
+            }
+            if (isRateLimit && hasAudioOutput) {
+              console.warn('[' + self.agentId + '] TTS 限流发生在已产出音频后，跳过重试以避免重复播报');
             }
 
             // 非限流或重试耗尽：走原有兜底逻辑
