@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   openclawHttpUrl: 'http://127.0.0.1:18789/v1/chat/completions',
   openclawWsUrl: 'ws://127.0.0.1:18789',
   openclawGatewayToken: '',
-  openclawModel: 'kimi-coding/kimi-k2.5',
+  openclawModel: 'kimi-coding/k2p5',
   minimaxApiKey: '',
   minimaxWsUrl: 'wss://api.minimaxi.com/ws/v1/t2a_v2',
   tikhubApiKey: '',
@@ -89,7 +89,7 @@ function discoverFromLocalFiles() {
       if (primaryModel) discovered.openclawModel = String(primaryModel);
 
       const providers = get(conf, ['models', 'providers']) || {};
-      const kimiProvider = providers['kimi-openai'] || providers['kimi-coding'] || null;
+      const kimiProvider = providers['kimi-coding'] || providers['kimi-openai'] || null;
       if (kimiProvider && kimiProvider.apiKey) {
         discovered.kimiApiKey = String(kimiProvider.apiKey);
       }

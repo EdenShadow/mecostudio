@@ -63,9 +63,17 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 
 - 检测/安装 Kimi CLI
 - 写入 `~/.kimi/config.json` / `~/.kimi/config.toml`
+- 通过 `openclaw onboard --auth-choice kimi-code-api-key` 自动配置 OpenClaw 的 Kimi Coding 认证
 - 安装 hot-topics 技能及依赖（含 `openai-whisper`）
 - 自动确定 `Kimi CLI Command` 与 `Hot Topics KB Path`
 - 初始化热门话题知识库目录（仅补齐缺失）
+
+## ⚠️ Kimi 配置避坑（重要）
+
+- 使用 Kimi Coding 套餐时，OpenClaw 需使用 `kimi-coding/k2p5`。
+- 认证应走 `kimi-code-api-key`，不要手工改成 Moonshot Open Platform 的链路。
+- 若把 `kimi-coding` provider 配成 `api.moonshot.cn/v1 + openai-completions`，常见报错是：`HTTP 401: Invalid Authentication`。
+- 本项目安装脚本与“确定并自动安装/激活”已内置避坑逻辑，会自动修正到 `api.kimi.com/coding/ + anthropic-messages`。
 
 ## 🧪 常用环境变量（可选）
 
@@ -75,7 +83,7 @@ MECO_BRANCH="main" \
 MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
 MECO_UPGRADE_OPENCLAW=0 \
-MECO_OPENCLAW_MODEL="kimi-coding/kimi-k2.5" \
+MECO_OPENCLAW_MODEL="kimi-coding/k2p5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
 MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
 MECO_MINIMAX_API_KEY="xxxx" \
@@ -88,9 +96,9 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 
 说明：
 
-- `MECO_OPENCLAW_MODEL`：安装时写入 OpenClaw 默认模型
-- `MECO_OPENCLAW_MODEL_API_KEY`：安装时写入 OpenClaw 对应 provider 的 key
-- `MECO_KIMI_CODING_API_KEY`：用于 Kimi CLI 激活，并可作为 OpenClaw kimi provider 的 key 兜底
+- `MECO_OPENCLAW_MODEL`：安装时写入 OpenClaw 默认模型（推荐 `kimi-coding/k2p5`）
+- `MECO_OPENCLAW_MODEL_API_KEY`：兼容保留，未设置时自动回退到 `MECO_KIMI_CODING_API_KEY`
+- `MECO_KIMI_CODING_API_KEY`：用于 Kimi CLI 激活，并通过 `kimi-code-api-key` 自动配置 OpenClaw 认证
 - `MECO_MINIMAX_API_KEY` / `MECO_TIKHUB_API_KEY` / `MECO_MEOWLOAD_API_KEY`：开箱即用所需关键能力
 - `MECO_OPENAI_API_KEY`：可选，Whisper API 模式可用
 
@@ -115,7 +123,8 @@ optional_api_keys:
 post_install_actions:
   - "openclaw install/upgrade if needed"
   - "auto discover openclaw http/ws/token from local config"
-  - "write openclaw default model and provider api key"
+  - "bootstrap openclaw kimi-code auth profile to avoid moonshot 401 mismatch"
+  - "write openclaw default model/provider config (kimi-coding/k2p5)"
   - "kimi cli install if missing"
   - "whisper install for hot-topics audio analysis"
   - "sync bootstrap agents/skills (idempotent)"

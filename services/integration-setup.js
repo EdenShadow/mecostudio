@@ -84,10 +84,40 @@ function syncDir(src, dst) {
   fs.cpSync(src, dst, { recursive: true, force: true });
 }
 
+async function configureOpenClawKimiAuth(settings, logs) {
+  const kimiApiKey = String(settings.kimiApiKey || '').trim();
+  if (!kimiApiKey) {
+    logs.push('Kimi API Key is empty, skip OpenClaw kimi-code auth bootstrap');
+    return;
+  }
+  const workspaceDir = path.join(os.homedir(), '.openclaw', 'workspace');
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const cmd = [
+    'openclaw onboard',
+    '--non-interactive',
+    '--accept-risk',
+    '--mode local',
+    '--auth-choice kimi-code-api-key',
+    `--kimi-code-api-key "${kimiApiKey.replace(/"/g, '\\"')}"`,
+    '--skip-daemon',
+    '--skip-skills',
+    '--skip-search',
+    '--skip-ui',
+    '--skip-channels',
+    `--workspace "${workspaceDir.replace(/"/g, '\\"')}"`
+  ].join(' ');
+  try {
+    await runCommand(cmd, { timeoutMs: 3 * 60 * 1000 });
+    logs.push('Configured OpenClaw auth via kimi-code-api-key');
+  } catch (e) {
+    logs.push(`OpenClaw kimi-code auth bootstrap failed, fallback to direct config: ${e.message}`);
+  }
+}
+
 function configureOpenClawDefaults(settings, logs) {
   const openclawRoot = path.join(os.homedir(), '.openclaw');
   const openclawConfigPath = path.join(openclawRoot, 'openclaw.json');
-  const model = String(settings.openclawModel || '').trim() || 'kimi-coding/kimi-k2.5';
+  const model = String(settings.openclawModel || '').trim() || 'kimi-coding/k2p5';
   const providerKey = String(settings.kimiApiKey || '').trim();
 
   fs.mkdirSync(openclawRoot, { recursive: true });
@@ -115,12 +145,9 @@ function configureOpenClawDefaults(settings, logs) {
   if (!conf.models.providers['kimi-coding'] || typeof conf.models.providers['kimi-coding'] !== 'object') {
     conf.models.providers['kimi-coding'] = {};
   }
-  if (!conf.models.providers['kimi-coding'].baseUrl) {
-    conf.models.providers['kimi-coding'].baseUrl = 'https://api.moonshot.cn/v1';
-  }
-  if (!Array.isArray(conf.models.providers['kimi-coding'].models)) {
-    conf.models.providers['kimi-coding'].models = [{ id: 'kimi-k2.5', kind: 'chat' }];
-  }
+  conf.models.providers['kimi-coding'].baseUrl = 'https://api.kimi.com/coding/';
+  conf.models.providers['kimi-coding'].api = 'anthropic-messages';
+  conf.models.providers['kimi-coding'].models = [{ id: 'k2p5', name: 'Kimi K2.5' }];
   if (providerId && providerKey) {
     if (!conf.models.providers[providerId] || typeof conf.models.providers[providerId] !== 'object') {
       conf.models.providers[providerId] = {};
@@ -128,23 +155,7 @@ function configureOpenClawDefaults(settings, logs) {
     conf.models.providers[providerId].apiKey = providerKey;
   }
 
-  if (providerKey) {
-    for (const kimiProvider of ['kimi-coding', 'kimi-openai']) {
-      if (!conf.models.providers[kimiProvider] || typeof conf.models.providers[kimiProvider] !== 'object') {
-        conf.models.providers[kimiProvider] = {};
-      }
-      if (!conf.models.providers[kimiProvider].apiKey) {
-        conf.models.providers[kimiProvider].apiKey = providerKey;
-      }
-    }
-  }
-
-  if (providerKey) {
-    if (!conf.models.providers['kimi-coding'] || typeof conf.models.providers['kimi-coding'] !== 'object') {
-      conf.models.providers['kimi-coding'] = {};
-    }
-    conf.models.providers['kimi-coding'].apiKey = providerKey;
-  }
+  if (providerKey) conf.models.providers['kimi-coding'].apiKey = providerKey;
 
   if (conf.agents && Array.isArray(conf.agents.list)) {
     conf.agents.list = conf.agents.list.map((agent) => {
@@ -324,6 +335,7 @@ async function ensureHotTopicsDeps(logs) {
 
 async function applyAll(settings = {}) {
   const logs = [];
+  await configureOpenClawKimiAuth(settings, logs);
   configureOpenClawDefaults(settings, logs);
   const kimiPath = await ensureKimiCliInstalled(logs);
   configureKimiApiKey(String(settings.kimiApiKey || '').trim(), logs);

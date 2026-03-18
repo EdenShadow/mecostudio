@@ -166,7 +166,7 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
     const runtime = getRuntimeSettings();
     const gatewayUrl = runtime.openclawHttpUrl || 'http://127.0.0.1:18789/v1/chat/completions';
     const gatewayToken = runtime.openclawGatewayToken || '';
-    const model = runtime.openclawModel || 'kimi-coding/kimi-k2.5';
+    const model = runtime.openclawModel || 'kimi-coding/k2p5';
     const headers = {
       'Content-Type': 'application/json'
     };
@@ -363,7 +363,7 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
     const runtime = getRuntimeSettings();
     const gatewayUrl = runtime.openclawHttpUrl || 'http://127.0.0.1:18789/v1/chat/completions';
     const gatewayToken = runtime.openclawGatewayToken || '';
-    const defaultModel = runtime.openclawModel || 'kimi-coding/kimi-k2.5';
+    const defaultModel = runtime.openclawModel || 'kimi-coding/k2p5';
     const headers = {
       'Content-Type': 'application/json'
     };

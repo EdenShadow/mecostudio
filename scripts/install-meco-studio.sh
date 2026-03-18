@@ -8,7 +8,7 @@ MECO_START_AFTER_INSTALL="${MECO_START_AFTER_INSTALL:-1}"
 MECO_RESET_RUNTIME_STATE="${MECO_RESET_RUNTIME_STATE:-1}"
 MECO_UPGRADE_OPENCLAW="${MECO_UPGRADE_OPENCLAW:-0}"
 MECO_KIMI_CODING_API_KEY="${MECO_KIMI_CODING_API_KEY:-}"
-MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-coding/kimi-k2.5}"
+MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-coding/k2p5}"
 MECO_OPENCLAW_MODEL_API_KEY="${MECO_OPENCLAW_MODEL_API_KEY:-}"
 MECO_MINIMAX_API_KEY="${MECO_MINIMAX_API_KEY:-}"
 MECO_MINIMAX_WS_URL="${MECO_MINIMAX_WS_URL:-wss://api.minimaxi.com/ws/v1/t2a_v2}"
@@ -177,6 +177,34 @@ JSON
   log "Updated $kimi_home/config.json"
 }
 
+configure_openclaw_kimi_auth() {
+  local kimi_api_key="$1"
+  [[ -n "$kimi_api_key" ]] || {
+    warn "MECO_KIMI_CODING_API_KEY is empty, skip OpenClaw kimi-code auth bootstrap"
+    return 0
+  }
+
+  local workspace_dir="$OPENCLAW_ROOT/workspace"
+  mkdir -p "$workspace_dir"
+
+  if openclaw onboard \
+    --non-interactive \
+    --accept-risk \
+    --mode local \
+    --auth-choice kimi-code-api-key \
+    --kimi-code-api-key "$kimi_api_key" \
+    --skip-daemon \
+    --skip-skills \
+    --skip-search \
+    --skip-ui \
+    --skip-channels \
+    --workspace "$workspace_dir" >/dev/null 2>&1; then
+    log "Configured OpenClaw auth via kimi-code-api-key (avoid Moonshot auth mismatch)"
+  else
+    warn "openclaw onboard (kimi-code-api-key) failed, continue with direct config patch"
+  fi
+}
+
 configure_openclaw_defaults() {
   local model="$1"
   local provider_key="$2"
@@ -186,7 +214,7 @@ configure_openclaw_defaults() {
   node -e '
     const fs = require("fs");
     const path = process.argv[1];
-    const model = String(process.argv[2] || "").trim() || "kimi-coding/kimi-k2.5";
+    const model = String(process.argv[2] || "").trim() || "kimi-coding/k2p5";
     const providerKey = String(process.argv[3] || "").trim();
 
     let conf = {};
@@ -213,12 +241,9 @@ configure_openclaw_defaults() {
     if (!conf.models.providers["kimi-coding"] || typeof conf.models.providers["kimi-coding"] !== "object") {
       conf.models.providers["kimi-coding"] = {};
     }
-    if (!conf.models.providers["kimi-coding"].baseUrl) {
-      conf.models.providers["kimi-coding"].baseUrl = "https://api.moonshot.cn/v1";
-    }
-    if (!Array.isArray(conf.models.providers["kimi-coding"].models)) {
-      conf.models.providers["kimi-coding"].models = [{ id: "kimi-k2.5", kind: "chat" }];
-    }
+    conf.models.providers["kimi-coding"].baseUrl = "https://api.kimi.com/coding/";
+    conf.models.providers["kimi-coding"].api = "anthropic-messages";
+    conf.models.providers["kimi-coding"].models = [{ id: "k2p5", name: "Kimi K2.5" }];
 
     if (providerId && providerKey) {
       if (!conf.models.providers[providerId] || typeof conf.models.providers[providerId] !== "object") {
@@ -227,15 +252,7 @@ configure_openclaw_defaults() {
       conf.models.providers[providerId].apiKey = providerKey;
     }
 
-    // Keep kimi providers aligned when key is supplied
-    if (providerKey) {
-      for (const kimiProvider of ["kimi-coding", "kimi-openai"]) {
-        if (!conf.models.providers[kimiProvider] || typeof conf.models.providers[kimiProvider] !== "object") {
-          conf.models.providers[kimiProvider] = {};
-        }
-        conf.models.providers[kimiProvider].apiKey = providerKey;
-      }
-    }
+    if (providerKey) conf.models.providers["kimi-coding"].apiKey = providerKey;
 
     if (conf.agents && Array.isArray(conf.agents.list)) {
       conf.agents.list = conf.agents.list.map((agent) => {
@@ -561,6 +578,7 @@ main() {
   ensure_openclaw
   local effective_kimi_key="${MECO_KIMI_CODING_API_KEY:-}"
   local effective_model_key="${MECO_OPENCLAW_MODEL_API_KEY:-$MECO_KIMI_CODING_API_KEY}"
+  configure_openclaw_kimi_auth "$effective_model_key"
   configure_openclaw_defaults "$MECO_OPENCLAW_MODEL" "$effective_model_key"
   ensure_kimi_cli
   ensure_kimi_whisper
