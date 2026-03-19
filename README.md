@@ -45,6 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 拉取或更新 Meco Studio 到 `~/meco-studio`
 - 运行权限预检脚本（目录读写 + 网络连通 + OpenClaw 可用性）
 - 安装 npm 依赖并同步初始化 agents/skills（幂等）
+- bootstrap 同步为增量覆盖：只覆盖同名、补齐缺失，不删除本机自建智能体/skills
 - 自动安装 skills 运行依赖：
   - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
   - Node：自动扫描 OpenClaw/config skills 下 `package.json` 并安装
@@ -63,6 +64,10 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `bootstrap/openclaw/workspaces/*`（OpenClaw 智能体人设文件）
 - `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
 - `bootstrap/openclaw/knowledge-rule-folders/*`（知识库 Rule 文件夹）
+
+下发策略（安装/更新）：
+- 增量覆盖（overlay）：覆盖同名文件、补齐缺失文件
+- 不会清理目标目录中的本机自建智能体与 skills
 
 不会同步到仓库：
 - 房间数据与房间封面（`data/rooms.json`、`data/room-covers/*`）

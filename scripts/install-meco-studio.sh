@@ -654,7 +654,8 @@ sync_skill_dir() {
   local src="$1"
   local dst="$2"
   mkdir -p "$dst"
-  rsync -a --delete --exclude '.DS_Store' --exclude 'node_modules' --exclude '.git' "$src"/ "$dst"/
+  # 增量覆盖：只覆盖同名文件并补齐缺失文件，不删除用户在本机新增的自定义内容
+  rsync -a --exclude '.DS_Store' --exclude 'node_modules' --exclude '.git' "$src"/ "$dst"/
 }
 
 merge_secret_json_preserve_existing() {

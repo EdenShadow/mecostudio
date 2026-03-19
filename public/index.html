@@ -470,6 +470,12 @@
         let atSkillFetchSeq = 0;
         let atAttachmentUploadDepth = 0;
         let atAttachPickerOpen = false;
+        let mecoUpdatePollTimer = null;
+        let mecoUpdateChecking = false;
+        let mecoUpdateOverlayVisible = false;
+        let mecoUpdateLastLogs = [];
+        let mecoUpdateLastTaskId = '';
+        let mecoUpdateLastFinishedTaskId = '';
 
         function getSkillToggleKey(agentId, skillName) {
             return `${agentId || ''}::${skillName || ''}`;
@@ -2368,6 +2374,192 @@
             return data;
         }
 
+        function showMecoUpdateToast(message, type = 'success') {
+            const toast = document.getElementById('meco-update-toast');
+            const textEl = document.getElementById('meco-update-toast-text');
+            if (!toast || !textEl) return;
+            textEl.textContent = String(message || '');
+            const isError = type === 'error';
+            toast.classList.remove('hidden', 'translate-y-[-8px]', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+            toast.classList.toggle('border-emerald-400/40', !isError);
+            toast.classList.toggle('bg-emerald-500/15', !isError);
+            toast.classList.toggle('text-emerald-200', !isError);
+            toast.classList.toggle('border-red-400/40', isError);
+            toast.classList.toggle('bg-red-500/15', isError);
+            toast.classList.toggle('text-red-200', isError);
+            window.setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-[-8px]', 'opacity-0');
+                window.setTimeout(() => toast.classList.add('hidden'), 180);
+            }, 2200);
+        }
+
+        function renderMecoUpdateLogs(logs) {
+            const logEl = document.getElementById('meco-update-logs');
+            if (!logEl) return;
+            const list = Array.isArray(logs) ? logs : [];
+            const text = list.map((item) => {
+                const ts = item && item.ts ? String(item.ts).slice(11, 19) : '--:--:--';
+                const level = item && item.level ? String(item.level).toUpperCase() : 'INFO';
+                const msg = item && item.text ? String(item.text) : '';
+                return `[${ts}] [${level}] ${msg}`;
+            }).join('\n');
+            logEl.textContent = text || 'Waiting for update logs...';
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function setMecoUpdateOverlay(visible, options = {}) {
+            const overlay = document.getElementById('meco-update-overlay');
+            if (!overlay) return;
+            const titleEl = document.getElementById('meco-update-overlay-title');
+            const descEl = document.getElementById('meco-update-overlay-desc');
+            const spinner = document.getElementById('meco-update-overlay-spinner');
+            if (!visible) {
+                overlay.classList.add('hidden');
+                mecoUpdateOverlayVisible = false;
+                return;
+            }
+            if (titleEl) titleEl.textContent = options.title || 'Updating Meco Studio...';
+            if (descEl) descEl.textContent = options.desc || 'Running update task and waiting for services to recover';
+            if (spinner) {
+                const failed = !!options.failed;
+                spinner.classList.toggle('border-red-400/30', failed);
+                spinner.classList.toggle('border-primary/20', !failed);
+            }
+            renderMecoUpdateLogs(options.logs || mecoUpdateLastLogs);
+            overlay.classList.remove('hidden');
+            mecoUpdateOverlayVisible = true;
+        }
+
+        function setMecoUpdateButton({ visible, label, disabled }) {
+            const btn = document.getElementById('meco-update-btn');
+            if (!btn) return;
+            if (!visible) {
+                btn.classList.add('hidden');
+                return;
+            }
+            btn.classList.remove('hidden');
+            btn.textContent = label || 'Update';
+            btn.disabled = !!disabled;
+            btn.classList.toggle('opacity-60', !!disabled);
+            btn.classList.toggle('cursor-not-allowed', !!disabled);
+        }
+
+        function applyMecoUpdateStatus(payload) {
+            const data = payload && typeof payload === 'object' ? payload : {};
+            const task = data.task && typeof data.task === 'object' ? data.task : {};
+            const logs = Array.isArray(task.logs) ? task.logs : [];
+            if (logs.length) mecoUpdateLastLogs = logs.slice(-240);
+            const remoteVersion = String(data.remoteVersion || task.targetVersion || '').trim();
+            const hasUpdate = !!data.hasUpdate;
+            const running = !!task.running;
+
+            if (running) {
+                mecoUpdateLastTaskId = String(task.taskId || mecoUpdateLastTaskId || '');
+                setMecoUpdateButton({ visible: true, label: `Updating ${task.targetVersion || remoteVersion || ''}`.trim(), disabled: true });
+                setMecoUpdateOverlay(true, {
+                    title: 'Updating Meco Studio...',
+                    desc: `Target ${task.targetVersion || remoteVersion || 'latest'} · please keep this page open`,
+                    logs: mecoUpdateLastLogs
+                });
+                return;
+            }
+
+            if (task.taskId && (task.status === 'succeeded' || task.status === 'failed') && mecoUpdateLastFinishedTaskId !== task.taskId) {
+                mecoUpdateLastFinishedTaskId = task.taskId;
+                if (task.status === 'succeeded') {
+                    showMecoUpdateToast(`更新成功，当前版本 ${task.localVersionAfter || data.remoteVersion || ''}`.trim(), 'success');
+                } else {
+                    showMecoUpdateToast(`更新失败: ${task.error || 'unknown error'}`, 'error');
+                }
+                setMecoUpdateOverlay(false);
+            }
+
+            if (hasUpdate && remoteVersion) {
+                setMecoUpdateButton({ visible: true, label: `Update ${remoteVersion}`, disabled: false });
+            } else {
+                setMecoUpdateButton({ visible: false, label: '', disabled: false });
+            }
+        }
+
+        function startMecoUpdatePolling() {
+            if (mecoUpdatePollTimer) return;
+            mecoUpdatePollTimer = window.setInterval(async () => {
+                try {
+                    const res = await fetch('/api/update/status?logLimit=240');
+                    const data = await readJsonResponse(res, 'update status failed');
+                    applyMecoUpdateStatus(data);
+                    if (!data.task || !data.task.running) {
+                        stopMecoUpdatePolling();
+                        checkMecoUpdateStatus({ force: true });
+                    }
+                } catch (_) {
+                    if (mecoUpdateOverlayVisible) {
+                        setMecoUpdateOverlay(true, {
+                            title: 'Updating Meco Studio...',
+                            desc: 'Service is restarting, waiting for reconnection...',
+                            logs: mecoUpdateLastLogs
+                        });
+                    }
+                }
+            }, 1500);
+        }
+
+        function stopMecoUpdatePolling() {
+            if (!mecoUpdatePollTimer) return;
+            clearInterval(mecoUpdatePollTimer);
+            mecoUpdatePollTimer = null;
+        }
+
+        async function checkMecoUpdateStatus(options = {}) {
+            if (mecoUpdateChecking) return;
+            mecoUpdateChecking = true;
+            try {
+                const force = options && options.force ? '&force=1' : '';
+                const res = await fetch(`/api/update/status?logLimit=240${force}`);
+                const data = await readJsonResponse(res, 'update status failed');
+                applyMecoUpdateStatus(data);
+                if (data.task && data.task.running) {
+                    startMecoUpdatePolling();
+                }
+            } catch (e) {
+                console.warn('Update status check failed', e);
+            } finally {
+                mecoUpdateChecking = false;
+            }
+        }
+
+        window.startMecoUpdateFlow = async function() {
+            try {
+                setMecoUpdateButton({ visible: true, label: 'Updating...', disabled: true });
+                setMecoUpdateOverlay(true, {
+                    title: 'Updating Meco Studio...',
+                    desc: 'Starting update worker...'
+                });
+
+                const res = await fetch('/api/update/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await readJsonResponse(res, 'start update failed');
+                if (!data.success) {
+                    const message = data.error || 'already latest';
+                    setMecoUpdateOverlay(false);
+                    showMecoUpdateToast(message, message.includes('latest') ? 'success' : 'error');
+                    await checkMecoUpdateStatus({ force: true });
+                    return;
+                }
+                applyMecoUpdateStatus(data);
+                startMecoUpdatePolling();
+            } catch (e) {
+                setMecoUpdateOverlay(false);
+                showMecoUpdateToast(`更新失败: ${e.message}`, 'error');
+                await checkMecoUpdateStatus({ force: true });
+            }
+        };
+
         function toggleProfileMenu() {
             const menu = document.getElementById('profile-dropdown');
             if (!menu) return;
@@ -2692,6 +2884,7 @@
                 }
 
                 await fetchAgentChannels();
+                checkMecoUpdateStatus();
                 
                 // Check hash for view
                 if (window.location.hash === '#playgen') {
@@ -6277,7 +6470,16 @@
                     }
                 }
             });
+            window.addEventListener('hashchange', () => {
+                checkMecoUpdateStatus();
+            });
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                    checkMecoUpdateStatus();
+                }
+            });
             refreshAgentToolsSoundAvailability();
+            checkMecoUpdateStatus({ force: true });
             fetchAgents();
         });
     </script>
@@ -6293,14 +6495,22 @@
         <button class="p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
             <span class="material-icons-outlined">menu</span>
         </button>
-        <div class="flex items-center gap-3 cursor-pointer group" onclick="switchView('dashboard')">
-            <div class="relative w-9 h-9">
-                <div class="absolute inset-0 bg-primary/40 blur-md rounded-xl group-hover:bg-primary/60 transition-colors"></div>
-                <div class="relative w-full h-full bg-gradient-to-br from-gray-800 to-black rounded-xl flex items-center justify-center border border-white/10 ring-1 ring-white/5">
-                    <span class="material-icons-round text-xl text-primary bg-clip-text">auto_awesome</span>
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 cursor-pointer group" onclick="switchView('dashboard')">
+                <div class="relative w-9 h-9">
+                    <div class="absolute inset-0 bg-primary/40 blur-md rounded-xl group-hover:bg-primary/60 transition-colors"></div>
+                    <div class="relative w-full h-full bg-gradient-to-br from-gray-800 to-black rounded-xl flex items-center justify-center border border-white/10 ring-1 ring-white/5">
+                        <span class="material-icons-round text-xl text-primary bg-clip-text">auto_awesome</span>
+                    </div>
                 </div>
+                <span class="text-lg font-bold tracking-wide text-white group-hover:text-primary transition-colors duration-300">Meco<span class="font-light text-gray-400">Studio</span></span>
             </div>
-            <span class="text-lg font-bold tracking-wide text-white group-hover:text-primary transition-colors duration-300">Meco<span class="font-light text-gray-400">Studio</span></span>
+            <button id="meco-update-btn"
+                    type="button"
+                    onclick="event.stopPropagation(); startMecoUpdateFlow();"
+                    class="hidden px-3 py-1.5 rounded-full border border-primary/40 bg-primary/15 text-primary text-xs font-semibold hover:bg-primary/25 transition-colors">
+                Update
+            </button>
         </div>
     </div>
     <div class="hidden md:flex flex-1 max-w-lg mx-8">
@@ -7002,6 +7212,24 @@
 <div id="agenttools-refresh-toast"
      class="hidden fixed top-6 right-6 z-[70] px-4 py-2 rounded-xl border backdrop-blur-md shadow-xl transition-all duration-200 translate-y-[-8px] opacity-0">
     <span id="agenttools-refresh-toast-text" class="text-sm font-medium">-</span>
+</div>
+
+<!-- Meco Update Toast -->
+<div id="meco-update-toast"
+     class="hidden fixed top-6 right-6 z-[82] px-4 py-2 rounded-xl border backdrop-blur-md shadow-xl transition-all duration-200 translate-y-[-8px] opacity-0">
+    <span id="meco-update-toast-text" class="text-sm font-medium">-</span>
+</div>
+
+<!-- Meco Update Overlay -->
+<div id="meco-update-overlay" class="fixed inset-0 z-[81] hidden bg-black/92 backdrop-blur-lg flex flex-col items-center justify-center px-6">
+    <div id="meco-update-overlay-spinner" class="relative w-20 h-20 mb-6">
+        <div class="absolute inset-0 rounded-full border-4 border-primary/20"></div>
+        <div class="absolute inset-0 rounded-full border-4 border-t-primary animate-spin"></div>
+        <div class="absolute inset-0 rounded-full border-4 border-b-primary/40 animate-spin" style="animation-direction: reverse; animation-duration: 1.4s;"></div>
+    </div>
+    <h3 id="meco-update-overlay-title" class="text-2xl font-bold text-white mb-2">Updating Meco Studio...</h3>
+    <p id="meco-update-overlay-desc" class="text-sm text-gray-400 mb-5 text-center">Running update workflow. Services may restart temporarily.</p>
+    <pre id="meco-update-logs" class="w-full max-w-5xl h-[38vh] overflow-auto rounded-2xl border border-white/10 bg-black/45 text-[11px] leading-5 text-gray-200 p-4 shadow-2xl">Waiting for update logs...</pre>
 </div>
 
 <!-- Loading Overlay -->

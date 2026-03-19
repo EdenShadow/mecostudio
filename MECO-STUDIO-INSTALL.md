@@ -25,6 +25,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 运行权限预检脚本（目录读写 + 网络连通 + OpenClaw 可用性）
 - 安装 npm 依赖
 - 同步 bootstrap agents/skills/knowledge-rule-folders（幂等，不重复注册）
+- 同步策略为增量覆盖：仅覆盖同名文件 + 新增缺失文件，不删除本机自建智能体/skills/知识库目录
 - 自动安装 skills 依赖：
   - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
   - Node：自动扫描 OpenClaw/config skills 的 `package.json` 并安装
@@ -43,6 +44,10 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `bootstrap/openclaw/workspaces/*`（OpenClaw workspace 人设文件）
 - `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
 - `bootstrap/openclaw/knowledge-rule-folders/*`（知识库 Rule 文件夹）
+
+同步行为：
+- 增量覆盖（overlay），不会清理目标目录里用户自行新增的文件/文件夹
+- 不会删除本机已存在但不在仓库 bootstrap 中的 OpenClaw 智能体与 skills
 
 不会同步：
 - `data/rooms.json`

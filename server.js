@@ -2743,6 +2743,351 @@ function generateChannelId() {
   return id;
 }
 
+const UPDATE_STATE_DIR = path.join(os.homedir(), '.meco-studio');
+const UPDATE_STATE_PATH = path.join(UPDATE_STATE_DIR, 'update-state.json');
+const UPDATE_REMOTE_VERSION_URL = process.env.MECO_UPDATE_VERSION_URL || 'https://raw.githubusercontent.com/EdenShadow/mecostudio/main/VERSION';
+const UPDATE_REMOTE_CACHE_TTL_MS = 30000;
+const UPDATE_DEFAULT_LOG_LIMIT = 240;
+const UPDATE_MAX_LOG_LINES = 2000;
+const updateVersionCache = {
+  checkedAt: 0,
+  remoteVersion: '',
+  error: '',
+  pending: null
+};
+
+function normalizeVersionString(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  const firstLine = text.split(/\r?\n/)[0] || '';
+  return firstLine.trim();
+}
+
+function parseVersionParts(version) {
+  const value = normalizeVersionString(version);
+  const match = value.match(/^(\d+)\.(\d+)\.(\d+)(?:[-+.]([0-9A-Za-z.-]+))?$/);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    suffix: String(match[4] || '')
+  };
+}
+
+function compareVersions(a, b) {
+  const aParsed = parseVersionParts(a);
+  const bParsed = parseVersionParts(b);
+  if (!aParsed || !bParsed) {
+    const aText = normalizeVersionString(a);
+    const bText = normalizeVersionString(b);
+    if (aText === bText) return 0;
+    return aText > bText ? 1 : -1;
+  }
+  if (aParsed.major !== bParsed.major) return aParsed.major > bParsed.major ? 1 : -1;
+  if (aParsed.minor !== bParsed.minor) return aParsed.minor > bParsed.minor ? 1 : -1;
+  if (aParsed.patch !== bParsed.patch) return aParsed.patch > bParsed.patch ? 1 : -1;
+  if (aParsed.suffix === bParsed.suffix) return 0;
+  if (!aParsed.suffix) return 1;
+  if (!bParsed.suffix) return -1;
+  return aParsed.suffix > bParsed.suffix ? 1 : -1;
+}
+
+function readLocalVersionInfo() {
+  const candidates = [
+    path.join(__dirname, 'VERSION'),
+    path.join(UPDATE_STATE_DIR, 'VERSION')
+  ];
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const value = normalizeVersionString(fs.readFileSync(filePath, 'utf-8'));
+      if (!value) continue;
+      return { version: value, file: filePath };
+    } catch (_) {}
+  }
+  return { version: '0.0.0', file: '' };
+}
+
+async function fetchRemoteVersionInfo({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && updateVersionCache.checkedAt && now - updateVersionCache.checkedAt < UPDATE_REMOTE_CACHE_TTL_MS) {
+    return {
+      remoteVersion: updateVersionCache.remoteVersion,
+      error: updateVersionCache.error,
+      checkedAt: updateVersionCache.checkedAt,
+      url: UPDATE_REMOTE_VERSION_URL
+    };
+  }
+
+  if (updateVersionCache.pending) {
+    return updateVersionCache.pending;
+  }
+
+  updateVersionCache.pending = (async () => {
+    let remoteVersion = '';
+    let error = '';
+    try {
+      const res = await fetch(UPDATE_REMOTE_VERSION_URL, {
+        method: 'GET',
+        headers: { 'Cache-Control': 'no-cache' }
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const text = await res.text();
+      remoteVersion = normalizeVersionString(text);
+      if (!remoteVersion) {
+        throw new Error('empty remote VERSION');
+      }
+    } catch (e) {
+      error = e && e.message ? String(e.message) : 'remote VERSION fetch failed';
+    }
+
+    updateVersionCache.remoteVersion = remoteVersion;
+    updateVersionCache.error = error;
+    updateVersionCache.checkedAt = Date.now();
+    const result = {
+      remoteVersion,
+      error,
+      checkedAt: updateVersionCache.checkedAt,
+      url: UPDATE_REMOTE_VERSION_URL
+    };
+    updateVersionCache.pending = null;
+    return result;
+  })();
+
+  return updateVersionCache.pending;
+}
+
+function baseUpdateTaskState() {
+  return {
+    taskId: '',
+    status: 'idle',
+    phase: '',
+    startedAt: '',
+    finishedAt: '',
+    localVersionBefore: '',
+    localVersionAfter: '',
+    targetVersion: '',
+    remoteVersion: '',
+    workerPid: 0,
+    error: '',
+    logs: []
+  };
+}
+
+function readUpdateTaskState() {
+  const base = baseUpdateTaskState();
+  try {
+    if (!fs.existsSync(UPDATE_STATE_PATH)) return base;
+    const raw = JSON.parse(fs.readFileSync(UPDATE_STATE_PATH, 'utf-8'));
+    if (!raw || typeof raw !== 'object') return base;
+    const next = { ...base, ...raw };
+    if (!Array.isArray(next.logs)) next.logs = [];
+    next.logs = next.logs.slice(-UPDATE_MAX_LOG_LINES);
+    return next;
+  } catch (e) {
+    console.warn(`[Update] failed to read ${UPDATE_STATE_PATH}: ${e.message}`);
+    return base;
+  }
+}
+
+function writeUpdateTaskState(partial = {}) {
+  const current = readUpdateTaskState();
+  const merged = { ...current, ...partial };
+  if (!Array.isArray(merged.logs)) merged.logs = [];
+  merged.logs = merged.logs.slice(-UPDATE_MAX_LOG_LINES);
+  try {
+    fs.mkdirSync(UPDATE_STATE_DIR, { recursive: true });
+    fs.writeFileSync(UPDATE_STATE_PATH, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+  } catch (e) {
+    console.warn(`[Update] failed to write ${UPDATE_STATE_PATH}: ${e.message}`);
+  }
+  return merged;
+}
+
+function buildUpdateTaskPublicState(taskState, logLimit = UPDATE_DEFAULT_LOG_LIMIT) {
+  const state = taskState && typeof taskState === 'object' ? taskState : baseUpdateTaskState();
+  const limit = Number.isFinite(Number(logLimit)) ? Math.max(0, Math.min(1000, Number(logLimit))) : UPDATE_DEFAULT_LOG_LIMIT;
+  const logs = Array.isArray(state.logs) ? state.logs.slice(-limit) : [];
+  const running = state.status === 'running' || state.status === 'starting';
+  return {
+    taskId: state.taskId || '',
+    status: state.status || 'idle',
+    running,
+    phase: state.phase || '',
+    startedAt: state.startedAt || '',
+    finishedAt: state.finishedAt || '',
+    localVersionBefore: state.localVersionBefore || '',
+    localVersionAfter: state.localVersionAfter || '',
+    targetVersion: state.targetVersion || '',
+    remoteVersion: state.remoteVersion || '',
+    workerPid: Number(state.workerPid) || 0,
+    error: state.error || '',
+    logs
+  };
+}
+
+function isUpdateTaskRunning(taskState) {
+  const status = String(taskState?.status || '');
+  return status === 'starting' || status === 'running';
+}
+
+function startDetachedUpdateWorker({ taskId, localVersion, targetVersion, remoteVersionUrl }) {
+  const workerPath = path.join(__dirname, 'scripts', 'run-update-worker.js');
+  if (!fs.existsSync(workerPath)) {
+    throw new Error(`update worker script not found: ${workerPath}`);
+  }
+  const runtime = getRuntimeSettings();
+  const kimiCommand = 'kimi';
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [workerPath], {
+    cwd: __dirname,
+    detached: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      MECO_UPDATE_TASK_ID: String(taskId || ''),
+      MECO_UPDATE_STATE_PATH: UPDATE_STATE_PATH,
+      MECO_UPDATE_REPO_DIR: __dirname,
+      MECO_UPDATE_LOCAL_VERSION: String(localVersion || ''),
+      MECO_UPDATE_TARGET_VERSION: String(targetVersion || ''),
+      MECO_UPDATE_REMOTE_VERSION_URL: String(remoteVersionUrl || UPDATE_REMOTE_VERSION_URL),
+      MECO_UPDATE_KIMI_CMD: String(kimiCommand || runtime.kimiCliCommand || 'kimi')
+    }
+  });
+  child.unref();
+  return child.pid;
+}
+
+// Update API (version check + detached update runner)
+app.get('/api/update/status', async (req, res) => {
+  try {
+    const force = String(req.query?.force || '') === '1' || String(req.query?.force || '').toLowerCase() === 'true';
+    const logLimit = Number(req.query?.logLimit || UPDATE_DEFAULT_LOG_LIMIT);
+    const local = readLocalVersionInfo();
+    const remote = await fetchRemoteVersionInfo({ force });
+    const taskState = readUpdateTaskState();
+    const hasUpdate = !!(remote.remoteVersion && compareVersions(local.version, remote.remoteVersion) < 0);
+
+    res.json({
+      success: true,
+      localVersion: local.version,
+      localVersionFile: local.file || '',
+      remoteVersion: remote.remoteVersion || '',
+      remoteVersionUrl: remote.url || UPDATE_REMOTE_VERSION_URL,
+      remoteCheckedAt: remote.checkedAt || 0,
+      checkError: remote.error || '',
+      hasUpdate,
+      task: buildUpdateTaskPublicState(taskState, logLimit)
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || 'update status failed' });
+  }
+});
+
+app.post('/api/update/start', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const forceStart = !!body.force;
+    const currentTaskState = readUpdateTaskState();
+    if (isUpdateTaskRunning(currentTaskState)) {
+      return res.status(409).json({
+        success: false,
+        error: 'update already running',
+        task: buildUpdateTaskPublicState(currentTaskState)
+      });
+    }
+
+    const local = readLocalVersionInfo();
+    const remote = await fetchRemoteVersionInfo({ force: true });
+    const targetVersion = normalizeVersionString(body.targetVersion || remote.remoteVersion);
+    const hasUpdate = !!(targetVersion && compareVersions(local.version, targetVersion) < 0);
+
+    if (!forceStart && !hasUpdate) {
+      return res.status(200).json({
+        success: false,
+        error: remote.error || 'already latest',
+        localVersion: local.version,
+        remoteVersion: targetVersion || '',
+        hasUpdate: false,
+        task: buildUpdateTaskPublicState(currentTaskState)
+      });
+    }
+
+    const taskId = `upd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const startTime = new Date().toISOString();
+    const nextState = writeUpdateTaskState({
+      taskId,
+      status: 'starting',
+      phase: 'queued',
+      startedAt: startTime,
+      finishedAt: '',
+      localVersionBefore: local.version || '',
+      localVersionAfter: '',
+      targetVersion: targetVersion || '',
+      remoteVersion: remote.remoteVersion || targetVersion || '',
+      workerPid: 0,
+      error: '',
+      logs: [
+        {
+          ts: startTime,
+          level: 'info',
+          text: `Update queued: local=${local.version || 'unknown'}, target=${targetVersion || 'unknown'}`
+        }
+      ]
+    });
+
+    let workerPid = 0;
+    try {
+      workerPid = startDetachedUpdateWorker({
+        taskId,
+        localVersion: local.version || '',
+        targetVersion: targetVersion || '',
+        remoteVersionUrl: remote.url || UPDATE_REMOTE_VERSION_URL
+      });
+      writeUpdateTaskState({
+        taskId,
+        status: 'running',
+        phase: 'worker_started',
+        workerPid
+      });
+    } catch (workerErr) {
+      const failed = writeUpdateTaskState({
+        taskId,
+        status: 'failed',
+        phase: 'worker_failed',
+        finishedAt: new Date().toISOString(),
+        error: workerErr.message || 'failed to start update worker',
+        logs: [
+          ...(Array.isArray(nextState.logs) ? nextState.logs : []),
+          {
+            ts: new Date().toISOString(),
+            level: 'error',
+            text: `Failed to launch update worker: ${workerErr.message || 'unknown error'}`
+          }
+        ]
+      });
+      return res.status(500).json({
+        success: false,
+        error: failed.error || 'failed to launch update worker',
+        task: buildUpdateTaskPublicState(failed)
+      });
+    }
+
+    const running = readUpdateTaskState();
+    return res.json({
+      success: true,
+      task: buildUpdateTaskPublicState(running),
+      localVersion: local.version,
+      remoteVersion: targetVersion || ''
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message || 'update start failed' });
+  }
+});
+
 // App Settings API (keys + integration installers)
 app.get('/api/settings', (req, res) => {
   try {
