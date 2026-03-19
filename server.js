@@ -938,6 +938,15 @@ function scanLocalAgents() {
                 } catch(e) {}
             }
 
+            const extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+            let localAvatarUrl = null;
+            for (const ext of extensions) {
+              if (fs.existsSync(path.join(agentPath, `avatar${ext}`))) {
+                localAvatarUrl = `/api/local-agents/${agentId}/avatar`;
+                break;
+              }
+            }
+
             localAgents[agentId] = {
               id: agentId,
               name: meta.displayName || agentId,
@@ -945,7 +954,7 @@ function scanLocalAgents() {
               emoji: '👤',
               description: description,
               systemPrompt: systemPrompt,
-              avatarUrl: `/api/local-agents/${agentId}/avatar`,
+              avatarUrl: localAvatarUrl,
               videoUrl: fs.existsSync(path.join(agentPath, 'video.mp4')) ? `/api/local-agents/${agentId}/video` : null,
               voiceId: voiceId, // Load Voice ID from voice.json
               voiceUrl: fs.existsSync(path.join(agentPath, 'voice.mp3')) ? `/api/local-agents/${agentId}/voice` : null, // Add voice.mp3 route

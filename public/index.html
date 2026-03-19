@@ -1217,6 +1217,29 @@
             return allAgents.find((a) => a && a.id === agentId) || null;
         }
 
+        function isRenderableAvatarUrl(url) {
+            return typeof url === 'string'
+                && !!url.trim()
+                && !url.includes('googleusercontent.com');
+        }
+
+        function resolveAgentVisualIdentity(agentId, fallbackName = 'Agent', preferredAvatarUrl = '') {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            const agent = id ? getAgentById(id) : null;
+            const displayName = (agent && (agent.displayName || agent.name))
+                ? String(agent.displayName || agent.name)
+                : String(fallbackName || id || 'Agent');
+            const avatarUrl = isRenderableAvatarUrl(preferredAvatarUrl)
+                ? preferredAvatarUrl.trim()
+                : (isRenderableAvatarUrl(agent && agent.avatarUrl) ? String(agent.avatarUrl).trim() : '');
+            return {
+                agentId: id,
+                displayName: displayName || 'Agent',
+                avatarUrl,
+                hasCustomAvatar: !!avatarUrl
+            };
+        }
+
         function getChannelById(channelId) {
             return atChannels.find((c) => c && c.id === channelId) || null;
         }
@@ -1818,13 +1841,11 @@
                     || (member && (member.name || member.id))
                     || memberId
                     || 'Agent';
-                const avatarUrl = (agent && typeof agent.avatarUrl === 'string' && agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com'))
-                    ? agent.avatarUrl
-                    : '';
+                const visual = resolveAgentVisualIdentity(memberId, displayName);
                 return {
                     id: memberId || '',
-                    name: displayName,
-                    avatarUrl
+                    name: visual.displayName || displayName,
+                    avatarUrl: visual.avatarUrl
                 };
             });
         }
@@ -1842,12 +1863,14 @@
                 img.onerror = () => {
                     img.remove();
                     holder.className = `${sizeClass} ${roundedClass} overflow-hidden shrink-0 border border-white/10 ${getRandomColor(name)} text-white font-semibold ${textClass} flex items-center justify-center`;
+                    holder.style.backgroundColor = getAvatarColorHex(name);
                     holder.textContent = name.charAt(0).toUpperCase();
                 };
                 holder.appendChild(img);
                 return holder;
             }
             holder.className = `${sizeClass} ${roundedClass} overflow-hidden shrink-0 border border-white/10 ${getRandomColor(name)} text-white font-semibold ${textClass} flex items-center justify-center`;
+            holder.style.backgroundColor = getAvatarColorHex(name);
             holder.textContent = name.charAt(0).toUpperCase();
             return holder;
         }
@@ -2068,13 +2091,13 @@
                 container.style.boxShadow = '';
                 container.style.background = '';
             }
-            const activeAgent = currentAgentToolId ? getAgentById(currentAgentToolId) : null;
-            const activeName = (activeAgent && (activeAgent.displayName || activeAgent.name))
-                ? (activeAgent.displayName || activeAgent.name)
-                : 'Agent';
-            const activeAvatarUrl = (activeAgent && typeof activeAgent.avatarUrl === 'string' && activeAgent.avatarUrl && !activeAgent.avatarUrl.includes('googleusercontent.com'))
-                ? activeAgent.avatarUrl
-                : (currentAgentAvatarUrl || '');
+            const activeVisual = resolveAgentVisualIdentity(
+                currentAgentToolId || '',
+                'Agent',
+                ''
+            );
+            const activeName = activeVisual.displayName || 'Agent';
+            const activeAvatarUrl = activeVisual.avatarUrl || '';
             if (avatarImg && activeAvatarUrl) {
                 avatarImg.src = activeAvatarUrl;
                 avatarImg.style.display = 'block';
@@ -2085,6 +2108,7 @@
                     if (avatarPlaceholder) {
                         const colorClass = getRandomColor(activeName);
                         avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                        avatarPlaceholder.style.backgroundColor = getAvatarColorHex(activeName);
                         avatarPlaceholder.innerText = activeName.charAt(0).toUpperCase();
                         avatarPlaceholder.style.display = 'flex';
                     }
@@ -2100,9 +2124,11 @@
                 if (avatarPlaceholder) {
                     const colorClass = getRandomColor(activeName);
                     avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                    avatarPlaceholder.style.backgroundColor = getAvatarColorHex(activeName);
                     avatarPlaceholder.innerText = activeName.charAt(0).toUpperCase();
                     avatarPlaceholder.style.display = 'flex';
                 }
+                currentAgentAvatarUrl = null;
             }
             if (avatarOverlay) avatarOverlay.style.display = '';
             if (channelBanner) channelBanner.classList.add('hidden');
@@ -2724,12 +2750,30 @@
             return colors[Math.abs(hash) % colors.length];
         }
 
+        function getAvatarColorHex(name) {
+            const colors = [
+                '#dc2626', '#ea580c', '#d97706',
+                '#ca8a04', '#65a30d', '#16a34a',
+                '#059669', '#0d9488', '#0891b2',
+                '#0284c7', '#2563eb', '#4f46e5',
+                '#7c3aed', '#9333ea', '#c026d3',
+                '#db2777', '#e11d48'
+            ];
+            const source = String(name || 'A');
+            let hash = 0;
+            for (let i = 0; i < source.length; i++) {
+                hash = source.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            return colors[Math.abs(hash) % colors.length];
+        }
+
         window.handleAvatarError = function(img, name) {
             const colorClass = getRandomColor(name || 'A');
             const initial = (name || 'A').charAt(0).toUpperCase();
             
             const div = document.createElement('div');
             div.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-6xl font-bold shadow-inner group-hover:scale-110 transition-transform duration-700 ease-out`;
+            div.style.backgroundColor = getAvatarColorHex(name || 'A');
             div.innerText = initial;
             
             if (img && img.parentNode) {
@@ -2743,6 +2787,7 @@
             
             const div = document.createElement('div');
             div.className = `w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100`;
+            div.style.backgroundColor = getAvatarColorHex(name || 'A');
             div.innerText = initial;
             
             if (img && img.parentNode) {
@@ -2777,7 +2822,7 @@
             const orderedAgents = sortAgentsMainFirst(agents);
             orderedAgents.forEach(agent => {
                 const displayName = agent.displayName || agent.name;
-                const hasCustomAvatar = agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com');
+                const visual = resolveAgentVisualIdentity(agent.id, displayName, agent.avatarUrl || '');
                 
                 // Render Card
                 const card = document.createElement('div');
@@ -2793,17 +2838,18 @@
                 };
                 
                 let avatarHtml;
-                if (hasCustomAvatar) {
+                if (visual.hasCustomAvatar) {
                     avatarHtml = `
                         <img alt="${displayName}" class="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out" 
-                             src="${agent.avatarUrl}" 
+                             src="${visual.avatarUrl}" 
                              onerror="handleAvatarError(this, '${displayName}')">
                     `;
                 } else {
                     const colorClass = getRandomColor(displayName);
+                    const colorHex = getAvatarColorHex(displayName);
                     const initial = displayName.charAt(0).toUpperCase();
                     avatarHtml = `
-                        <div class="w-full h-full flex items-center justify-center ${colorClass} text-white text-6xl font-bold shadow-inner group-hover:scale-110 transition-transform duration-700 ease-out">
+                        <div class="w-full h-full flex items-center justify-center ${colorClass} text-white text-6xl font-bold shadow-inner group-hover:scale-110 transition-transform duration-700 ease-out" style="background-color:${colorHex}">
                             ${initial}
                         </div>
                     `;
@@ -2856,17 +2902,18 @@
 
                 // Render Sidebar Item
                 let sidebarAvatarHtml;
-                if (hasCustomAvatar) {
+                if (visual.hasCustomAvatar) {
                     sidebarAvatarHtml = `
                         <img alt="${displayName}" class="w-8 h-8 rounded-full object-cover ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100" 
-                             src="${agent.avatarUrl}" 
+                             src="${visual.avatarUrl}" 
                              onerror="handleSidebarAvatarError(this, '${displayName}')">
                     `;
                 } else {
                     const colorClass = getRandomColor(displayName);
+                    const colorHex = getAvatarColorHex(displayName);
                     const initial = displayName.charAt(0).toUpperCase();
                     sidebarAvatarHtml = `
-                        <div class="w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100">
+                        <div class="w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100" style="background-color:${colorHex}">
                             ${initial}
                         </div>
                     `;
@@ -2960,7 +3007,7 @@
 
             allAgents.forEach(agent => {
                 const displayName = agent.displayName || agent.name;
-                const hasCustomAvatar = agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com');
+                const visual = resolveAgentVisualIdentity(agent.id, displayName, agent.avatarUrl || '');
                 const voiceId = agent.voiceId || 'jobs_voice_20260115_v3';
 
                 const card = document.createElement('div');
@@ -2973,17 +3020,18 @@
                 };
 
                 let avatarHtml;
-                if (hasCustomAvatar) {
+                if (visual.hasCustomAvatar) {
                     avatarHtml = `
                         <img alt="${displayName}" class="w-12 h-12 rounded-full object-cover ring-2 ring-transparent group-hover:ring-primary/50 transition-all" 
-                             src="${agent.avatarUrl}" 
+                             src="${visual.avatarUrl}" 
                              onerror="handleSidebarAvatarError(this, '${displayName}')">
                     `;
                 } else {
                     const colorClass = getRandomColor(displayName);
+                    const colorHex = getAvatarColorHex(displayName);
                     const initial = displayName.charAt(0).toUpperCase();
                     avatarHtml = `
-                        <div class="w-12 h-12 rounded-full flex items-center justify-center ${colorClass} text-white text-lg font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all">
+                        <div class="w-12 h-12 rounded-full flex items-center justify-center ${colorClass} text-white text-lg font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all" style="background-color:${colorHex}">
                             ${initial}
                         </div>
                     `;
@@ -3413,6 +3461,7 @@
             const state = getAgentChatState(agentId);
             const isImmersiveSingleMode = () => !currentChannelId && !!atSingleChatImmersive;
             const applyAgentToolsLetterAvatar = (displayName) => {
+                const visual = resolveAgentVisualIdentity(agentId, displayName);
                 if (isImmersiveSingleMode()) {
                     if (avatarImg) {
                         avatarImg.style.display = 'none';
@@ -3422,10 +3471,10 @@
                     if (avatarPlaceholder) {
                         avatarPlaceholder.style.display = 'none';
                     }
-                    currentAgentAvatarUrl = null;
+                    currentAgentAvatarUrl = visual.avatarUrl || null;
                     return;
                 }
-                const name = (displayName && String(displayName).trim()) ? String(displayName).trim() : 'Agent';
+                const name = visual.displayName || ((displayName && String(displayName).trim()) ? String(displayName).trim() : 'Agent');
                 if (avatarImg) {
                     avatarImg.style.display = 'none';
                     avatarImg.removeAttribute('src');
@@ -3435,6 +3484,7 @@
                     const colorClass = getRandomColor(name);
                     const initial = name.charAt(0).toUpperCase();
                     avatarPlaceholder.className = `w-full h-full flex items-center justify-center ${colorClass} text-white text-9xl font-bold shadow-inner`;
+                    avatarPlaceholder.style.backgroundColor = getAvatarColorHex(name);
                     avatarPlaceholder.innerText = initial;
                     avatarPlaceholder.style.display = 'flex';
                 }
@@ -3443,7 +3493,8 @@
 
             const applyAgentToolsAvatar = (avatarUrl, displayName) => {
                 if (!avatarImg) return;
-                const safeUrl = (avatarUrl && typeof avatarUrl === 'string') ? avatarUrl : '';
+                const visual = resolveAgentVisualIdentity(agentId, displayName, avatarUrl || '');
+                const safeUrl = visual.avatarUrl || '';
                 if (isImmersiveSingleMode()) {
                     avatarImg.style.display = 'none';
                     avatarImg.removeAttribute('src');
@@ -3469,15 +3520,10 @@
             // Optimistic UI update from cache
             const cachedAgent = allAgents.find(a => a.id === agentId);
             if (cachedAgent) {
-                const hasCustom = cachedAgent.avatarUrl && !cachedAgent.avatarUrl.includes('googleusercontent.com');
-                if (hasCustom) {
-                    applyAgentToolsAvatar(cachedAgent.avatarUrl, cachedAgent.displayName || cachedAgent.name || 'Agent');
-                } else {
-                    applyAgentToolsLetterAvatar(cachedAgent.displayName || cachedAgent.name || 'Agent');
-                }
+                applyAgentToolsAvatar(cachedAgent.avatarUrl || '', cachedAgent.displayName || cachedAgent.name || 'Agent');
             } else {
                 // Fallback reset
-                applyAgentToolsLetterAvatar('Agent');
+                applyAgentToolsAvatar('', 'Agent');
             }
             
             const promptEl = document.getElementById('at-system-prompt');
@@ -3508,11 +3554,7 @@
                 
                 if (promptEl) promptEl.value = agent.systemPrompt || agent.prompt || 'No system prompt defined.';
                 
-                if (agent.avatarUrl && !agent.avatarUrl.includes('googleusercontent.com')) {
-                    applyAgentToolsAvatar(agent.avatarUrl, agent.displayName || agent.name || 'Agent');
-                } else {
-                    applyAgentToolsLetterAvatar(agent.displayName || agent.name || 'Agent');
-                }
+                applyAgentToolsAvatar(agent.avatarUrl || '', agent.displayName || agent.name || 'Agent');
                 
                 refreshAgentSkills();
                 
@@ -4849,13 +4891,20 @@
                     </div>`;
             } else {
                  const messageAvatarUrl = (typeof options.avatarUrl === 'string' && options.avatarUrl.trim()) ? options.avatarUrl.trim() : '';
-                 const assistantAvatarUrl = messageAvatarUrl || currentAgentAvatarUrl || '';
+                 const hintedName = (typeof options.senderName === 'string' && options.senderName.trim())
+                    ? options.senderName.trim()
+                    : (currentAgentToolId || 'Agent');
+                 const visual = resolveAgentVisualIdentity(currentAgentToolId || '', hintedName, messageAvatarUrl || currentAgentAvatarUrl || '');
+                 const assistantAvatarUrl = visual.avatarUrl || '';
                  if (assistantAvatarUrl) {
-                     avatarHtml = `<img src="${assistantAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent group-hover:ring-primary/20 transition-all">`;
+                     avatarHtml = `<img src="${assistantAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent group-hover:ring-primary/20 transition-all" onerror="handleSidebarAvatarError(this, '${escapeHtml(visual.displayName || hintedName)}')">`;
                  } else {
+                     const fallbackName = visual.displayName || hintedName || 'A';
+                     const colorClass = getRandomColor(fallbackName);
+                     const colorHex = getAvatarColorHex(fallbackName);
                      avatarHtml = `
-                        <div class="w-10 h-10 rounded-full bg-primary/20 flex-shrink-0 flex items-center justify-center text-primary text-xs border border-primary/20 shadow-neon ring-2 ring-transparent group-hover:ring-primary/20 transition-all">
-                            <span class="material-icons-round text-lg">smart_toy</span>
+                        <div class="w-10 h-10 rounded-full ${colorClass} flex-shrink-0 flex items-center justify-center text-white text-xs font-bold border border-white/10 shadow-lg ring-2 ring-transparent group-hover:ring-primary/20 transition-all" style="background-color:${colorHex}">
+                            ${(fallbackName.charAt(0) || 'A').toUpperCase()}
                         </div>`;
                  }
             }
@@ -5140,12 +5189,16 @@
              // ... avatar code ...
              
              let avatarHtml = '';
-             if (currentAgentAvatarUrl) {
-                 avatarHtml = `<img src="${currentAgentAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent transition-all opacity-80">`;
+             const loadingVisual = resolveAgentVisualIdentity(currentAgentToolId || '', 'Agent', currentAgentAvatarUrl || '');
+             if (loadingVisual.avatarUrl) {
+                 avatarHtml = `<img src="${loadingVisual.avatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent transition-all opacity-80" onerror="handleSidebarAvatarError(this, '${escapeHtml(loadingVisual.displayName || 'Agent')}')">`;
              } else {
+                 const fallbackName = loadingVisual.displayName || 'Agent';
+                 const colorClass = getRandomColor(fallbackName);
+                 const colorHex = getAvatarColorHex(fallbackName);
                  avatarHtml = `
-                    <div class="w-10 h-10 rounded-full bg-primary/20 flex-shrink-0 flex items-center justify-center text-primary text-xs border border-primary/20 shadow-neon ring-2 ring-transparent transition-all opacity-80">
-                        <span class="material-icons-round text-lg">smart_toy</span>
+                    <div class="w-10 h-10 rounded-full ${colorClass} flex-shrink-0 flex items-center justify-center text-white text-xs font-bold border border-white/10 shadow-lg ring-2 ring-transparent transition-all opacity-80" style="background-color:${colorHex}">
+                        ${(fallbackName.charAt(0) || 'A').toUpperCase()}
                     </div>`;
              }
              
