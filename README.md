@@ -69,6 +69,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 ## 📏 提交铁律与版本号
 
 - 规则文件：`GITHUB-SYNC-RULES.md`
+- 上传策略铁律：`GITHUB-UPLOAD-RULES.md`
 - 统一版本文件：`VERSION`（默认 `0.0.1`）
 - 本机同步版本文件：`~/.meco-studio/VERSION`
 - 推荐提交前执行：

@@ -50,6 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 ## 提交铁律与版本号
 
 - 规则文档：`GITHUB-SYNC-RULES.md`
+- 上传策略文档：`GITHUB-UPLOAD-RULES.md`
 - 仓库统一版本文件：`VERSION`（默认 `0.0.1`）
 - 本机版本文件：`~/.meco-studio/VERSION`
 - 提交前建议执行：`bash scripts/sync-bootstrap-and-version.sh`
