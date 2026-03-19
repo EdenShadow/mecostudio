@@ -9,6 +9,7 @@
 - `bootstrap/openclaw/data-agents/*`（Meco Studio 本地智能体资产）
 - `bootstrap/openclaw/workspaces/*`（OpenClaw workspace 人设）
 - `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
+- `bootstrap/openclaw/knowledge-rule-folders/*`（Rule 模式知识库文件夹）
 
 ## 2) 禁止同步的运行态数据
 

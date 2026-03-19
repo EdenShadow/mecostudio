@@ -23,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 安装 Whisper（`python3 -m pip install --user --upgrade openai-whisper`）
 - 拉取或更新仓库至 `~/meco-studio`
 - 安装 npm 依赖
-- 同步 bootstrap agents/skills（幂等，不重复注册）
+- 同步 bootstrap agents/skills/knowledge-rule-folders（幂等，不重复注册）
 - 自动安装 skills 依赖：
   - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
   - Node：自动扫描 OpenClaw/config skills 的 `package.json` 并安装
@@ -41,6 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `bootstrap/openclaw/data-agents/*`（Meco Studio 智能体资产）
 - `bootstrap/openclaw/workspaces/*`（OpenClaw workspace 人设文件）
 - `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
+- `bootstrap/openclaw/knowledge-rule-folders/*`（知识库 Rule 文件夹）
 
 不会同步：
 - `data/rooms.json`
@@ -157,6 +158,7 @@ bash scripts/build-bootstrap-package.sh
 - `~/.openclaw/workspace-*`
 - `~/.openclaw/agents/*/agent`
 - `./data/agents`
+- `~/Meco Studio/public/uploads/knowledge-rule-folders`
 
 定向打包：
 

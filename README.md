@@ -61,6 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `bootstrap/openclaw/data-agents/*`（Meco Studio 智能体本地资产）
 - `bootstrap/openclaw/workspaces/*`（OpenClaw 智能体人设文件）
 - `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
+- `bootstrap/openclaw/knowledge-rule-folders/*`（知识库 Rule 文件夹）
 
 不会同步到仓库：
 - 房间数据与房间封面（`data/rooms.json`、`data/room-covers/*`）
@@ -218,6 +219,7 @@ bash scripts/build-bootstrap-package.sh
 - `~/.openclaw/workspace-*`
 - `~/.openclaw/agents/*/agent`
 - `./data/agents`
+- `~/Meco Studio/public/uploads/knowledge-rule-folders`
 
 然后写回 `bootstrap/openclaw/`，提交到 GitHub 后，安装/更新会自动同步下发。
 

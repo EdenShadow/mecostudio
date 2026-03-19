@@ -809,6 +809,21 @@ apply_bootstrap_assets() {
     done
   fi
 
+  local knowledge_rule_src="$bootstrap_dir/knowledge-rule-folders"
+  if [[ -d "$knowledge_rule_src" ]]; then
+    local knowledge_rule_root="${MECO_KNOWLEDGE_RULE_UPLOAD_ROOT:-$HOME/Meco Studio/public/uploads/knowledge-rule-folders}"
+    mkdir -p "$knowledge_rule_root"
+    sync_dir_overlay "$knowledge_rule_src" "$knowledge_rule_root"
+    log "Synced knowledge-rule folders -> $knowledge_rule_root"
+
+    local knowledge_rule_fallback="$MECO_INSTALL_DIR/public/uploads/knowledge-rule-folders"
+    if [[ "$knowledge_rule_fallback" != "$knowledge_rule_root" ]]; then
+      mkdir -p "$knowledge_rule_fallback"
+      sync_dir_overlay "$knowledge_rule_src" "$knowledge_rule_fallback"
+      log "Synced knowledge-rule folders -> $knowledge_rule_fallback"
+    fi
+  fi
+
   openclaw skills list --json >/dev/null 2>&1 || true
 }
 

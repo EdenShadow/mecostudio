@@ -141,6 +141,70 @@ sync_dir_clean() {
     "$src"/ "$dst"/
 }
 
+sync_dir_overlay() {
+  local src="$1"
+  local dst="$2"
+  mkdir -p "$dst"
+  rsync -a \
+    --exclude '.DS_Store' \
+    --exclude '.git' \
+    --exclude 'node_modules' \
+    --exclude '.env' \
+    --exclude '.env.*' \
+    --exclude '*.tmp' \
+    --exclude '*.bak' \
+    --exclude '*.log' \
+    --exclude 'logs' \
+    --exclude 'tmp' \
+    --exclude '__pycache__' \
+    "$src"/ "$dst"/
+}
+
+list_knowledge_rule_roots() {
+  local csv="${MECO_BOOTSTRAP_KNOWLEDGE_RULE_ROOTS:-}"
+  if [[ -n "$csv" ]]; then
+    list_from_csv_or_dirs "$csv" "/dev/null"
+    return 0
+  fi
+
+  local roots=(
+    "$HOME/Meco Studio/public/uploads/knowledge-rule-folders"
+    "$REPO_ROOT/public/uploads/knowledge-rule-folders"
+    "$HOME/Desktop/Meco Studio/public/uploads/knowledge-rule-folders"
+  )
+  local seen='|'
+  local root
+  for root in "${roots[@]}"; do
+    [[ -n "$root" ]] || continue
+    if [[ "$seen" == *"|$root|"* ]]; then
+      continue
+    fi
+    printf '%s\n' "$root"
+    seen+="$root|"
+  done
+}
+
+pack_knowledge_rule_folders() {
+  local dst="$BOOTSTRAP_DIR/knowledge-rule-folders"
+  rm -rf "$dst"
+  mkdir -p "$dst"
+
+  local copied_from=0
+  local root
+  while IFS= read -r root; do
+    [[ -n "$root" ]] || continue
+    [[ -d "$root" ]] || continue
+    sync_dir_overlay "$root" "$dst"
+    copied_from=$((copied_from + 1))
+  done < <(list_knowledge_rule_roots)
+
+  local folder_count=0
+  if [[ -d "$dst" ]]; then
+    folder_count="$(find "$dst" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  fi
+  log "Packed knowledge-rule folders: $folder_count (sources=$copied_from)"
+}
+
 sanitize_json_secrets() {
   local json_file="$1"
   [[ -f "$json_file" ]] || return 0
@@ -371,6 +435,8 @@ main() {
     log "Packed config skill: $cfg_skill"
   done < <(list_from_csv_or_dirs "${MECO_BOOTSTRAP_CONFIG_SKILLS:-}" "$CONFIG_SKILLS_ROOT")
 
+  pack_knowledge_rule_folders
+
   node -e '
     const fs = require("fs");
     const path = require("path");
@@ -393,6 +459,7 @@ main() {
 
     const openclawSkillsDir = path.join(bootstrapDir, "skills", "openclaw");
     const configSkillsDir = path.join(bootstrapDir, "skills", "config");
+    const knowledgeRuleDir = path.join(bootstrapDir, "knowledge-rule-folders");
     const listDirs = (dir) => {
       if (!fs.existsSync(dir)) return [];
       return fs.readdirSync(dir, { withFileTypes: true })
@@ -408,7 +475,8 @@ main() {
       skills: {
         openclaw: listDirs(openclawSkillsDir),
         config: listDirs(configSkillsDir)
-      }
+      },
+      knowledgeRuleFolders: listDirs(knowledgeRuleDir)
     };
 
     fs.writeFileSync(

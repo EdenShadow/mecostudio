@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "createdAt": "2026-03-19T20:33:04.982Z",
+  "createdAt": "2026-03-19T20:45:28.424Z",
   "agents": [
     {
       "id": "eden",
@@ -62,5 +62,9 @@
       "notebooklm-mcp-cli",
       "tikhub-tiktok"
     ]
-  }
+  },
+  "knowledgeRuleFolders": [
+    "1773841227413_8c4nvu_Pentagon_headhunting_Goldman",
+    "Pentagon_headhunting_Goldman"
+  ]
 }
