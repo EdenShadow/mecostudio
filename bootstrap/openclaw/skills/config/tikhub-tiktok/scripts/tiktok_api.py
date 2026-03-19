@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
 TikHub TikTok API 查询工具
-API Key: 66ZnSGB9wUAYmCAs20fhqEot4DQx1sSGu5l0wTrbjUpz+g5YYNhp+yWWUw==
+API Key: 从环境变量 TIKHUB_API_KEY 读取
 """
 
 import sys
 import json
+import os
 import requests
 from urllib.parse import quote
 
 API_BASE = "https://api.tikhub.io"
-API_TOKEN = "66ZnSGB9wUAYmCAs20fhqEot4DQx1sSGu5l0wTrbjUpz+g5YYNhp+yWWUw=="
+API_TOKEN = os.environ.get("TIKHUB_API_KEY", "").strip()
+if not API_TOKEN:
+    print(json.dumps({"error": "missing TIKHUB_API_KEY"}, ensure_ascii=False))
+    sys.exit(1)
 
 headers = {
     "Authorization": f"Bearer {API_TOKEN}",
