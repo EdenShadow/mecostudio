@@ -29,6 +29,10 @@ upgrade_plan:
     action: "git clone/pull to install dir"
     expected: "工作目录更新到目标分支最新提交"
 
+  - step: "permission_preflight"
+    action: "run scripts/openclaw-permission-preflight.sh"
+    expected: "提前发现目录读写/网络/权限限制，避免远控时隐性失败"
+
   - step: "install_runtime_dependencies"
     action: "install git/node/npm/python/pip as needed + npm install"
     expected: "服务运行依赖完整"
@@ -99,6 +103,7 @@ operator_commands:
   install_or_upgrade: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash"
   package_sync_before_commit: "bash scripts/sync-bootstrap-and-version.sh"
   package_sync_with_bump: "bash scripts/sync-bootstrap-and-version.sh <x.y.z>"
+  permission_preflight: "bash scripts/openclaw-permission-preflight.sh"
 ```
 
 ## Notes for AI Agent

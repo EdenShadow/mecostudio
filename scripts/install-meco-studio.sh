@@ -11,6 +11,7 @@ MECO_NPM_INSTALL_MODE="${MECO_NPM_INSTALL_MODE:-auto}" # auto|ci|install
 MECO_SKIP_NPM_INSTALL_IF_UNCHANGED="${MECO_SKIP_NPM_INSTALL_IF_UNCHANGED:-1}"
 MECO_HEALTHCHECK_RETRIES="${MECO_HEALTHCHECK_RETRIES:-20}"
 MECO_HEALTHCHECK_INTERVAL_SEC="${MECO_HEALTHCHECK_INTERVAL_SEC:-1}"
+MECO_RUN_PERMISSION_PREFLIGHT="${MECO_RUN_PERMISSION_PREFLIGHT:-1}"
 MECO_KIMI_CODING_API_KEY="${MECO_KIMI_CODING_API_KEY:-}"
 MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-coding/k2p5}"
 MECO_OPENCLAW_MODEL_API_KEY="${MECO_OPENCLAW_MODEL_API_KEY:-}"
@@ -520,6 +521,28 @@ prepare_repo() {
   fi
 }
 
+run_permissions_preflight() {
+  if [[ "$MECO_RUN_PERMISSION_PREFLIGHT" != "1" ]]; then
+    log "Skip permission preflight (MECO_RUN_PERMISSION_PREFLIGHT=$MECO_RUN_PERMISSION_PREFLIGHT)"
+    return 0
+  fi
+
+  local checker="$MECO_INSTALL_DIR/scripts/openclaw-permission-preflight.sh"
+  if [[ ! -x "$checker" ]]; then
+    warn "permission preflight checker missing: $checker"
+    return 0
+  fi
+
+  log "Running permission preflight..."
+  if OPENCLAW_ROOT="$OPENCLAW_ROOT" \
+     MECO_INSTALL_DIR="$MECO_INSTALL_DIR" \
+     "$checker"; then
+    log "Permission preflight completed"
+  else
+    warn "permission preflight reported issues (continue install)"
+  fi
+}
+
 restart_openclaw_if_update() {
   if [[ "$MECO_IS_UPDATE" != "1" ]]; then
     return 0
@@ -911,6 +934,7 @@ main() {
   configure_openclaw_defaults "$MECO_OPENCLAW_MODEL" "$effective_model_key"
   ensure_kimi_cli
   prepare_repo
+  run_permissions_preflight
   install_dependencies
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets

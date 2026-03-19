@@ -43,6 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
 - 安装 Whisper（`openai-whisper`，用于 hot-topics 音频分析）
 - 拉取或更新 Meco Studio 到 `~/meco-studio`
+- 运行权限预检脚本（目录读写 + 网络连通 + OpenClaw 可用性）
 - 安装 npm 依赖并同步初始化 agents/skills（幂等）
 - 自动安装 skills 运行依赖：
   - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
@@ -127,6 +128,7 @@ MECO_INSTALL_DIR="$HOME/meco-studio" \
 MECO_BRANCH="main" \
 MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
+MECO_RUN_PERMISSION_PREFLIGHT=1 \
 MECO_UPGRADE_OPENCLAW=0 \
 MECO_OPENCLAW_MODEL="kimi-coding/k2p5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
@@ -200,6 +202,7 @@ post_install_actions:
   - "openclaw install/upgrade if needed"
   - "python3/pip install if needed"
   - "git pull latest code to install dir"
+  - "run permission preflight (folder read/write + network + openclaw status)"
   - "auto discover openclaw http/ws/token from local config"
   - "bootstrap openclaw kimi-code auth profile to avoid moonshot 401 mismatch"
   - "write openclaw default model/provider config (kimi-coding/k2p5)"
@@ -212,6 +215,12 @@ post_install_actions:
   - "reset default test rooms to empty"
   - "restart OpenClaw gateway and Meco Studio on upgrade"
   - "sync repo VERSION to ~/.meco-studio/VERSION"
+```
+
+手动权限预检（建议远控部署后执行一次）：
+
+```bash
+bash scripts/openclaw-permission-preflight.sh
 ```
 
 ## 📦 维护者打包
