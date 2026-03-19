@@ -49,10 +49,18 @@ sync_local_version_file() {
   fi
 }
 
+enforce_no_room_runtime_tracking() {
+  if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+  git -C "$REPO_ROOT" rm --cached -r --ignore-unmatch data/rooms.json data/room-covers >/dev/null 2>&1 || true
+}
+
 main() {
   ensure_version_file
   set_version_if_provided
   (cd "$REPO_ROOT" && bash scripts/build-bootstrap-package.sh)
+  enforce_no_room_runtime_tracking
   sync_local_version_file
   log "Done. Review changes with: git status"
 }
