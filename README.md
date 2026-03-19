@@ -58,8 +58,8 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 - `TikHub API Key`
 - `MeowLoad API Key`（哼哼猫 / media-downloader）
 - `MiniMax API Key`（TTS 必需）
-- `Aliyun OSS Endpoint`（默认 `https://cfplusvideo.oss-cn-hongkong.aliyuncs.com/`）
-- `Aliyun OSS Bucket`（默认 `cfplusvideo`）
+- `Aliyun OSS Endpoint`（按你的 OSS 配置填写）
+- `Aliyun OSS Bucket`（按你的 OSS 配置填写）
 - `Aliyun OSS AccessKey ID`
 - `Aliyun OSS AccessKey Secret`
 
@@ -93,8 +93,8 @@ MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
 MECO_MINIMAX_API_KEY="xxxx" \
 MECO_TIKHUB_API_KEY="xxxx" \
 MECO_MEOWLOAD_API_KEY="xxxx" \
-MECO_OSS_ENDPOINT="https://cfplusvideo.oss-cn-hongkong.aliyuncs.com/" \
-MECO_OSS_BUCKET="cfplusvideo" \
+MECO_OSS_ENDPOINT="<your-oss-endpoint>" \
+MECO_OSS_BUCKET="<your-oss-bucket>" \
 MECO_OSS_ACCESS_KEY_ID="LTAIxxxx" \
 MECO_OSS_ACCESS_KEY_SECRET="xxxx" \
 MECO_OPENAI_API_KEY="" \
