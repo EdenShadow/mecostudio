@@ -2403,6 +2403,7 @@
                 setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
                 setValue('cfg-meowload-key', appRuntimeSettings.meowloadApiKey);
                 setValue('cfg-kimi-key', appRuntimeSettings.kimiApiKey);
+                setValue('cfg-openai-key', appRuntimeSettings.openaiApiKey);
                 setValue('cfg-oss-endpoint', appRuntimeSettings.ossEndpoint);
                 setValue('cfg-oss-bucket', appRuntimeSettings.ossBucket);
                 setValue('cfg-oss-key-id', appRuntimeSettings.ossAccessKeyId);
@@ -2427,6 +2428,7 @@
                 tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
                 meowloadApiKey: document.getElementById('cfg-meowload-key')?.value || '',
                 kimiApiKey: document.getElementById('cfg-kimi-key')?.value || '',
+                openaiApiKey: document.getElementById('cfg-openai-key')?.value || '',
                 ossEndpoint: document.getElementById('cfg-oss-endpoint')?.value || '',
                 ossBucket: document.getElementById('cfg-oss-bucket')?.value || '',
                 ossAccessKeyId: document.getElementById('cfg-oss-key-id')?.value || '',
@@ -6746,6 +6748,10 @@
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Kimi Coding API Key</label>
                 <input id="cfg-kimi-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Kimi Coding key">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">OpenAI API Key (Whisper optional)</label>
+                <input id="cfg-openai-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="OpenAI key (optional)">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Aliyun OSS Endpoint</label>

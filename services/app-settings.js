@@ -2,7 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const SETTINGS_PATH = path.join(__dirname, '../data/app-settings.json');
+const SETTINGS_DIR = path.join(os.homedir(), '.meco-studio');
+const SETTINGS_PATH = process.env.MECO_SETTINGS_PATH
+  ? path.resolve(String(process.env.MECO_SETTINGS_PATH))
+  : path.join(SETTINGS_DIR, 'app-settings.json');
+const LEGACY_SETTINGS_PATH = path.join(__dirname, '../data/app-settings.json');
 
 const DEFAULT_SETTINGS = Object.freeze({
   openclawHttpUrl: 'http://127.0.0.1:18789/v1/chat/completions',
@@ -59,8 +63,12 @@ function toSafeString(value) {
 
 function loadSettingsFile() {
   try {
-    if (!fs.existsSync(SETTINGS_PATH)) return {};
-    const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
+    let targetPath = SETTINGS_PATH;
+    if (!fs.existsSync(targetPath) && fs.existsSync(LEGACY_SETTINGS_PATH)) {
+      targetPath = LEGACY_SETTINGS_PATH;
+    }
+    if (!fs.existsSync(targetPath)) return {};
+    const raw = fs.readFileSync(targetPath, 'utf8');
     const parsed = JSON.parse(raw || '{}');
     if (!parsed || typeof parsed !== 'object') return {};
     return parsed;
@@ -232,7 +240,9 @@ function getMaskedSettings() {
 }
 
 module.exports = {
+  SETTINGS_DIR,
   SETTINGS_PATH,
+  LEGACY_SETTINGS_PATH,
   SETTINGS_FIELDS,
   DEFAULT_SETTINGS,
   getSettings,

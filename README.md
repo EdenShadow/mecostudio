@@ -62,6 +62,7 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 - `Aliyun OSS Bucket`（固定默认：`cfplusvideo`）
 - `Aliyun OSS AccessKey ID`（仓库不内置默认值，需手动填写）
 - `Aliyun OSS AccessKey Secret`（仓库不内置默认值，需手动填写）
+- `OpenAI API Key`（Whisper 可选）
 
 点击“确定并自动安装/激活”后会自动执行：
 
@@ -102,6 +103,23 @@ HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
 
+## ⚡ 快速填参一键安装/更新
+
+把下面占位符替换成你自己的 Key，安装和更新都用同一条命令（重跑即更新）：
+
+```bash
+MECO_KIMI_CODING_API_KEY="<your-kimi-coding-key>" \
+MECO_MINIMAX_API_KEY="<your-minimax-key>" \
+MECO_TIKHUB_API_KEY="<your-tikhub-key>" \
+MECO_MEOWLOAD_API_KEY="<your-meowload-key>" \
+MECO_OSS_ENDPOINT="https://oss-cn-hongkong.aliyuncs.com/" \
+MECO_OSS_BUCKET="cfplusvideo" \
+MECO_OSS_ACCESS_KEY_ID="<your-oss-access-key-id>" \
+MECO_OSS_ACCESS_KEY_SECRET="<your-oss-access-key-secret>" \
+MECO_OPENAI_API_KEY="<your-openai-key-optional>" \
+curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
+```
+
 说明：
 
 - `MECO_OPENCLAW_MODEL`：安装时写入 OpenClaw 默认模型（推荐 `kimi-coding/k2p5`）
@@ -114,6 +132,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 安全说明：
 - 仓库代码、默认配置、安装脚本均不应包含真实 API Key/AccessKey。
 - 请仅通过本地环境变量或 UI 配置写入密钥。
+- UI 填写的密钥默认保存在 `~/.meco-studio/app-settings.json`，不在仓库目录内。
 
 ## 🤖 AI 可读协议（Machine Readable Spec）
 

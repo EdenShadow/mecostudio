@@ -308,8 +308,8 @@ configure_openclaw_defaults() {
 
 configure_meco_runtime_settings() {
   local kimi_api_key="$1"
-  mkdir -p "$MECO_INSTALL_DIR/data"
-  local settings_path="$MECO_INSTALL_DIR/data/app-settings.json"
+  local settings_path="${MECO_SETTINGS_PATH:-$HOME/.meco-studio/app-settings.json}"
+  mkdir -p "$(dirname "$settings_path")"
 
   node -e '
     const fs = require("fs");
