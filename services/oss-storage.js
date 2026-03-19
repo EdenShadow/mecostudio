@@ -79,6 +79,48 @@ function normalizeObjectPath(inputPath) {
   return parts.join('/');
 }
 
+function encodeObjectKeyForUrl(objectKey) {
+  return String(objectKey || '')
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/');
+}
+
+function buildSignedUrlV1(cfg, options = {}) {
+  const method = toSafeString(options.method || 'GET').toUpperCase();
+  const objectKey = normalizeObjectPath(options.objectKey);
+  if (!objectKey) {
+    throw new Error('objectKey is required');
+  }
+  const expiresIn = Number.isFinite(Number(options.expires))
+    ? Math.max(60, Math.min(86400, Number(options.expires)))
+    : 600;
+  const expires = Math.floor(Date.now() / 1000) + expiresIn;
+  const contentType = toSafeString(options.contentType);
+  const params = options.params && typeof options.params === 'object' ? { ...options.params } : {};
+  const canonicalizedResource = `/${cfg.bucket}/${objectKey}`;
+  const stringToSign = `${method}\n\n${contentType}\n${expires}\n${canonicalizedResource}`;
+  const signature = crypto
+    .createHmac('sha1', cfg.accessKeySecret)
+    .update(stringToSign)
+    .digest('base64');
+
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === null || v === undefined) return;
+    query.set(k, String(v));
+  });
+  query.set('OSSAccessKeyId', cfg.accessKeyId);
+  query.set('Expires', String(expires));
+  query.set('Signature', signature);
+
+  const objectUrl = `${cfg.publicBaseUrl}/${encodeObjectKeyForUrl(objectKey)}`;
+  return {
+    signedUrl: `${objectUrl}?${query.toString()}`,
+    expires
+  };
+}
+
 function ensureUniqueLocalPath(targetPath) {
   const preferred = path.resolve(String(targetPath || '').trim());
   if (!preferred) return preferred;
@@ -281,11 +323,14 @@ function signPutObjectUrl(settings, options = {}) {
     : 600;
   const contentType = toSafeString(options.contentType);
   const signOpts = { expires, method: 'PUT' };
-  if (contentType) {
-    signOpts.headers = { 'Content-Type': contentType };
-  }
-  const { client, cfg } = createClient(settings);
-  const uploadUrl = client.signatureUrl(objectKey, signOpts);
+  const { cfg } = createClient(settings);
+  const signed = buildSignedUrlV1(cfg, {
+    method: 'PUT',
+    objectKey,
+    expires: signOpts.expires,
+    contentType
+  });
+  const uploadUrl = signed.signedUrl;
   const fileUrl = `${cfg.publicBaseUrl}/${objectKey}`;
   return {
     objectKey,
@@ -326,14 +371,16 @@ async function initMultipartUpload(settings, options = {}) {
   for (let i = 1; i <= totalParts; i += 1) {
     const offset = (i - 1) * partSize;
     const size = Math.min(partSize, fileSize - offset);
-    const uploadUrl = client.signatureUrl(objectKey, {
+    const signed = buildSignedUrlV1(cfg, {
       method: 'PUT',
       expires,
+      objectKey,
       params: {
         partNumber: String(i),
         uploadId
       }
     });
+    const uploadUrl = signed.signedUrl;
     parts.push({
       partNumber: i,
       offset,
@@ -435,14 +482,16 @@ async function resumeMultipartUpload(settings, options = {}) {
     if (uploadedMap.has(i)) continue;
     const offset = (i - 1) * partSize;
     const size = Math.min(partSize, fileSize - offset);
-    const uploadUrl = client.signatureUrl(objectKey, {
+    const signed = buildSignedUrlV1(cfg, {
       method: 'PUT',
       expires,
+      objectKey,
       params: {
         partNumber: String(i),
         uploadId
       }
     });
+    const uploadUrl = signed.signedUrl;
     remainingParts.push({
       partNumber: i,
       offset,
