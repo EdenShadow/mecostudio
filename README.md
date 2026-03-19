@@ -37,6 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 
 ## 📌 安装后自动完成
 
+- 安装 git（未安装自动安装）
 - 安装/升级 OpenClaw（未安装自动安装）
 - 安装 Python3 + pip（未安装自动安装）
 - 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
@@ -50,6 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 清空默认测试房间数据（`data/rooms.json` -> `[]`）
 - 启动服务（默认 `http://127.0.0.1:3456`）
 - 若为升级流程：安装完成后自动重启 OpenClaw Gateway 与 Meco Studio
+- 同步版本号文件：`VERSION` -> `~/.meco-studio/VERSION`
 
 ## 🔄 Git 同步范围（重要）
 
@@ -62,6 +64,23 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 
 不会同步到仓库：
 - 房间数据与房间封面（`data/rooms.json`、`data/room-covers/*`）
+
+## 📏 提交铁律与版本号
+
+- 规则文件：`GITHUB-SYNC-RULES.md`
+- 统一版本文件：`VERSION`（默认 `0.0.1`）
+- 本机同步版本文件：`~/.meco-studio/VERSION`
+- 推荐提交前执行：
+
+```bash
+bash scripts/sync-bootstrap-and-version.sh
+```
+
+- 需要发布新版本号时：
+
+```bash
+bash scripts/sync-bootstrap-and-version.sh 0.0.2
+```
 
 ## 🔑 API Key 配置（首页左上角头像下拉）
 

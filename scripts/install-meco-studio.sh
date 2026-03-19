@@ -61,6 +61,19 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+ensure_git() {
+  if command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    log "git missing, installing with Homebrew..."
+    brew install git >/dev/null
+    command -v git >/dev/null 2>&1 || die "git install failed"
+    return 0
+  fi
+  die "git is required. install git first"
+}
+
 hash_file() {
   local file_path="$1"
   if command -v shasum >/dev/null 2>&1; then
@@ -524,6 +537,28 @@ restart_openclaw_if_update() {
   fi
 }
 
+sync_local_version_marker() {
+  local repo_version_file="$MECO_INSTALL_DIR/VERSION"
+  local local_version_dir="$HOME/.meco-studio"
+  local local_version_file="$local_version_dir/VERSION"
+  local version="0.0.1"
+
+  if [[ -f "$repo_version_file" ]]; then
+    version="$(tr -d '[:space:]' < "$repo_version_file" 2>/dev/null || true)"
+  fi
+  [[ -n "$version" ]] || version="0.0.1"
+
+  if ! mkdir -p "$local_version_dir" 2>/dev/null; then
+    warn "cannot create $local_version_dir, skip local version marker sync"
+    return 0
+  fi
+  if printf '%s\n' "$version" > "$local_version_file" 2>/dev/null; then
+    log "Synced local version marker: $local_version_file (version=$version)"
+  else
+    warn "cannot write $local_version_file, skip local version marker sync"
+  fi
+}
+
 install_dependencies() {
   local lockfile="$MECO_INSTALL_DIR/package-lock.json"
   local hash_file_path="$MECO_INSTALL_DIR/.meco-install.npm-lock.sha256"
@@ -851,7 +886,7 @@ start_service() {
 }
 
 main() {
-  require_cmd git
+  ensure_git
   ensure_node_and_npm
   ensure_python_and_pip
   ensure_openclaw
@@ -868,6 +903,7 @@ main() {
   install_skill_runtime_dependencies
   configure_kimi_api_key "$effective_kimi_key"
   configure_meco_runtime_settings "$effective_kimi_key" "$effective_model_key"
+  sync_local_version_marker
   reset_runtime_state
   restart_openclaw_if_update
   start_service
