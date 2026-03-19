@@ -47,7 +47,8 @@ function buildOpenClawEnv() {
     };
     if (runtime && typeof runtime === 'object') {
         if (runtime.tikhubApiKey) env.TIKHUB_API_KEY = String(runtime.tikhubApiKey);
-        if (runtime.kimiApiKey) env.KIMI_API_KEY = String(runtime.kimiApiKey);
+        const effectiveOpenClawModelKey = String(runtime.openclawModelApiKey || runtime.kimiApiKey || '').trim();
+        if (effectiveOpenClawModelKey) env.KIMI_API_KEY = effectiveOpenClawModelKey;
         if (runtime.openaiApiKey) env.OPENAI_API_KEY = String(runtime.openaiApiKey);
     }
     if (meowloadKey) {

@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   openclawWsUrl: 'ws://127.0.0.1:18789',
   openclawGatewayToken: '',
   openclawModel: 'kimi-coding/k2p5',
+  openclawModelApiKey: '',
   minimaxApiKey: '',
   minimaxWsUrl: 'wss://api.minimaxi.com/ws/v1/t2a_v2',
   tikhubApiKey: '',
@@ -42,6 +43,7 @@ const ENV_MAP = Object.freeze({
   openclawWsUrl: 'MECO_OPENCLAW_WS_URL',
   openclawGatewayToken: 'MECO_OPENCLAW_GATEWAY_TOKEN',
   openclawModel: 'MECO_OPENCLAW_MODEL',
+  openclawModelApiKey: 'MECO_OPENCLAW_MODEL_API_KEY',
   minimaxApiKey: 'MECO_MINIMAX_API_KEY',
   minimaxWsUrl: 'MECO_MINIMAX_WS_URL',
   tikhubApiKey: 'TIKHUB_API_KEY',
@@ -107,7 +109,7 @@ function discoverFromLocalFiles() {
       const providers = get(conf, ['models', 'providers']) || {};
       const kimiProvider = providers['kimi-coding'] || providers['kimi-openai'] || null;
       if (kimiProvider && kimiProvider.apiKey) {
-        discovered.kimiApiKey = String(kimiProvider.apiKey);
+        discovered.openclawModelApiKey = String(kimiProvider.apiKey);
       }
       const minimaxProvider = providers.minimax || null;
       if (minimaxProvider && minimaxProvider.apiKey) {
@@ -163,6 +165,15 @@ function applyEnvOverrides(base) {
       next[field] = envValue.trim();
     }
   }
+  // Backward-compatible aliases.
+  const modelApiKeyAlias = process.env.MECO_OPENCLAW_MODEL_API_KEY;
+  if (typeof modelApiKeyAlias === 'string' && modelApiKeyAlias.trim()) {
+    next.openclawModelApiKey = modelApiKeyAlias.trim();
+  }
+  const kimiApiKeyAlias = process.env.MECO_KIMI_CODING_API_KEY;
+  if (typeof kimiApiKeyAlias === 'string' && kimiApiKeyAlias.trim()) {
+    next.kimiApiKey = kimiApiKeyAlias.trim();
+  }
   return next;
 }
 
@@ -181,6 +192,10 @@ function loadSettings() {
   if (discovered.openclawHttpUrl) merged.openclawHttpUrl = discovered.openclawHttpUrl;
   if (discovered.openclawWsUrl) merged.openclawWsUrl = discovered.openclawWsUrl;
   if (discovered.openclawGatewayToken) merged.openclawGatewayToken = discovered.openclawGatewayToken;
+  // Backward compatibility for historical single-key storage.
+  if (!toSafeString(merged.openclawModelApiKey) && toSafeString(merged.kimiApiKey)) {
+    merged.openclawModelApiKey = toSafeString(merged.kimiApiKey);
+  }
 
   return applyEnvOverrides(merged);
 }
@@ -229,6 +244,7 @@ function getMaskedSettings() {
   return {
     ...current,
     openclawGatewayToken: maskSecret(current.openclawGatewayToken),
+    openclawModelApiKey: maskSecret(current.openclawModelApiKey),
     minimaxApiKey: maskSecret(current.minimaxApiKey),
     tikhubApiKey: maskSecret(current.tikhubApiKey),
     meowloadApiKey: maskSecret(current.meowloadApiKey),

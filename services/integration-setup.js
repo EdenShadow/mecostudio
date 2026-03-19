@@ -85,9 +85,9 @@ function syncDir(src, dst) {
 }
 
 async function configureOpenClawKimiAuth(settings, logs) {
-  const kimiApiKey = String(settings.kimiApiKey || '').trim();
-  if (!kimiApiKey) {
-    logs.push('Kimi API Key is empty, skip OpenClaw kimi-code auth bootstrap');
+  const openclawModelApiKey = String(settings.openclawModelApiKey || settings.kimiApiKey || '').trim();
+  if (!openclawModelApiKey) {
+    logs.push('OpenClaw Model API Key is empty, skip OpenClaw kimi-code auth bootstrap');
     return;
   }
   const workspaceDir = path.join(os.homedir(), '.openclaw', 'workspace');
@@ -98,7 +98,7 @@ async function configureOpenClawKimiAuth(settings, logs) {
     '--accept-risk',
     '--mode local',
     '--auth-choice kimi-code-api-key',
-    `--kimi-code-api-key "${kimiApiKey.replace(/"/g, '\\"')}"`,
+    `--kimi-code-api-key "${openclawModelApiKey.replace(/"/g, '\\"')}"`,
     '--skip-daemon',
     '--skip-skills',
     '--skip-search',
@@ -118,7 +118,7 @@ function configureOpenClawDefaults(settings, logs) {
   const openclawRoot = path.join(os.homedir(), '.openclaw');
   const openclawConfigPath = path.join(openclawRoot, 'openclaw.json');
   const model = String(settings.openclawModel || '').trim() || 'kimi-coding/k2p5';
-  const providerKey = String(settings.kimiApiKey || '').trim();
+  const providerKey = String(settings.openclawModelApiKey || settings.kimiApiKey || '').trim();
 
   fs.mkdirSync(openclawRoot, { recursive: true });
 

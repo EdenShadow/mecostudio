@@ -38,13 +38,18 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 ## 📌 安装后自动完成
 
 - 安装/升级 OpenClaw（未安装自动安装）
+- 安装 Python3 + pip（未安装自动安装）
 - 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
 - 安装 Whisper（`openai-whisper`，用于 hot-topics 音频分析）
 - 拉取或更新 Meco Studio 到 `~/meco-studio`
 - 安装 npm 依赖并同步初始化 agents/skills（幂等）
+- 自动安装 skills 运行依赖：
+  - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
+  - Node：自动扫描 OpenClaw/config skills 下 `package.json` 并安装
 - 初始化 `~/Documents/知识库/热门话题` 分类目录（仅补齐，不覆盖）
 - 清空默认测试房间数据（`data/rooms.json` -> `[]`）
 - 启动服务（默认 `http://127.0.0.1:3456`）
+- 若为升级流程：安装完成后自动重启 OpenClaw Gateway 与 Meco Studio
 
 ## 🔑 API Key 配置（首页左上角头像下拉）
 
@@ -54,7 +59,8 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 
 推荐配置：
 
-- `Kimi Coding API Key`
+- `OpenClaw Model API Key`（`MECO_OPENCLAW_MODEL_API_KEY`）
+- `Kimi CLI API Key`（`MECO_KIMI_CODING_API_KEY`）
 - `TikHub API Key`
 - `MeowLoad API Key`（哼哼猫 / media-downloader）
 - `MiniMax API Key`（TTS 必需）
@@ -146,7 +152,8 @@ default_openclaw_root: "~/.openclaw"
 default_hot_topics_root: "~/Documents/知识库/热门话题"
 service_url: "http://127.0.0.1:3456"
 required_api_keys:
-  - "Kimi Coding API Key"
+  - "OpenClaw Model API Key"
+  - "Kimi CLI API Key"
   - "TikHub API Key"
   - "MeowLoad API Key"
   - "MiniMax API Key"
@@ -156,14 +163,16 @@ optional_api_keys:
   - "OpenAI API Key"
 post_install_actions:
   - "openclaw install/upgrade if needed"
+  - "python3/pip install if needed"
   - "auto discover openclaw http/ws/token from local config"
   - "bootstrap openclaw kimi-code auth profile to avoid moonshot 401 mismatch"
   - "write openclaw default model/provider config (kimi-coding/k2p5)"
   - "kimi cli install if missing"
-  - "whisper install for hot-topics audio analysis"
+  - "install skills runtime deps (python + node, including whisper)"
   - "sync bootstrap agents/skills (idempotent)"
   - "ensure hot-topics category folders under ~/Documents/知识库/热门话题"
   - "reset default test rooms to empty"
+  - "restart OpenClaw gateway and Meco Studio on upgrade"
 ```
 
 ## 📦 维护者打包

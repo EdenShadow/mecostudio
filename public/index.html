@@ -2398,6 +2398,7 @@
                 };
 
                 setValue('cfg-openclaw-model', appRuntimeSettings.openclawModel);
+                setValue('cfg-openclaw-model-key', appRuntimeSettings.openclawModelApiKey);
                 setValue('cfg-minimax-key', appRuntimeSettings.minimaxApiKey);
                 setValue('cfg-minimax-ws-url', appRuntimeSettings.minimaxWsUrl);
                 setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
@@ -2423,6 +2424,7 @@
 
             const settings = {
                 openclawModel: document.getElementById('cfg-openclaw-model')?.value || '',
+                openclawModelApiKey: document.getElementById('cfg-openclaw-model-key')?.value || '',
                 minimaxApiKey: document.getElementById('cfg-minimax-key')?.value || '',
                 minimaxWsUrl: document.getElementById('cfg-minimax-ws-url')?.value || '',
                 tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
@@ -6735,23 +6737,27 @@
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">MiniMax API Key</label>
-                <input id="cfg-minimax-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="MiniMax key">
+                <input id="cfg-minimax-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="MiniMax key">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">TikHub API Key (hot-topics)</label>
-                <input id="cfg-tikhub-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="TikHub key">
+                <input id="cfg-tikhub-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="TikHub key">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">MeowLoad API Key (media-downloader / 哼哼猫)</label>
-                <input id="cfg-meowload-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="MeowLoad key">
+                <input id="cfg-meowload-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="MeowLoad key">
             </div>
             <div class="md:col-span-2">
-                <label class="block text-xs text-gray-400 mb-1">Kimi Coding API Key</label>
-                <input id="cfg-kimi-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Kimi Coding key">
+                <label class="block text-xs text-gray-400 mb-1">OpenClaw Model API Key (MECO_OPENCLAW_MODEL_API_KEY)</label>
+                <input id="cfg-openclaw-model-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="sk-... (for OpenClaw model provider)">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Kimi CLI API Key (MECO_KIMI_CODING_API_KEY)</label>
+                <input id="cfg-kimi-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="sk-... (for kimi cli / hot-topics)">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">OpenAI API Key (Whisper optional)</label>
-                <input id="cfg-openai-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="OpenAI key (optional)">
+                <input id="cfg-openai-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="OpenAI key (optional)">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Aliyun OSS Endpoint</label>
@@ -6763,11 +6769,11 @@
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">Aliyun OSS AccessKey ID</label>
-                <input id="cfg-oss-key-id" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AccessKey ID">
+                <input id="cfg-oss-key-id" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AccessKey ID">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Aliyun OSS AccessKey Secret</label>
-                <input id="cfg-oss-key-secret" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AccessKey Secret">
+                <input id="cfg-oss-key-secret" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AccessKey Secret">
             </div>
         </div>
         <div class="px-6 py-4 border-t border-white/10 flex items-center justify-end gap-3">

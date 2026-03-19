@@ -42,6 +42,8 @@ HOT_TOPICS_CATEGORIES=(
   "Trending"
 )
 
+MECO_IS_UPDATE=0
+
 log() {
   printf '[meco-install] %s\n' "$*"
 }
@@ -153,6 +155,22 @@ ensure_node_and_npm() {
   ' || die "Node.js >= 22.12 is required"
 }
 
+ensure_python_and_pip() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+      log "python3 missing, installing with Homebrew..."
+      brew install python >/dev/null
+    else
+      die "python3 is required. install Python 3 first"
+    fi
+  fi
+
+  if ! python3 -m pip --version >/dev/null 2>&1; then
+    log "pip missing, bootstrapping via ensurepip..."
+    python3 -m ensurepip --upgrade >/dev/null 2>&1 || die "failed to bootstrap pip"
+  fi
+}
+
 ensure_openclaw() {
   if command -v openclaw >/dev/null 2>&1; then
     if [[ "$MECO_UPGRADE_OPENCLAW" == "1" ]]; then
@@ -179,11 +197,6 @@ ensure_kimi_cli() {
 }
 
 ensure_kimi_whisper() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    warn "python3 not found, skip Whisper install for Kimi CLI"
-    return 0
-  fi
-
   if command -v whisper >/dev/null 2>&1; then
     log "Whisper already installed"
     return 0
@@ -199,6 +212,74 @@ ensure_kimi_whisper() {
   if ! command -v ffmpeg >/dev/null 2>&1; then
     warn "ffmpeg not found; local Whisper transcription may be limited. Install ffmpeg if needed."
   fi
+}
+
+pip_install_user_packages() {
+  local label="$1"
+  shift
+  [[ $# -gt 0 ]] || return 0
+  log "Installing Python deps ($label): $*"
+  if python3 -m pip install --user --upgrade "$@" >/dev/null 2>&1; then
+    log "Python deps installed ($label)"
+  else
+    warn "Python deps install failed ($label): $*"
+  fi
+}
+
+install_python_requirements_in_tree() {
+  local root="$1"
+  local label="$2"
+  [[ -d "$root" ]] || return 0
+
+  local req
+  while IFS= read -r req; do
+    [[ -n "$req" ]] || continue
+    log "Installing Python requirements ($label): $req"
+    if python3 -m pip install --user --upgrade -r "$req" >/dev/null 2>&1; then
+      log "Installed requirements: $req"
+    else
+      warn "Failed requirements install: $req"
+    fi
+  done < <(find "$root" -type f \( -name 'requirements.txt' -o -name 'requirements-*.txt' \) | sort)
+}
+
+install_node_skill_dependencies() {
+  local root="$1"
+  local label="$2"
+  [[ -d "$root" ]] || return 0
+
+  local pkg_file
+  while IFS= read -r pkg_file; do
+    [[ -n "$pkg_file" ]] || continue
+    local skill_dir
+    skill_dir="$(dirname "$pkg_file")"
+    local skill_name
+    skill_name="$(basename "$skill_dir")"
+
+    if [[ -f "$skill_dir/package-lock.json" ]]; then
+      log "Installing Node deps ($label/$skill_name): npm ci"
+      (cd "$skill_dir" && npm ci --no-fund --no-audit >/dev/null 2>&1) || warn "npm ci failed for $skill_name"
+    else
+      log "Installing Node deps ($label/$skill_name): npm install"
+      (cd "$skill_dir" && npm install --no-fund --no-audit >/dev/null 2>&1) || warn "npm install failed for $skill_name"
+    fi
+  done < <(find "$root" -mindepth 2 -maxdepth 2 -type f -name 'package.json' | sort)
+}
+
+install_skill_runtime_dependencies() {
+  # Shared Python deps used by hot-topics + config skills.
+  pip_install_user_packages "shared-skills" requests aiohttp aiofiles pillow openai
+
+  # Ensure Whisper for hot-topics audio analysis.
+  ensure_kimi_whisper
+
+  # Auto-install Python requirements if any skill provides requirement files.
+  install_python_requirements_in_tree "$OPENCLAW_ROOT/skills" "openclaw-skills"
+  install_python_requirements_in_tree "$CONFIG_SKILLS_ROOT" "config-skills"
+
+  # Install Node dependencies for OpenClaw/config skills that ship package.json.
+  install_node_skill_dependencies "$OPENCLAW_ROOT/skills" "openclaw-skills"
+  install_node_skill_dependencies "$CONFIG_SKILLS_ROOT" "config-skills"
 }
 
 configure_kimi_api_key() {
@@ -217,9 +298,9 @@ JSON
 }
 
 configure_openclaw_kimi_auth() {
-  local kimi_api_key="$1"
-  [[ -n "$kimi_api_key" ]] || {
-    warn "MECO_KIMI_CODING_API_KEY is empty, skip OpenClaw kimi-code auth bootstrap"
+  local openclaw_model_api_key="$1"
+  [[ -n "$openclaw_model_api_key" ]] || {
+    warn "MECO_OPENCLAW_MODEL_API_KEY (or fallback MECO_KIMI_CODING_API_KEY) is empty, skip OpenClaw kimi-code auth bootstrap"
     return 0
   }
 
@@ -231,7 +312,7 @@ configure_openclaw_kimi_auth() {
     --accept-risk \
     --mode local \
     --auth-choice kimi-code-api-key \
-    --kimi-code-api-key "$kimi_api_key" \
+    --kimi-code-api-key "$openclaw_model_api_key" \
     --skip-daemon \
     --skip-skills \
     --skip-search \
@@ -308,6 +389,7 @@ configure_openclaw_defaults() {
 
 configure_meco_runtime_settings() {
   local kimi_api_key="$1"
+  local openclaw_model_api_key="$2"
   local settings_path="${MECO_SETTINGS_PATH:-$HOME/.meco-studio/app-settings.json}"
   mkdir -p "$(dirname "$settings_path")"
 
@@ -316,17 +398,18 @@ configure_meco_runtime_settings() {
     const path = process.argv[1];
     const patch = {
       openclawModel: String(process.argv[2] || "").trim(),
-      minimaxApiKey: String(process.argv[3] || "").trim(),
-      minimaxWsUrl: String(process.argv[4] || "").trim(),
-      tikhubApiKey: String(process.argv[5] || "").trim(),
-      meowloadApiKey: String(process.argv[6] || "").trim(),
-      kimiApiKey: String(process.argv[7] || "").trim(),
-      hotTopicsKbPath: String(process.argv[8] || "").trim(),
-      openaiApiKey: String(process.argv[9] || "").trim(),
-      ossEndpoint: String(process.argv[10] || "").trim(),
-      ossBucket: String(process.argv[11] || "").trim(),
-      ossAccessKeyId: String(process.argv[12] || "").trim(),
-      ossAccessKeySecret: String(process.argv[13] || "").trim()
+      openclawModelApiKey: String(process.argv[3] || "").trim(),
+      minimaxApiKey: String(process.argv[4] || "").trim(),
+      minimaxWsUrl: String(process.argv[5] || "").trim(),
+      tikhubApiKey: String(process.argv[6] || "").trim(),
+      meowloadApiKey: String(process.argv[7] || "").trim(),
+      kimiApiKey: String(process.argv[8] || "").trim(),
+      hotTopicsKbPath: String(process.argv[9] || "").trim(),
+      openaiApiKey: String(process.argv[10] || "").trim(),
+      ossEndpoint: String(process.argv[11] || "").trim(),
+      ossBucket: String(process.argv[12] || "").trim(),
+      ossAccessKeyId: String(process.argv[13] || "").trim(),
+      ossAccessKeySecret: String(process.argv[14] || "").trim()
     };
 
     let current = {};
@@ -346,6 +429,7 @@ configure_meco_runtime_settings() {
     fs.writeFileSync(path, JSON.stringify(next, null, 2) + "\n");
   ' "$settings_path" \
     "$MECO_OPENCLAW_MODEL" \
+    "$openclaw_model_api_key" \
     "$MECO_MINIMAX_API_KEY" \
     "$MECO_MINIMAX_WS_URL" \
     "$MECO_TIKHUB_API_KEY" \
@@ -384,10 +468,6 @@ ensure_hot_topics_skill() {
   mkdir -p "$CONFIG_SKILLS_ROOT"
   sync_skill_dir "$src" "$hot_topics_target"
   log "Installed hot-topics skill to $hot_topics_target"
-
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -m pip install --user aiohttp aiofiles requests >/dev/null 2>&1 || warn "hot-topics python deps install failed"
-  fi
 }
 
 ensure_hot_topics_knowledge_base() {
@@ -416,6 +496,7 @@ ensure_hot_topics_knowledge_base() {
 
 prepare_repo() {
   if [[ -d "$MECO_INSTALL_DIR/.git" ]]; then
+    MECO_IS_UPDATE=1
     log "Meco Studio exists, pulling latest..."
     git -C "$MECO_INSTALL_DIR" fetch origin "$MECO_BRANCH"
     git -C "$MECO_INSTALL_DIR" checkout "$MECO_BRANCH"
@@ -423,6 +504,23 @@ prepare_repo() {
   else
     log "Cloning Meco Studio into $MECO_INSTALL_DIR ..."
     git clone --branch "$MECO_BRANCH" "$MECO_REPO_URL" "$MECO_INSTALL_DIR"
+  fi
+}
+
+restart_openclaw_if_update() {
+  if [[ "$MECO_IS_UPDATE" != "1" ]]; then
+    return 0
+  fi
+  if ! command -v openclaw >/dev/null 2>&1; then
+    warn "OpenClaw command not found, skip gateway restart"
+    return 0
+  fi
+
+  log "Update mode detected: restarting OpenClaw gateway..."
+  if openclaw gateway restart >/dev/null 2>&1; then
+    log "OpenClaw gateway restarted"
+  else
+    warn "OpenClaw gateway restart failed (continuing)"
   fi
 }
 
@@ -623,9 +721,12 @@ reset_runtime_state() {
 }
 
 start_service() {
-  if [[ "$MECO_START_AFTER_INSTALL" != "1" ]]; then
+  if [[ "$MECO_START_AFTER_INSTALL" != "1" && "$MECO_IS_UPDATE" != "1" ]]; then
     log "Skip start service (MECO_START_AFTER_INSTALL=$MECO_START_AFTER_INSTALL)"
     return 0
+  fi
+  if [[ "$MECO_IS_UPDATE" == "1" && "$MECO_START_AFTER_INSTALL" != "1" ]]; then
+    log "Update mode detected: forcing Meco Studio restart (MECO_START_AFTER_INSTALL ignored)"
   fi
 
   local pid_file="$MECO_INSTALL_DIR/.meco-studio.pid"
@@ -683,21 +784,23 @@ start_service() {
 main() {
   require_cmd git
   ensure_node_and_npm
+  ensure_python_and_pip
   ensure_openclaw
   local effective_kimi_key="${MECO_KIMI_CODING_API_KEY:-}"
   local effective_model_key="${MECO_OPENCLAW_MODEL_API_KEY:-$MECO_KIMI_CODING_API_KEY}"
   configure_openclaw_kimi_auth "$effective_model_key"
   configure_openclaw_defaults "$MECO_OPENCLAW_MODEL" "$effective_model_key"
   ensure_kimi_cli
-  ensure_kimi_whisper
   prepare_repo
   install_dependencies
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets
   ensure_hot_topics_skill
+  install_skill_runtime_dependencies
   configure_kimi_api_key "$effective_kimi_key"
-  configure_meco_runtime_settings "$effective_kimi_key"
+  configure_meco_runtime_settings "$effective_kimi_key" "$effective_model_key"
   reset_runtime_state
+  restart_openclaw_if_update
   start_service
   log "Install/upgrade done."
 }
