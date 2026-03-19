@@ -99,7 +99,43 @@ function buildSignedUrlV1(cfg, options = {}) {
   const contentType = toSafeString(options.contentType);
   const params = options.params && typeof options.params === 'object' ? { ...options.params } : {};
   const canonicalizedResource = `/${cfg.bucket}/${objectKey}`;
-  const stringToSign = `${method}\n\n${contentType}\n${expires}\n${canonicalizedResource}`;
+  const signableSubresourceKeys = new Set([
+    'acl',
+    'uploads',
+    'location',
+    'cors',
+    'logging',
+    'website',
+    'referer',
+    'lifecycle',
+    'delete',
+    'append',
+    'tagging',
+    'objectMeta',
+    'uploadId',
+    'partNumber',
+    'security-token',
+    'x-oss-process',
+    'response-content-type',
+    'response-content-language',
+    'response-expires',
+    'response-cache-control',
+    'response-content-disposition',
+    'response-content-encoding'
+  ]);
+  const canonicalizedSubresource = Object.keys(params)
+    .filter((k) => signableSubresourceKeys.has(k))
+    .sort()
+    .map((k) => {
+      const v = params[k];
+      if (v === null || v === undefined || String(v) === '') return k;
+      return `${k}=${String(v)}`;
+    })
+    .join('&');
+  const resourceToSign = canonicalizedSubresource
+    ? `${canonicalizedResource}?${canonicalizedSubresource}`
+    : canonicalizedResource;
+  const stringToSign = `${method}\n\n${contentType}\n${expires}\n${resourceToSign}`;
   const signature = crypto
     .createHmac('sha1', cfg.accessKeySecret)
     .update(stringToSign)
