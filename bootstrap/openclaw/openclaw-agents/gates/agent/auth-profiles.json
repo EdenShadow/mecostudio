@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "profiles": {
+    "kimi-openai:default": {
+      "type": "api_key",
+      "provider": "kimi-openai",
+      "key": ""
+    },
+    "minimax:default": {
+      "type": "api_key",
+      "provider": "minimax",
+      "key": ""
+    },
+    "kimi-coding:default": {
+      "type": "api_key",
+      "provider": "kimi-coding",
+      "key": ""
+    }
+  },
+  "lastGood": {
+    "kimi-openai": "kimi-openai:default",
+    "minimax": "minimax:default",
+    "kimi-coding": "kimi-coding:default"
+  },
+  "usageStats": {
+    "kimi-openai:default": {
+      "lastUsed": 1773849139678,
+      "errorCount": 0,
+      "lastFailureAt": 1771753725193
+    },
+    "minimax:default": {
+      "errorCount": 0,
+      "lastFailureAt": 1770816313195,
+      "lastUsed": 1770816313198
+    },
+    "kimi-coding:default": {
+      "errorCount": 0,
+      "lastUsed": 1773931414752
+    }
+  }
+}

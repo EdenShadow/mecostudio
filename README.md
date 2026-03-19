@@ -51,6 +51,18 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 启动服务（默认 `http://127.0.0.1:3456`）
 - 若为升级流程：安装完成后自动重启 OpenClaw Gateway 与 Meco Studio
 
+## 🔄 Git 同步范围（重要）
+
+会被同步到仓库并在下次安装/更新自动下发：
+- `bootstrap/openclaw/skills/openclaw/*`（OpenClaw skills）
+- `bootstrap/openclaw/skills/config/*`（Kimi CLI / config skills）
+- `bootstrap/openclaw/data-agents/*`（Meco Studio 智能体本地资产）
+- `bootstrap/openclaw/workspaces/*`（OpenClaw 智能体人设文件）
+- `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
+
+不会同步到仓库：
+- 房间数据与房间封面（`data/rooms.json`、`data/room-covers/*`）
+
 ## 🔑 API Key 配置（首页左上角头像下拉）
 
 打开 `http://127.0.0.1:3456`，点击左上角头像进入 **API Keys**。
@@ -180,6 +192,15 @@ post_install_actions:
 ```bash
 bash scripts/build-bootstrap-package.sh
 ```
+
+该命令会从本机自动聚合并刷新：
+- `~/.openclaw/skills`
+- `~/.config/agents/skills`
+- `~/.openclaw/workspace-*`
+- `~/.openclaw/agents/*/agent`
+- `./data/agents`
+
+然后写回 `bootstrap/openclaw/`，提交到 GitHub 后，安装/更新会自动同步下发。
 
 可选定向打包：
 

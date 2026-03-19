@@ -599,6 +599,52 @@ sync_skill_dir() {
   rsync -a --delete --exclude '.DS_Store' --exclude 'node_modules' --exclude '.git' "$src"/ "$dst"/
 }
 
+merge_secret_json_preserve_existing() {
+  local old_file="$1"
+  local new_file="$2"
+  [[ -f "$old_file" ]] || return 0
+  [[ -f "$new_file" ]] || return 0
+
+  node -e '
+    const fs = require("fs");
+    const oldPath = process.argv[1];
+    const newPath = process.argv[2];
+    let oldObj = null;
+    let newObj = null;
+    try { oldObj = JSON.parse(fs.readFileSync(oldPath, "utf8")); } catch (_) { process.exit(0); }
+    try { newObj = JSON.parse(fs.readFileSync(newPath, "utf8")); } catch (_) { process.exit(0); }
+
+    const isSecretKey = (k) => /(api[-_]?key|token|secret|password|^key$)/i.test(String(k || ""));
+    const isEmpty = (v) => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
+    const isNonEmptyString = (v) => typeof v === "string" && v.trim() !== "";
+
+    const merge = (next, prev) => {
+      if (Array.isArray(next) && Array.isArray(prev)) {
+        for (let i = 0; i < next.length; i++) {
+          next[i] = merge(next[i], prev[i]);
+        }
+        return next;
+      }
+      if (!next || typeof next !== "object" || !prev || typeof prev !== "object") {
+        return next;
+      }
+      for (const key of Object.keys(next)) {
+        if (isSecretKey(key)) {
+          if (isEmpty(next[key]) && isNonEmptyString(prev[key])) {
+            next[key] = prev[key];
+          }
+          continue;
+        }
+        next[key] = merge(next[key], prev[key]);
+      }
+      return next;
+    };
+
+    const merged = merge(newObj, oldObj);
+    fs.writeFileSync(newPath, JSON.stringify(merged, null, 2) + "\n");
+  ' "$old_file" "$new_file"
+}
+
 apply_bootstrap_assets() {
   local bootstrap_dir="$MECO_INSTALL_DIR/bootstrap/openclaw"
   local manifest="$bootstrap_dir/manifest.json"
@@ -678,6 +724,29 @@ apply_bootstrap_assets() {
     local local_agent_dst="$MECO_INSTALL_DIR/data/agents/$agent_id"
     if [[ -d "$local_agent_src" ]]; then
       sync_dir_overlay "$local_agent_src" "$local_agent_dst"
+    fi
+
+    local oc_agent_src="$bootstrap_dir/openclaw-agents/$agent_id/agent"
+    local oc_agent_dst="$OPENCLAW_ROOT/agents/$agent_id/agent"
+    if [[ -d "$oc_agent_src" ]]; then
+      local backup_dir
+      backup_dir="$(mktemp -d)"
+      if [[ -f "$oc_agent_dst/auth-profiles.json" ]]; then
+        cp "$oc_agent_dst/auth-profiles.json" "$backup_dir/auth-profiles.json"
+      fi
+      if [[ -f "$oc_agent_dst/models.json" ]]; then
+        cp "$oc_agent_dst/models.json" "$backup_dir/models.json"
+      fi
+
+      sync_dir_overlay "$oc_agent_src" "$oc_agent_dst"
+
+      if [[ -f "$backup_dir/auth-profiles.json" && -f "$oc_agent_dst/auth-profiles.json" ]]; then
+        merge_secret_json_preserve_existing "$backup_dir/auth-profiles.json" "$oc_agent_dst/auth-profiles.json"
+      fi
+      if [[ -f "$backup_dir/models.json" && -f "$oc_agent_dst/models.json" ]]; then
+        merge_secret_json_preserve_existing "$backup_dir/models.json" "$oc_agent_dst/models.json"
+      fi
+      rm -rf "$backup_dir"
     fi
   done <<< "$agent_lines"
 

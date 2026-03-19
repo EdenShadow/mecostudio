@@ -9,11 +9,10 @@ import urllib.request
 import urllib.parse
 import ssl
 import sys
-import os
 from typing import Optional, Dict, Any
 
 # API 配置
-API_KEY = os.environ.get("TIKHUB_API_KEY", "").strip()
+API_KEY = ""
 API_BASE_URL = "https://api.tikhub.io"  # 海外用户使用 .io
 API_BASE_URL_CN = "https://api.tikhub.dev"  # 国内用户使用 .dev
 
@@ -22,8 +21,6 @@ class TikHubAPI:
     
     def __init__(self, api_key: str = API_KEY, use_cn_domain: bool = False):
         self.api_key = api_key
-        if not self.api_key:
-            raise ValueError("missing TIKHUB_API_KEY")
         self.base_url = API_BASE_URL_CN if use_cn_domain else API_BASE_URL
         self.headers = {
             "Authorization": f"Bearer {api_key}",

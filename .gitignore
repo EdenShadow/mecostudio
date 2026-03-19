@@ -9,6 +9,9 @@ data/app-settings.json
 .kimi-queue-cache.json
 .roundtable-topic-memory.json
 data/room-covers/
+data/rooms.json
+data/.DS_Store
+data/agents/.DS_Store
 
 # 调试/临时脚本
 debug-openclaw.js

@@ -7,7 +7,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
-const API_KEY = 'new1_5849159db0de4d5aba328655a5bfacf5';
+const API_KEY = '';
 const BASE_URL = 'https://api.twitterapi.io/twitter';
 
 // Helper function to make API requests

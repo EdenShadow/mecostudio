@@ -31,6 +31,19 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - 启动服务（默认 `http://127.0.0.1:3456`）
 - 若为升级流程：完成后自动重启 OpenClaw Gateway 与 Meco Studio
 
+## Git 同步范围（安装/更新自动下发）
+
+会同步：
+- `bootstrap/openclaw/skills/openclaw/*`（OpenClaw skills）
+- `bootstrap/openclaw/skills/config/*`（Kimi CLI/config skills）
+- `bootstrap/openclaw/data-agents/*`（Meco Studio 智能体资产）
+- `bootstrap/openclaw/workspaces/*`（OpenClaw workspace 人设文件）
+- `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
+
+不会同步：
+- `data/rooms.json`
+- `data/room-covers/*`
+
 分类目录：
 
 - `AI_Tech`
@@ -127,6 +140,13 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 ```bash
 bash scripts/build-bootstrap-package.sh
 ```
+
+该命令会从本机自动收集并写回 `bootstrap/openclaw/`：
+- `~/.openclaw/skills`
+- `~/.config/agents/skills`
+- `~/.openclaw/workspace-*`
+- `~/.openclaw/agents/*/agent`
+- `./data/agents`
 
 定向打包：
 

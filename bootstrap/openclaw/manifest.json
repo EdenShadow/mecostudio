@@ -1,7 +1,17 @@
 {
   "version": 1,
-  "createdAt": "2026-03-17T18:59:13.386Z",
+  "createdAt": "2026-03-19T20:27:28.329Z",
   "agents": [
+    {
+      "id": "eden",
+      "displayName": "Eden",
+      "workspaceDirName": "workspace-eden"
+    },
+    {
+      "id": "feishu",
+      "displayName": "",
+      "workspaceDirName": "workspace-feishu"
+    },
     {
       "id": "gates",
       "displayName": "Bill Gates",
@@ -35,6 +45,7 @@
   ],
   "skills": {
     "openclaw": [
+      "doc-to-md",
       "feishu-send-media",
       "feishu-upload",
       "hot-topics",

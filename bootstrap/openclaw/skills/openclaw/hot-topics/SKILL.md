@@ -156,7 +156,7 @@ File format (any .txt file):
 Edit the API key in the script or set environment variable:
 
 ```bash
-export TIKHUB_API_KEY="your-api-key-here"
+export TIKHUB_API_KEY=""
 ```
 
 Default API key is embedded in the script.

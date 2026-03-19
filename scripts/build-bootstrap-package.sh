@@ -76,6 +76,52 @@ list_from_csv_or_dirs() {
   find "$root" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort
 }
 
+list_default_agent_ids() {
+  local csv="${MECO_BOOTSTRAP_AGENTS:-}"
+  local openclaw_agents_json_file="$1"
+  if [[ -n "$csv" ]]; then
+    list_from_csv_or_dirs "$csv" "$REPO_ROOT/data/agents"
+    return 0
+  fi
+
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const repoRoot = process.argv[1];
+    const openclawRoot = process.argv[2];
+    const openclawJsonFile = process.argv[3];
+    const ids = new Set();
+
+    const addDirEntries = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const de of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!de.isDirectory()) continue;
+        if (de.name.startsWith(".")) continue;
+        if (de.name.startsWith("workspace-")) continue;
+        ids.add(de.name);
+      }
+    };
+
+    addDirEntries(path.join(repoRoot, "data", "agents"));
+    addDirEntries(path.join(openclawRoot, "agents"));
+
+    if (fs.existsSync(openclawJsonFile)) {
+      try {
+        const conf = JSON.parse(fs.readFileSync(openclawJsonFile, "utf8") || "{}");
+        const list = (((conf || {}).agents || {}).list) || [];
+        for (const item of list) {
+          const id = String((item && item.id) || "").trim();
+          if (!id) continue;
+          if (id.startsWith(".")) continue;
+          ids.add(id);
+        }
+      } catch (_) {}
+    }
+
+    process.stdout.write(Array.from(ids).sort().join("\n"));
+  ' "$REPO_ROOT" "$OPENCLAW_ROOT" "$openclaw_agents_json_file"
+}
+
 sync_dir_clean() {
   local src="$1"
   local dst="$2"
@@ -86,6 +132,8 @@ sync_dir_clean() {
     --exclude 'node_modules' \
     --exclude '.env' \
     --exclude '.env.*' \
+    --exclude '*.tmp' \
+    --exclude '*.bak' \
     --exclude '*.log' \
     --exclude 'logs' \
     --exclude 'tmp' \
@@ -105,7 +153,7 @@ sanitize_json_secrets() {
     } catch (_) {
       process.exit(0);
     }
-    const secretKeyRegex = /(api[-_]?key|token|secret|password)/i;
+    const secretKeyRegex = /(api[-_]?key|token|secret|password|^key$)/i;
     const walk = (input) => {
       if (Array.isArray(input)) return input.map(walk);
       if (!input || typeof input !== "object") return input;
@@ -122,6 +170,55 @@ sanitize_json_secrets() {
     const cleaned = walk(parsed);
     fs.writeFileSync(file, JSON.stringify(cleaned, null, 2) + "\n");
   ' "$json_file"
+}
+
+sanitize_plaintext_secrets() {
+  local target_file="$1"
+  [[ -f "$target_file" ]] || return 0
+  node -e '
+    const fs = require("fs");
+    const file = process.argv[1];
+    let text;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch (_) {
+      process.exit(0);
+    }
+
+    const rules = [
+      { re: /\bsk-[A-Za-z0-9._-]{20,}\b/g, to: "<REDACTED_API_KEY>" },
+      { re: /\bLTAI[A-Za-z0-9]{8,}\b/g, to: "<REDACTED_ACCESS_KEY_ID>" },
+      { re: /\bAKIA[0-9A-Z]{8,}\b/g, to: "<REDACTED_ACCESS_KEY_ID>" },
+      { re: /(api[_-]?key\s*[:=]\s*["\x27])[^"\x27\r\n]*?(["\x27])/gi, to: "$1$2" },
+      { re: /(token\s*[:=]\s*["\x27])[^"\x27\r\n]*?(["\x27])/gi, to: "$1$2" },
+      { re: /(secret\s*[:=]\s*["\x27])[^"\x27\r\n]*?(["\x27])/gi, to: "$1$2" },
+      { re: /(password\s*[:=]\s*["\x27])[^"\x27\r\n]*?(["\x27])/gi, to: "$1$2" },
+      { re: /(app_secret\s*[:=]\s*["\x27])[^"\x27\r\n]*?(["\x27])/gi, to: "$1$2" },
+      { re: /(app_id\s*[:=]\s*["\x27])[^"\x27\r\n]*?(["\x27])/gi, to: "$1$2" },
+      { re: /(Bearer\s+)[A-Za-z0-9._~+\/=-]{20,}/g, to: "$1<REDACTED_TOKEN>" }
+    ];
+
+    let out = text;
+    for (const { re, to } of rules) out = out.replace(re, to);
+    if (out !== text) fs.writeFileSync(file, out, "utf8");
+  ' "$target_file"
+}
+
+sanitize_bootstrap_tree() {
+  local root="$1"
+  [[ -d "$root" ]] || return 0
+
+  local json_file
+  while IFS= read -r json_file; do
+    [[ -n "$json_file" ]] || continue
+    sanitize_json_secrets "$json_file"
+  done < <(find "$root" -type f -name '*.json' | sort)
+
+  local text_file
+  while IFS= read -r text_file; do
+    [[ -n "$text_file" ]] || continue
+    sanitize_plaintext_secrets "$text_file"
+  done < <(find "$root" -type f \( -name '*.md' -o -name '*.txt' -o -name '*.py' -o -name '*.js' -o -name '*.mjs' -o -name '*.cjs' -o -name '*.sh' -o -name '*.bash' \) | sort)
 }
 
 copy_workspace_profile() {
@@ -141,10 +238,18 @@ main() {
   command -v node >/dev/null 2>&1 || die "missing command: node"
 
   mkdir -p "$BOOTSTRAP_DIR"
-  mkdir -p "$BOOTSTRAP_DIR/data-agents" "$BOOTSTRAP_DIR/workspaces" "$BOOTSTRAP_DIR/skills/openclaw" "$BOOTSTRAP_DIR/skills/config"
+  mkdir -p "$BOOTSTRAP_DIR/data-agents" "$BOOTSTRAP_DIR/workspaces" "$BOOTSTRAP_DIR/openclaw-agents" "$BOOTSTRAP_DIR/skills/openclaw" "$BOOTSTRAP_DIR/skills/config"
 
   local openclaw_agents_json='[]'
-  if command -v openclaw >/dev/null 2>&1; then
+  local openclaw_config="$OPENCLAW_ROOT/openclaw.json"
+  if [[ -f "$openclaw_config" ]]; then
+    openclaw_agents_json="$(node -e '
+      const fs = require("fs");
+      const conf = JSON.parse(fs.readFileSync(process.argv[1], "utf8") || "{}");
+      const list = (((conf || {}).agents || {}).list) || [];
+      process.stdout.write(JSON.stringify(Array.isArray(list) ? list : []));
+    ' "$openclaw_config" 2>/dev/null || printf '[]')"
+  elif command -v openclaw >/dev/null 2>&1; then
     local raw
     raw="$(openclaw agents list --json 2>&1 || true)"
     if parsed="$(printf '%s' "$raw" | extract_first_json 2>/dev/null)"; then
@@ -154,7 +259,9 @@ main() {
 
   local workspace_map_file
   workspace_map_file="$(mktemp)"
-  trap 'rm -f "'"$workspace_map_file"'"' EXIT
+  local name_map_file
+  name_map_file="$(mktemp)"
+  trap 'rm -f "'"$workspace_map_file"'" "'"$name_map_file"'"' EXIT
   printf '%s' "$openclaw_agents_json" | node -e '
     const fs = require("fs");
     const arr = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -166,18 +273,31 @@ main() {
       process.stdout.write(`${item.id}\t${wsBase}\n`);
     }
   ' > "$workspace_map_file"
+  printf '%s' "$openclaw_agents_json" | node -e '
+    const fs = require("fs");
+    const arr = JSON.parse(fs.readFileSync(0, "utf8"));
+    for (const item of arr) {
+      if (!item || !item.id) continue;
+      const identityName = item.identity && item.identity.name ? String(item.identity.name).trim() : "";
+      const name = identityName || String(item.name || "").trim();
+      process.stdout.write(`${item.id}\t${name.replace(/\t/g, " ").replace(/\n/g, " ")}\n`);
+    }
+  ' > "$name_map_file"
 
   local agent_ids
-  agent_ids="$(list_from_csv_or_dirs "${MECO_BOOTSTRAP_AGENTS:-}" "$REPO_ROOT/data/agents")"
+  agent_ids="$(list_default_agent_ids "$openclaw_config")"
 
   : > "$BOOTSTRAP_DIR/.agents.tsv"
+  rm -rf "$BOOTSTRAP_DIR/openclaw-agents"
+  mkdir -p "$BOOTSTRAP_DIR/openclaw-agents"
   while read -r agent_id; do
     [[ -n "$agent_id" ]] || continue
     local data_src="$REPO_ROOT/data/agents/$agent_id"
-    [[ -d "$data_src" ]] || continue
 
-    sync_dir_clean "$data_src" "$BOOTSTRAP_DIR/data-agents/$agent_id"
-    sanitize_json_secrets "$BOOTSTRAP_DIR/data-agents/$agent_id/meta.json"
+    if [[ -d "$data_src" ]]; then
+      sync_dir_clean "$data_src" "$BOOTSTRAP_DIR/data-agents/$agent_id"
+      sanitize_json_secrets "$BOOTSTRAP_DIR/data-agents/$agent_id/meta.json"
+    fi
 
     local display_name
     display_name="$(node -e '
@@ -188,6 +308,9 @@ main() {
         process.stdout.write(String(j.displayName || "").replace(/\t/g, " ").replace(/\n/g, " ").trim());
       } catch (_) {}
     ' "$data_src/meta.json")"
+    if [[ -z "$display_name" ]]; then
+      display_name="$(awk -F'\t' -v id="$agent_id" '$1 == id { print $2; exit }' "$name_map_file")"
+    fi
 
     local ws_dir_name
     ws_dir_name="$(awk -F'\t' -v id="$agent_id" '$1 == id { print $2; exit }' "$workspace_map_file")"
@@ -201,7 +324,9 @@ main() {
 
     local ws_src="$OPENCLAW_ROOT/$ws_dir_name"
     if [[ ! -d "$ws_src" ]]; then
-      local fallback_ws="$OPENCLAW_ROOT/workspace-${agent_id^}"
+      local cap_id
+      cap_id="$(printf '%s' "$agent_id" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+      local fallback_ws="$OPENCLAW_ROOT/workspace-$cap_id"
       if [[ -d "$fallback_ws" ]]; then
         ws_src="$fallback_ws"
         ws_dir_name="$(basename "$fallback_ws")"
@@ -209,6 +334,16 @@ main() {
     fi
     if [[ -d "$ws_src" ]]; then
       copy_workspace_profile "$ws_src" "$BOOTSTRAP_DIR/workspaces/$agent_id"
+    fi
+
+    local oc_agent_src="$OPENCLAW_ROOT/agents/$agent_id/agent"
+    if [[ -d "$oc_agent_src" ]]; then
+      sync_dir_clean "$oc_agent_src" "$BOOTSTRAP_DIR/openclaw-agents/$agent_id/agent"
+      local json_file
+      while IFS= read -r json_file; do
+        [[ -n "$json_file" ]] || continue
+        sanitize_json_secrets "$json_file"
+      done < <(find "$BOOTSTRAP_DIR/openclaw-agents/$agent_id/agent" -type f -name '*.json')
     fi
 
     printf '%s\t%s\t%s\n' "$agent_id" "$display_name" "$ws_dir_name" >> "$BOOTSTRAP_DIR/.agents.tsv"
@@ -281,6 +416,8 @@ main() {
       JSON.stringify(manifest, null, 2) + "\n"
     );
   ' "$BOOTSTRAP_DIR"
+
+  sanitize_bootstrap_tree "$BOOTSTRAP_DIR"
 
   rm -f "$BOOTSTRAP_DIR/.agents.tsv"
   log "Bootstrap package updated: $BOOTSTRAP_DIR"
