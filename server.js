@@ -3006,6 +3006,139 @@ app.get('/api/oss/sign', (req, res) => {
     }
 });
 
+// Frontend-friendly OSS PUT presign (compatible with tiktok_tool style fields)
+app.post('/api/oss/presign', (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const extRaw = String(body.ext || '').trim().replace(/^\./, '');
+        const ext = extRaw ? `.${extRaw}` : '';
+        const originalName = String(body.originalName || body.filename || `upload${ext || '.bin'}`).trim();
+        const objectKey = String(body.objectKey || '').trim() || ossStorage.buildObjectKey({
+            originalName,
+            prefix: body.prefix || 'uploads'
+        });
+
+        const runtime = getRuntimeSettings();
+        const result = ossStorage.signPutObjectUrl(runtime, {
+            objectKey,
+            expires: body.expires,
+            contentType: body.contentType || ''
+        });
+
+        return res.json({
+            success: true,
+            ...result,
+            // Compatibility aliases
+            presign_url: result.uploadUrl,
+            public_url: result.fileUrl
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss presign failed' });
+    }
+});
+
+app.post('/api/oss/multipart_init', async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const fileSize = Number(body.fileSize ?? body.file_size ?? 0);
+        if (!Number.isFinite(fileSize) || fileSize <= 0) {
+            return res.status(400).json({ error: 'fileSize must be a positive number' });
+        }
+        const extRaw = String(body.ext || '').trim().replace(/^\./, '');
+        const ext = extRaw ? `.${extRaw}` : '';
+        const originalName = String(body.originalName || body.filename || `upload${ext || '.bin'}`).trim();
+
+        const runtime = getRuntimeSettings();
+        const result = await ossStorage.initMultipartUpload(runtime, {
+            fileSize,
+            originalName,
+            objectKey: body.objectKey || '',
+            prefix: body.prefix || 'uploads',
+            contentType: body.contentType || '',
+            expires: body.expires,
+            partSize: body.partSize ?? body.part_size
+        });
+
+        return res.json({
+            success: true,
+            ...result,
+            // Compatibility aliases
+            upload_id: result.uploadId,
+            object_key: result.objectKey,
+            public_url: result.fileUrl,
+            part_size: result.partSize,
+            total_parts: result.totalParts
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss multipart init failed' });
+    }
+});
+
+app.post('/api/oss/multipart_complete', async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const objectKey = String(body.objectKey || body.object_key || '').trim();
+        const uploadId = String(body.uploadId || body.upload_id || '').trim();
+        const parts = Array.isArray(body.parts) ? body.parts : [];
+
+        if (!objectKey) return res.status(400).json({ error: 'objectKey is required' });
+        if (!uploadId) return res.status(400).json({ error: 'uploadId is required' });
+        if (!parts.length) return res.status(400).json({ error: 'parts is required' });
+
+        const runtime = getRuntimeSettings();
+        const result = await ossStorage.completeMultipartUpload(runtime, {
+            objectKey,
+            uploadId,
+            parts
+        });
+
+        return res.json({
+            success: true,
+            ...result,
+            public_url: result.fileUrl
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss multipart complete failed' });
+    }
+});
+
+app.post('/api/oss/multipart_resume', async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const objectKey = String(body.objectKey || body.object_key || '').trim();
+        const uploadId = String(body.uploadId || body.upload_id || '').trim();
+        const fileSize = Number(body.fileSize ?? body.file_size ?? 0);
+        if (!objectKey) return res.status(400).json({ error: 'objectKey is required' });
+        if (!uploadId) return res.status(400).json({ error: 'uploadId is required' });
+        if (!Number.isFinite(fileSize) || fileSize <= 0) {
+            return res.status(400).json({ error: 'fileSize must be a positive number' });
+        }
+
+        const runtime = getRuntimeSettings();
+        const result = await ossStorage.resumeMultipartUpload(runtime, {
+            objectKey,
+            uploadId,
+            fileSize,
+            partSize: body.partSize ?? body.part_size,
+            expires: body.expires
+        });
+
+        return res.json({
+            success: true,
+            ...result,
+            upload_id: result.uploadId,
+            object_key: result.objectKey,
+            public_url: result.fileUrl,
+            part_size: result.partSize,
+            total_parts: result.totalParts,
+            completed_parts: result.completedParts,
+            remaining_parts: result.remainingParts
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss multipart resume failed' });
+    }
+});
+
 // Create Agent (Enhanced)
 app.post('/api/agents', upload.fields([
     { name: 'avatar', maxCount: 1 }, 

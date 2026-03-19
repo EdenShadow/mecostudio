@@ -19,6 +19,10 @@ MECO_MINIMAX_WS_URL="${MECO_MINIMAX_WS_URL:-wss://api.minimaxi.com/ws/v1/t2a_v2}
 MECO_TIKHUB_API_KEY="${MECO_TIKHUB_API_KEY:-}"
 MECO_MEOWLOAD_API_KEY="${MECO_MEOWLOAD_API_KEY:-}"
 MECO_OPENAI_API_KEY="${MECO_OPENAI_API_KEY:-}"
+MECO_OSS_ENDPOINT="${MECO_OSS_ENDPOINT:-https://oss-cn-hongkong.aliyuncs.com/}"
+MECO_OSS_BUCKET="${MECO_OSS_BUCKET:-cfplusvideo}"
+MECO_OSS_ACCESS_KEY_ID="${MECO_OSS_ACCESS_KEY_ID:-LTAI5t6vDrRRc7YkKGr5Snvh}"
+MECO_OSS_ACCESS_KEY_SECRET="${MECO_OSS_ACCESS_KEY_SECRET:-AJUCCs1yD1Ru5u66h4TmZIMnxjZkLX}"
 OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
 CONFIG_SKILLS_ROOT="${CONFIG_SKILLS_ROOT:-$HOME/.config/agents/skills}"
 HOT_TOPICS_ROOT="${HOT_TOPICS_ROOT:-$HOME/Documents/知识库/热门话题}"
@@ -318,7 +322,11 @@ configure_meco_runtime_settings() {
       meowloadApiKey: String(process.argv[6] || "").trim(),
       kimiApiKey: String(process.argv[7] || "").trim(),
       hotTopicsKbPath: String(process.argv[8] || "").trim(),
-      openaiApiKey: String(process.argv[9] || "").trim()
+      openaiApiKey: String(process.argv[9] || "").trim(),
+      ossEndpoint: String(process.argv[10] || "").trim(),
+      ossBucket: String(process.argv[11] || "").trim(),
+      ossAccessKeyId: String(process.argv[12] || "").trim(),
+      ossAccessKeySecret: String(process.argv[13] || "").trim()
     };
 
     let current = {};
@@ -344,7 +352,11 @@ configure_meco_runtime_settings() {
     "$MECO_MEOWLOAD_API_KEY" \
     "$kimi_api_key" \
     "$HOT_TOPICS_ROOT" \
-    "$MECO_OPENAI_API_KEY"
+    "$MECO_OPENAI_API_KEY" \
+    "$MECO_OSS_ENDPOINT" \
+    "$MECO_OSS_BUCKET" \
+    "$MECO_OSS_ACCESS_KEY_ID" \
+    "$MECO_OSS_ACCESS_KEY_SECRET"
 
   log "Updated Meco runtime settings: $settings_path"
 }

@@ -2,6 +2,10 @@ const OSS = require('ali-oss');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const DEFAULT_MULTIPART_PART_SIZE = 16 * 1024 * 1024; // 16MB
+const MIN_MULTIPART_PART_SIZE = 100 * 1024; // 100KB (OSS minimum, except last part)
+const MAX_MULTIPART_PART_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_MULTIPART_PARTS = 10000;
 
 function toSafeString(value) {
   if (value === null || value === undefined) return '';
@@ -113,10 +117,11 @@ function resolveOssConfig(settings = {}) {
     };
   }
 
-  const endpointForClient = endpointInfo.bucketFromHost
-    ? endpointInfo.host
-    : endpointInfo.endpointRoot;
-  const cname = !!endpointInfo.bucketFromHost;
+  // For Aliyun OSS bucket-domain endpoints like:
+  //   https://<bucket>.oss-<region>.aliyuncs.com
+  // use regional endpoint + bucket (no cname) to keep signature stable.
+  const endpointForClient = endpointInfo.endpointRoot;
+  const cname = false;
   const publicBaseUrl = endpointInfo.bucketFromHost
     ? `${endpointInfo.protocol}//${endpointInfo.host}`
     : `${endpointInfo.protocol}//${bucket}.${endpointInfo.endpointRoot}`;
@@ -165,6 +170,20 @@ function buildObjectKey({ originalName = '', objectKey = '', prefix = '' } = {})
   const digest = crypto.createHash('md5').update(dataKey).digest('hex');
   const generated = `${digest}${safeExt}`;
   return normalizedPrefix ? `${normalizedPrefix}/${generated}` : generated;
+}
+
+function clampPartSize(fileSize, partSizeInput) {
+  let partSize = Number.isFinite(Number(partSizeInput))
+    ? Number(partSizeInput)
+    : DEFAULT_MULTIPART_PART_SIZE;
+  partSize = Math.max(MIN_MULTIPART_PART_SIZE, Math.min(MAX_MULTIPART_PART_SIZE, partSize));
+  if (fileSize > 0) {
+    const minRequired = Math.ceil(fileSize / MAX_MULTIPART_PARTS);
+    if (minRequired > partSize) {
+      partSize = Math.max(minRequired, MIN_MULTIPART_PART_SIZE);
+    }
+  }
+  return Math.floor(partSize);
 }
 
 async function uploadLocalFile(settings, options = {}) {
@@ -252,11 +271,207 @@ function signObjectUrl(settings, options = {}) {
   };
 }
 
+function signPutObjectUrl(settings, options = {}) {
+  const objectKey = normalizeObjectPath(options.objectKey);
+  if (!objectKey) {
+    throw new Error('objectKey is required');
+  }
+  const expires = Number.isFinite(Number(options.expires))
+    ? Math.max(60, Math.min(86400, Number(options.expires)))
+    : 600;
+  const contentType = toSafeString(options.contentType);
+  const signOpts = { expires, method: 'PUT' };
+  if (contentType) {
+    signOpts.headers = { 'Content-Type': contentType };
+  }
+  const { client, cfg } = createClient(settings);
+  const uploadUrl = client.signatureUrl(objectKey, signOpts);
+  const fileUrl = `${cfg.publicBaseUrl}/${objectKey}`;
+  return {
+    objectKey,
+    expires,
+    uploadUrl,
+    fileUrl,
+    bucket: cfg.bucket,
+    endpoint: cfg.endpoint
+  };
+}
+
+async function initMultipartUpload(settings, options = {}) {
+  const fileSize = Number(options.fileSize);
+  if (!Number.isFinite(fileSize) || fileSize <= 0) {
+    throw new Error('fileSize must be a positive number');
+  }
+  const objectKey = buildObjectKey({
+    originalName: options.originalName || 'video.mp4',
+    objectKey: options.objectKey || '',
+    prefix: options.prefix || 'videos'
+  });
+  const contentType = toSafeString(options.contentType) || 'application/octet-stream';
+  const expires = Number.isFinite(Number(options.expires))
+    ? Math.max(300, Math.min(86400, Number(options.expires)))
+    : 1800;
+
+  const { client, cfg } = createClient(settings);
+  const initOptions = contentType ? { headers: { 'Content-Type': contentType } } : undefined;
+  const initResult = await client.initMultipartUpload(objectKey, initOptions);
+  const uploadId = toSafeString(initResult?.uploadId || initResult?.upload_id);
+  if (!uploadId) {
+    throw new Error('failed to init multipart upload (missing uploadId)');
+  }
+
+  const partSize = clampPartSize(fileSize, options.partSize);
+  const totalParts = Math.ceil(fileSize / partSize);
+  const parts = [];
+  for (let i = 1; i <= totalParts; i += 1) {
+    const offset = (i - 1) * partSize;
+    const size = Math.min(partSize, fileSize - offset);
+    const uploadUrl = client.signatureUrl(objectKey, {
+      method: 'PUT',
+      expires,
+      params: {
+        partNumber: String(i),
+        uploadId
+      }
+    });
+    parts.push({
+      partNumber: i,
+      offset,
+      size,
+      uploadUrl
+    });
+  }
+
+  return {
+    uploadId,
+    objectKey,
+    fileUrl: `${cfg.publicBaseUrl}/${objectKey}`,
+    partSize,
+    totalParts,
+    parts,
+    bucket: cfg.bucket,
+    endpoint: cfg.endpoint
+  };
+}
+
+async function completeMultipartUpload(settings, options = {}) {
+  const objectKey = normalizeObjectPath(options.objectKey);
+  const uploadId = toSafeString(options.uploadId);
+  const rawParts = Array.isArray(options.parts) ? options.parts : [];
+  if (!objectKey) {
+    throw new Error('objectKey is required');
+  }
+  if (!uploadId) {
+    throw new Error('uploadId is required');
+  }
+  if (rawParts.length === 0) {
+    throw new Error('parts is required');
+  }
+
+  const parts = rawParts
+    .map((part) => {
+      const number = Number(part?.partNumber ?? part?.part_number ?? part?.number);
+      const etag = toSafeString(part?.etag);
+      if (!Number.isInteger(number) || number <= 0 || !etag) return null;
+      return { number, etag };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.number - b.number);
+
+  if (parts.length === 0) {
+    throw new Error('no valid parts');
+  }
+
+  const { client, cfg } = createClient(settings);
+  const result = await client.completeMultipartUpload(objectKey, uploadId, parts);
+  return {
+    objectKey,
+    uploadId,
+    fileUrl: `${cfg.publicBaseUrl}/${objectKey}`,
+    etag: toSafeString(result?.etag),
+    bucket: cfg.bucket,
+    endpoint: cfg.endpoint
+  };
+}
+
+async function resumeMultipartUpload(settings, options = {}) {
+  const objectKey = normalizeObjectPath(options.objectKey);
+  const uploadId = toSafeString(options.uploadId);
+  const fileSize = Number(options.fileSize);
+  if (!objectKey) {
+    throw new Error('objectKey is required');
+  }
+  if (!uploadId) {
+    throw new Error('uploadId is required');
+  }
+  if (!Number.isFinite(fileSize) || fileSize <= 0) {
+    throw new Error('fileSize must be a positive number');
+  }
+
+  const partSize = clampPartSize(fileSize, options.partSize);
+  const totalParts = Math.ceil(fileSize / partSize);
+  const expires = Number.isFinite(Number(options.expires))
+    ? Math.max(300, Math.min(86400, Number(options.expires)))
+    : 1800;
+
+  const { client, cfg } = createClient(settings);
+  const listResult = await client.listParts(objectKey, uploadId);
+  const uploadedPartsRaw = Array.isArray(listResult?.parts) ? listResult.parts : [];
+  const uploadedMap = new Map();
+  uploadedPartsRaw.forEach((part) => {
+    const number = Number(part?.number ?? part?.partNumber ?? part?.part_number);
+    const etag = toSafeString(part?.etag);
+    if (Number.isInteger(number) && number > 0 && etag) {
+      uploadedMap.set(number, etag);
+    }
+  });
+
+  const completedParts = Array.from(uploadedMap.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([partNumber, etag]) => ({ partNumber, etag }));
+
+  const remainingParts = [];
+  for (let i = 1; i <= totalParts; i += 1) {
+    if (uploadedMap.has(i)) continue;
+    const offset = (i - 1) * partSize;
+    const size = Math.min(partSize, fileSize - offset);
+    const uploadUrl = client.signatureUrl(objectKey, {
+      method: 'PUT',
+      expires,
+      params: {
+        partNumber: String(i),
+        uploadId
+      }
+    });
+    remainingParts.push({
+      partNumber: i,
+      offset,
+      size,
+      uploadUrl
+    });
+  }
+
+  return {
+    uploadId,
+    objectKey,
+    fileUrl: `${cfg.publicBaseUrl}/${objectKey}`,
+    partSize,
+    totalParts,
+    completedParts,
+    remainingParts,
+    bucket: cfg.bucket,
+    endpoint: cfg.endpoint
+  };
+}
+
 module.exports = {
   resolveOssConfig,
   buildObjectKey,
   uploadLocalFile,
   downloadObjectToLocal,
-  signObjectUrl
+  signObjectUrl,
+  signPutObjectUrl,
+  initMultipartUpload,
+  completeMultipartUpload,
+  resumeMultipartUpload
 };
-

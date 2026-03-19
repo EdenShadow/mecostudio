@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   tikhubApiKey: '',
   meowloadApiKey: '',
   kimiApiKey: '',
-  ossEndpoint: 'https://cfplusvideo.oss-cn-hongkong.aliyuncs.com/',
+  ossEndpoint: 'https://oss-cn-hongkong.aliyuncs.com/',
   ossBucket: 'cfplusvideo',
   ossAccessKeyId: '',
   ossAccessKeySecret: '',

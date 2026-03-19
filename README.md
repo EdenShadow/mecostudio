@@ -58,10 +58,10 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 - `TikHub API Key`
 - `MeowLoad API Key`（哼哼猫 / media-downloader）
 - `MiniMax API Key`（TTS 必需）
-- `Aliyun OSS Endpoint`（按你的 OSS 配置填写）
-- `Aliyun OSS Bucket`（按你的 OSS 配置填写）
-- `Aliyun OSS AccessKey ID`
-- `Aliyun OSS AccessKey Secret`
+- `Aliyun OSS Endpoint`（默认：`https://oss-cn-hongkong.aliyuncs.com/`）
+- `Aliyun OSS Bucket`（默认：`cfplusvideo`）
+- `Aliyun OSS AccessKey ID`（默认同一套，示例：`LTAI****Snvh`）
+- `Aliyun OSS AccessKey Secret`（默认同一套，示例：`AJUC****ZkLX`）
 
 点击“确定并自动安装/激活”后会自动执行：
 
@@ -93,10 +93,10 @@ MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
 MECO_MINIMAX_API_KEY="xxxx" \
 MECO_TIKHUB_API_KEY="xxxx" \
 MECO_MEOWLOAD_API_KEY="xxxx" \
-MECO_OSS_ENDPOINT="<your-oss-endpoint>" \
-MECO_OSS_BUCKET="<your-oss-bucket>" \
-MECO_OSS_ACCESS_KEY_ID="LTAIxxxx" \
-MECO_OSS_ACCESS_KEY_SECRET="xxxx" \
+MECO_OSS_ENDPOINT="https://oss-cn-hongkong.aliyuncs.com/" \
+MECO_OSS_BUCKET="cfplusvideo" \
+MECO_OSS_ACCESS_KEY_ID="<cfplusvideo-access-key-id>" \
+MECO_OSS_ACCESS_KEY_SECRET="<cfplusvideo-access-key-secret>" \
 MECO_OPENAI_API_KEY="" \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
@@ -108,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `MECO_OPENCLAW_MODEL_API_KEY`：兼容保留，未设置时自动回退到 `MECO_KIMI_CODING_API_KEY`
 - `MECO_KIMI_CODING_API_KEY`：用于 Kimi CLI 激活，并通过 `kimi-code-api-key` 自动配置 OpenClaw 认证
 - `MECO_MINIMAX_API_KEY` / `MECO_TIKHUB_API_KEY` / `MECO_MEOWLOAD_API_KEY`：开箱即用所需关键能力
-- `MECO_OSS_ENDPOINT` / `MECO_OSS_BUCKET` / `MECO_OSS_ACCESS_KEY_ID` / `MECO_OSS_ACCESS_KEY_SECRET`：阿里云 OSS 上传下载能力
+- `MECO_OSS_ENDPOINT` / `MECO_OSS_BUCKET` / `MECO_OSS_ACCESS_KEY_ID` / `MECO_OSS_ACCESS_KEY_SECRET`：阿里云 OSS 上传下载能力（默认已内置 `cfplusvideo` 同一套配置，可覆盖）
 - `MECO_OPENAI_API_KEY`：可选，Whisper API 模式可用
 
 ## 🤖 AI 可读协议（Machine Readable Spec）
