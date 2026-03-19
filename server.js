@@ -9,6 +9,7 @@ const openclaw = require('./services/openclaw');
 const voiceService = require('./services/voice'); // Voice Training Service
 const appSettings = require('./services/app-settings');
 const integrationSetup = require('./services/integration-setup');
+const ossStorage = require('./services/oss-storage');
 
 const app = express();
 const server = http.createServer(app);
@@ -129,6 +130,49 @@ function evictSupersededConnections({ currentWs, agentId, roomId = null, isTTS =
   return closed;
 }
 
+function normalizeSseTextValue(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    let merged = '';
+    for (const part of value) {
+      if (typeof part === 'string') {
+        merged += part;
+        continue;
+      }
+      if (!part || typeof part !== 'object') continue;
+      if (typeof part.text === 'string') merged += part.text;
+      else if (typeof part.content === 'string') merged += part.content;
+      else if (typeof part.output_text === 'string') merged += part.output_text;
+    }
+    return merged;
+  }
+  if (value && typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.content === 'string') return value.content;
+    if (typeof value.output_text === 'string') return value.output_text;
+  }
+  return '';
+}
+
+function extractSseContentDelta(parsed) {
+  const choice = parsed?.choices?.[0] || {};
+  const delta = choice?.delta || {};
+  const directDelta =
+    normalizeSseTextValue(delta.content) ||
+    normalizeSseTextValue(delta.text) ||
+    normalizeSseTextValue(delta.output_text);
+  if (directDelta) return directDelta;
+
+  // 历史实现兼容：部分网关在 message/content 或 output_text 中返回文本
+  const fallbackText =
+    choice?.message?.content ??
+    choice?.text ??
+    parsed?.output_text ??
+    parsed?.message?.content ??
+    '';
+  return normalizeSseTextValue(fallbackText);
+}
+
 // 使用 Gateway HTTP SSE 流式方式发送请求到 OpenClaw
 async function sendToOpenClawHTTP(agentId, userMessage, ws) {
   const requestId = `${agentId}-${Date.now()}`;
@@ -229,15 +273,7 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
 
           try {
             const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta || {};
-            const content =
-              delta.content ||
-              delta.text ||
-              delta.output_text ||
-              parsed.choices?.[0]?.message?.content ||
-              parsed.choices?.[0]?.text ||
-              parsed.output_text ||
-              '';
+            const content = extractSseContentDelta(parsed);
             if (content) {
               if (!firstChunkReceived) {
                 firstChunkReceived = true;
@@ -434,7 +470,7 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
             delta.thinking ||
             delta.thought ||
             '';
-          const content = delta.content || delta.text || '';
+          const content = extractSseContentDelta(parsed);
 
           if (typeof reasoning === 'string' && reasoning.length > 0) {
             if (!firstChunkReceived) {
@@ -978,7 +1014,8 @@ if (!fs.existsSync(MEMORY_DIR)) {
 }
 
 const memory = {};
-const MAX_MEMORY = 20;  // 保留最近20条，平衡记忆深度和推理速度
+const MAX_MEMORY = 20;  // 本地持久化保留最近20条
+const CONTEXT_MEMORY_TURNS = 5; // 每次请求仅携带最近5轮历史（user+assistant）
 const AGENTTOOLS_HISTORY_DIR = path.join(MEMORY_DIR, 'agenttools-history');
 const AGENTTOOLS_HISTORY_PAGE_SIZE = 20;
 const AGENTTOOLS_HISTORY_MAX_PAGES = 20;
@@ -2855,6 +2892,120 @@ app.get('/api/agents/:agentId/file', (req, res) => {
 const multer = require('multer');
 const upload = multer({ dest: path.join(__dirname, 'temp_uploads') });
 
+// OSS Storage API (configurable via /api/settings)
+app.get('/api/oss/config', (req, res) => {
+    try {
+        const runtime = getRuntimeSettings();
+        const cfg = ossStorage.resolveOssConfig(runtime);
+        res.json({
+            ready: !!cfg.ready,
+            endpoint: cfg.endpoint || '',
+            bucket: cfg.bucket || '',
+            region: cfg.region || '',
+            publicBaseUrl: cfg.publicBaseUrl || '',
+            hasAccessKeyId: !!(runtime.ossAccessKeyId && String(runtime.ossAccessKeyId).trim()),
+            hasAccessKeySecret: !!(runtime.ossAccessKeySecret && String(runtime.ossAccessKeySecret).trim()),
+            error: cfg.ready ? '' : (cfg.error || '')
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message || 'failed to get oss config' });
+    }
+});
+
+app.post('/api/oss/upload', upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'file is required' });
+    }
+
+    try {
+        const runtime = getRuntimeSettings();
+        const result = await ossStorage.uploadLocalFile(runtime, {
+            localPath: req.file.path,
+            originalName: req.file.originalname || req.file.filename,
+            contentType: req.file.mimetype || '',
+            objectKey: req.body?.objectKey || '',
+            prefix: req.body?.prefix || ''
+        });
+        return res.json({
+            success: true,
+            ...result
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss upload failed' });
+    } finally {
+        try { fs.unlinkSync(req.file.path); } catch (_) {}
+    }
+});
+
+app.post('/api/oss/upload-by-path', async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const localPath = String(body.localPath || '').trim();
+        if (!localPath) {
+            return res.status(400).json({ error: 'localPath is required' });
+        }
+        const runtime = getRuntimeSettings();
+        const result = await ossStorage.uploadLocalFile(runtime, {
+            localPath,
+            originalName: body.originalName || path.basename(localPath),
+            contentType: body.contentType || '',
+            objectKey: body.objectKey || '',
+            prefix: body.prefix || ''
+        });
+        return res.json({
+            success: true,
+            ...result
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss upload-by-path failed' });
+    }
+});
+
+app.post('/api/oss/download', async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const objectKey = String(body.objectKey || '').trim();
+        if (!objectKey) {
+            return res.status(400).json({ error: 'objectKey is required' });
+        }
+        const defaultDir = path.join(__dirname, 'public', 'uploads', 'oss-downloads');
+        const runtime = getRuntimeSettings();
+        const result = await ossStorage.downloadObjectToLocal(runtime, {
+            objectKey,
+            targetPath: body.targetPath || '',
+            overwrite: body.overwrite === true,
+            defaultDir
+        });
+        return res.json({
+            success: true,
+            ...result,
+            displayPath: toTildePath(result.localPath)
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss download failed' });
+    }
+});
+
+app.get('/api/oss/sign', (req, res) => {
+    try {
+        const objectKey = String(req.query?.objectKey || '').trim();
+        if (!objectKey) {
+            return res.status(400).json({ error: 'objectKey is required' });
+        }
+        const runtime = getRuntimeSettings();
+        const result = ossStorage.signObjectUrl(runtime, {
+            objectKey,
+            expires: req.query?.expires
+        });
+        return res.json({
+            success: true,
+            ...result
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message || 'oss sign failed' });
+    }
+});
+
 // Create Agent (Enhanced)
 app.post('/api/agents', upload.fields([
     { name: 'avatar', maxCount: 1 }, 
@@ -3426,6 +3577,43 @@ class PodcastPusher {
     this.onTopicChanged = null;    // 话题变更回调 (data) => void
     this.onStartStreaming = null;  // 开播命令回调 (msg) => void
     this.onStopStreaming = null;   // 下播命令回调 (msg) => void
+    this.controlConnectedAtMs = 0; // 控制连接建立时间（用于过滤陈旧控制命令）
+    this.liveJoinedAgents = new Set(); // 当前开播周期已上麦的主播（避免发言切换时反复上下麦）
+    this.speakerPlanQueue = []; // 预加载发言顺序计划队列（用于按顺序提前推流）
+  }
+
+  _extractMessageTimestampMs(msg) {
+    const raw = String(msg?.timestamp || msg?.data?.timestamp || '').trim();
+    if (!raw) return 0;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  _shouldAcceptStreamingControl(msg, commandType) {
+    if (!msg || !commandType) return false;
+    const cmdRoomId = String(msg?.data?.room_id || '').trim();
+    const currentRoomId = String(this.podcastRoomId || '').trim();
+    if (cmdRoomId && currentRoomId && cmdRoomId !== currentRoomId) {
+      console.warn(`[Podcast] ⏭️ 忽略 ${commandType}: room_id 不匹配 cmd=${cmdRoomId}, current=${currentRoomId}`);
+      return false;
+    }
+
+    const now = Date.now();
+    const ts = this._extractMessageTimestampMs(msg);
+    if (ts > 0) {
+      // 绝对过期保护：超过 2 分钟的控制命令视为陈旧包
+      if (now - ts > 120000) {
+        console.warn(`[Podcast] ⏭️ 忽略过期 ${commandType}: age=${Math.round((now - ts) / 1000)}s`);
+        return false;
+      }
+      // 刚重连后可能收到历史缓存命令：若命令时间明显早于本次控制连接建立时间，则忽略
+      if (this.controlConnectedAtMs > 0 && ts + 2000 < this.controlConnectedAtMs) {
+        console.warn(`[Podcast] ⏭️ 忽略旧连接 ${commandType}: cmd=${new Date(ts).toISOString()}, connectedAt=${new Date(this.controlConnectedAtMs).toISOString()}`);
+        return false;
+      }
+    }
+
+    return true;
   }
 
   async connect() {
@@ -3569,6 +3757,10 @@ class PodcastPusher {
   _handleMessage(msg, resolve) {
     if (msg.type === 'control_established') {
       this.connected = true;
+      this.controlConnectedAtMs = Date.now();
+      // 控制连接建立后，重置本地音频序号与缓存，保证重连后的首包 sequence=0
+      this.clearAudio();
+      console.log('[Podcast] ♻️ control_established: 已重置本地音频序号与缓冲 (sequence=0)');
       if (this.pingInterval) clearInterval(this.pingInterval);
       this.pingInterval = setInterval(() => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -3605,12 +3797,14 @@ class PodcastPusher {
         this.onTopicChanged(msg.data);
       }
     } else if (msg.type === 'start_streaming') {
+      if (!this._shouldAcceptStreamingControl(msg, 'start_streaming')) return;
       console.log(`[Podcast] ▶️ 收到 start_streaming 命令: room=${msg.data?.room_id || this.podcastRoomId}`);
       this.resumeAudioPush('remote_start_streaming');
       if (this.onStartStreaming) {
         this.onStartStreaming(msg);
       }
     } else if (msg.type === 'stop_streaming') {
+      if (!this._shouldAcceptStreamingControl(msg, 'stop_streaming')) return;
       console.log(`[Podcast] ⏹️ 收到 stop_streaming 命令: room=${msg.data?.room_id || this.podcastRoomId}, reason=${msg.data?.reason || ''}`);
       this.pauseAudioPush('remote_stop_streaming');
       if (this.onStopStreaming) {
@@ -3627,27 +3821,30 @@ class PodcastPusher {
     // 切换发言人前先推送剩余缓冲音频（当前发言人的）
     if (this.audioFlushTimer) { clearTimeout(this.audioFlushTimer); this.audioFlushTimer = null; }
     this._flushAudio();
-    if (this.currentSpeaker && this.currentSpeaker !== agentId) {
-      this.speakerLeave(this.currentSpeaker);
+
+    // 开播期间不做“发言切换下麦”，只在首次出现时上麦
+    if (!this.liveJoinedAgents.has(agentId)) {
+      const podcastAgentId = this._getPodcastAgentId(agentId);
+      const displayName = this._getDisplayName(agentId);
+      const msg = {
+        type: 'agent_status_report',
+        message_id: `status_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        data: {
+          agent_id: podcastAgentId,
+          name: displayName,
+          avatar_url: '',
+          action: 'join',
+          timestamp: Date.now()
+        }
+      };
+      this.ws.send(JSON.stringify(msg));
+      this.liveJoinedAgents.add(agentId);
+      console.log(`[Podcast] 🎤 主播 ${agentId} (${podcastAgentId}) 上麦`);
+    } else if (this.currentSpeaker !== agentId) {
+      console.log(`[Podcast] 🎙️ 发言切换到 ${agentId}（保持上麦，不下麦）`);
     }
-    // 从 meta.json 读取 podcastAgentId
-    const podcastAgentId = this._getPodcastAgentId(agentId);
-    const displayName = this._getDisplayName(agentId);
-    const msg = {
-      type: 'agent_status_report',
-      message_id: `status_${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      data: {
-        agent_id: podcastAgentId,
-        name: displayName,
-        avatar_url: '',
-        action: 'join',
-        timestamp: Date.now()
-      }
-    };
-    this.ws.send(JSON.stringify(msg));
     this.currentSpeaker = agentId;
-    console.log(`[Podcast] 🎤 主播 ${agentId} (${podcastAgentId}) 上麦`);
 
     // 将该 agent 暂存的 pending 音频移入主缓冲区
     if (this.pendingAudio[agentId] && this.pendingAudio[agentId].chunks.length > 0) {
@@ -3661,6 +3858,49 @@ class PodcastPusher {
       if (!this.audioFlushTimer) {
         this.audioFlushTimer = setTimeout(() => this._flushAudio(), 1000);
       }
+    }
+  }
+
+  planSpeaker(agentId) {
+    const id = String(agentId || '').trim();
+    if (!id) return;
+    if (id === this.currentSpeaker) return;
+    const lastPlanned = this.speakerPlanQueue.length > 0
+      ? this.speakerPlanQueue[this.speakerPlanQueue.length - 1]
+      : null;
+    if (lastPlanned === id) return;
+    this.speakerPlanQueue.push(id);
+    console.log(`[Podcast] 🧭 计划下一个发言人: ${id} (queue=${this.speakerPlanQueue.join(' -> ')})`);
+  }
+
+  _promotePlannedSpeaker(reason = 'unknown') {
+    while (this.speakerPlanQueue.length > 0) {
+      const next = this.speakerPlanQueue.shift();
+      if (!next || next === this.currentSpeaker) continue;
+      console.log(`[Podcast] ⏭️ 按计划切换发言人: ${this.currentSpeaker || '-'} -> ${next} (reason=${reason})`);
+      this.speakerJoin(next);
+      return true;
+    }
+    return false;
+  }
+
+  onSpeakerTtsFinished(agentId) {
+    const id = String(agentId || '').trim();
+    if (!id || id !== this.currentSpeaker) return;
+    // 当前人 TTS 结束后，先把尾包推完，再按计划切到下一位
+    if (this.audioBuffer.length > 0) {
+      this._flushAudio();
+    }
+    if (this._promotePlannedSpeaker('tts_finished')) return;
+
+    // 兜底：若有缓存中的其他发言人音频，直接切过去继续推，避免“本地在说但服务端无流”
+    const fallback = Object.keys(this.pendingAudio || {}).find((aid) => {
+      const entry = this.pendingAudio[aid];
+      return aid !== id && entry && Array.isArray(entry.chunks) && entry.chunks.length > 0;
+    });
+    if (fallback) {
+      console.log(`[Podcast] ⏭️ 无计划队列，按缓存兜底切换到 ${fallback}`);
+      this.speakerJoin(fallback);
     }
   }
 
@@ -3692,6 +3932,29 @@ class PodcastPusher {
         this._lastPausedDropLogAt = now;
         console.log(`[Podcast] ⛔ 丢弃音频块（已下播，等待开播）: ${agentId}`);
       }
+      return;
+    }
+
+    // 尚未确定当前发言人：直接以首个到达音频的人为当前发言人，立即按顺序推流
+    if (!this.currentSpeaker) {
+      this.speakerJoin(agentId);
+    }
+
+    // 若已存在发言顺序计划且当前 chunk 属于计划队首，则可提前切换并推流（不必等待 speech-started）
+    if (this.currentSpeaker && this.currentSpeaker !== agentId && this.speakerPlanQueue.length > 0) {
+      const planned = this.speakerPlanQueue[0];
+      if (planned === agentId) {
+        this._promotePlannedSpeaker('preload_audio_arrived');
+      }
+    }
+
+    // 仍不是当前发言人：暂存
+    if (!this.currentSpeaker) {
+      if (!this.pendingAudio[agentId]) {
+        this.pendingAudio[agentId] = { chunks: [], text: '' };
+      }
+      this.pendingAudio[agentId].chunks.push(hexAudio);
+      if (text) this.pendingAudio[agentId].text = text;
       return;
     }
 
@@ -3748,47 +4011,66 @@ class PodcastPusher {
     const agentId = this.lastAudioAgentId;
     const podcastAgentId = this._getPodcastAgentId(agentId);
 
-    // 合并所有缓冲的完整 chunk，只保留第一个 chunk 的 ID3 头
-    const parts = [];
-    for (let i = 0; i < this.audioBuffer.length; i++) {
-      if (i === 0) {
-        parts.push(this.audioBuffer[i]);
-      } else {
-        parts.push(this._stripID3(this.audioBuffer[i]));
-      }
-    }
-    const mergedHex = parts.join('');
+    // 分片推流：避免预准备堆积后一次发送超大包导致 WS 1006
+    const chunks = this.audioBuffer.slice();
     this.audioBuffer = [];
     this.audioBufferBytes = 0;
 
-    // 整批发送，不截断 chunk（MP3 128kbps = 16000 bytes/s）
-    const audioBytes = Buffer.from(mergedHex, 'hex');
-    const estimatedDuration = audioBytes.length / 16000;
-    const audioBase64 = audioBytes.toString('base64');
+    const MAX_PACKET_BYTES = 64000; // ~4s @ 128kbps
+    let packetParts = [];
+    let packetBytes = 0;
+    let sentPackets = 0;
 
-    const msg = {
-      type: 'audio_stream',
-      message_id: `audio_${Date.now()}_${this.sequence}`,
-      timestamp: new Date().toISOString(),
-      data: {
-        agent_id: podcastAgentId,
-        audio_data: audioBase64,
-        text: this.lastText || '',
-        sequence: this.sequence,
-        timestamp: Date.now(),
-        duration: estimatedDuration,
-        is_final: false
+    const flushPacket = () => {
+      if (packetParts.length === 0) return true;
+      const packetHex = packetParts.join('');
+      const audioBytes = Buffer.from(packetHex, 'hex');
+      const estimatedDuration = audioBytes.length / 16000;
+      const audioBase64 = audioBytes.toString('base64');
+      const msg = {
+        type: 'audio_stream',
+        message_id: `audio_${Date.now()}_${this.sequence}`,
+        timestamp: new Date().toISOString(),
+        data: {
+          agent_id: podcastAgentId,
+          audio_data: audioBase64,
+          text: this.lastText || '',
+          sequence: this.sequence,
+          timestamp: Date.now(),
+          duration: estimatedDuration,
+          is_final: false
+        }
+      };
+      try {
+        this.ws.send(JSON.stringify(msg));
+      } catch (e) {
+        console.error(`[Podcast] pushAudio 发送失败:`, e.message);
+        this.connected = false;
+        return false;
       }
+      console.log(`[Podcast] 推送音频 #${this.sequence} 给 ${agentId} (${audioBytes.length} bytes, ~${estimatedDuration.toFixed(1)}s)`);
+      this.sequence++;
+      sentPackets++;
+      packetParts = [];
+      packetBytes = 0;
+      return true;
     };
-    try {
-      this.ws.send(JSON.stringify(msg));
-    } catch (e) {
-      console.error(`[Podcast] pushAudio 发送失败:`, e.message);
-      this.connected = false;
-      return;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const raw = chunks[i] || '';
+      if (!raw) continue;
+      const piece = packetParts.length === 0 ? raw : this._stripID3(raw);
+      const pieceBytes = Math.floor(piece.length / 2);
+      if (packetParts.length > 0 && packetBytes + pieceBytes > MAX_PACKET_BYTES) {
+        if (!flushPacket()) return;
+      }
+      packetParts.push(packetParts.length === 0 ? raw : this._stripID3(raw));
+      packetBytes += Math.floor(packetParts[packetParts.length - 1].length / 2);
     }
-    console.log(`[Podcast] 推送音频 #${this.sequence} 给 ${agentId} (${audioBytes.length} bytes, ~${estimatedDuration.toFixed(1)}s)`);
-    this.sequence++;
+    flushPacket();
+    if (sentPackets > 1) {
+      console.log(`[Podcast] 📦 分片推流完成: ${sentPackets} packets, agent=${agentId}`);
+    }
   }
 
   // 打断时丢弃所有缓冲音频（不断开连接，等待新音频）
@@ -3800,16 +4082,14 @@ class PodcastPusher {
     this.lastText = '';
     this.lastAudioAgentId = null;
     this.sequence = 0;
+    this.speakerPlanQueue = [];
     console.log(`[Podcast] 🧹 打断：清空所有缓冲音频，sequence 重置为 0`);
   }
 
   pauseAudioPush(reason = 'manual_stop') {
     this.audioPushPaused = true;
     this.clearAudio();
-    if (this.currentSpeaker) {
-      this.speakerLeave(this.currentSpeaker);
-      this.currentSpeaker = null;
-    }
+    this.currentSpeaker = null;
     console.log(`[Podcast] ⏸️ 暂停音频推流: reason=${reason}`);
   }
 
@@ -3870,6 +4150,13 @@ class PodcastPusher {
         }
       };
       this.ws.send(JSON.stringify(msg));
+      if (isLive) {
+        this.liveJoinedAgents.add(agentId);
+      }
+    }
+    if (!isLive) {
+      this.liveJoinedAgents.clear();
+      this.currentSpeaker = null;
     }
     console.log(`[Podcast] 📡 房间${isLive ? '开播' : '下播'}事件已发送: action=${action}, agents=${uniqueAgentIds.join(',')}, reason=${reason}`);
     return true;
@@ -3911,9 +4198,6 @@ class PodcastPusher {
     this.lastText = '';
     this.lastAudioAgentId = null;
     if (this.pingInterval) { clearInterval(this.pingInterval); this.pingInterval = null; }
-    if (this.currentSpeaker) {
-      this.speakerLeave(this.currentSpeaker);
-    }
     if (this.ws) {
       try { this.ws.close(); } catch (e) {}
       this.ws = null;
@@ -3921,6 +4205,7 @@ class PodcastPusher {
     this.connected = false;
     this.sequence = 0;
     this.currentSpeaker = null;
+    this.liveJoinedAgents.clear();
     console.log('[Podcast] 已断开（手动）');
   }
 
@@ -4584,6 +4869,7 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
     preparingStartTime: null,   // 房间级：准备开始时间
     interruptedAgents: new Set(), // 房间级：被打断的 agents
     hostWs: null,          // 主机的WebSocket连接
+    hostRuntimeId: null,   // 主机页面运行实例ID（用于区分同页重连 vs 新页接管）
     podcastPusher: null,   // 该房间独立的 Podcast 推流连接
     pendingPodcastLiveEvent: null, // 待补发的开播/下播事件
     _suppressNextPodcastLiveEvent: false, // 避免服务端 stop_streaming 触发的停播回环上报
@@ -4591,7 +4877,8 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
     topicQueue: [],              // 当前麦序话题列表（从服务端拉取）
     queueTopics: [],             // Kimi 抓取完成的待讨论话题（优先队列）
     kimiProcesses: new Map(),    // queue_id → { process, status }
-    topicHistory: []             // 房间已讨论话题历史
+    topicHistory: [],            // 房间已讨论话题历史
+    speechEndedFallbackTimer: null // 发言结束回调兜底定时器
   };
 
   // 新房间继承跨房间会话的话题去重状态（只影响知识库随机选题）
@@ -4871,6 +5158,14 @@ function sendToAgent(agentId, message, from = 'moderator', speechType = 'next', 
       message: message,
       speechType: speechType
     }));
+
+    // 房间模式：记录发言顺序计划，允许预加载音频按顺序提前推送到 room 服务
+    if (channelId) {
+      const room = rooms.get(channelId);
+      if (room && room.podcastPusher) {
+        room.podcastPusher.planSpeaker(agentId);
+      }
+    }
 
     // 如果是房间模式，同时广播 moderator 消息给所有分机
     if (channelId) {
@@ -5479,6 +5774,11 @@ function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, chann
   const moderatorToUse = mod || moderator;
   console.log('[RoundTable] 开始话题:', topic, '语言:', lang, fromUser ? '(用户输入)' : '(自动)', channelId ? `(房间: ${channelId})` : '');
 
+  // 开播前兜底清理：断开残留 TTS/MiniMax 与旧推理请求
+  if (channelId) {
+    cleanupRoomStreamingResidue(channelId, 'start_roundtable');
+  }
+
   // 更新房间状态
   if (channelId) {
     const room = rooms.get(channelId);
@@ -5540,6 +5840,11 @@ function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, chann
 async function startRandomTopic(lang = 'zh', mod = null, channelId = null) {
   const moderatorToUse = mod || moderator;
   console.log('[RoundTable] 从知识库选择话题... 语言:', lang, channelId ? `(房间: ${channelId})` : '');
+
+  // 开播前兜底清理：断开残留 TTS/MiniMax 与旧推理请求
+  if (channelId) {
+    cleanupRoomStreamingResidue(channelId, 'start_random_topic');
+  }
 
   // 更新房间状态
   if (channelId) {
@@ -5664,6 +5969,48 @@ function stopRoundTable(channelId = null) {
   }
 }
 
+function closeRoomTtsSockets(channelId = null, reason = 'manual') {
+  let closed = 0;
+  for (const ws of wss.clients) {
+    if (!ws._isTTS || ws.readyState !== WebSocket.OPEN) continue;
+    if (channelId && ws._roomId !== channelId) continue;
+    console.log(`[Stop] 🛑 关闭 TTS WebSocket: ${ws._agentId} (房间: ${ws._roomId || 'global'}, reason=${reason})`);
+    try { ws.close(); } catch (_) {}
+    closed++;
+  }
+  return closed;
+}
+
+function closeGlobalTtsSockets(reason = 'manual_global') {
+  let closed = 0;
+  for (const ws of wss.clients) {
+    if (!ws._isTTS || ws.readyState !== WebSocket.OPEN) continue;
+    if (ws._roomId) continue; // 只清理非房间(global)TTS，避免误伤房间
+    console.log(`[Stop] 🛑 关闭 Global TTS WebSocket: ${ws._agentId} (reason=${reason})`);
+    try { ws.close(); } catch (_) {}
+    closed++;
+  }
+  return closed;
+}
+
+function cleanupRoomStreamingResidue(channelId, reason = 'start_guard') {
+  if (!channelId) return;
+
+  // 开播前保护：中止同房间残留推理，避免老请求继续占用资源
+  abortOpenClawRequests((requestId, entry) => (entry.roomId || null) === channelId, `StartGuard:${reason}`);
+
+  // 开播前保护：关闭同房间残留 TTS 连接（会连带关闭 MiniMax 连接）
+  const closed = closeRoomTtsSockets(channelId, reason);
+  if (closed > 0) {
+    console.log(`[StartGuard] 🧹 已清理房间 ${channelId} 的残留 TTS 连接: ${closed}`);
+  }
+
+  // 清理准备态，避免上轮遗留造成“准备中”卡住
+  const state = getRoundTableState(channelId);
+  state.preparingAgent = null;
+  state.preparingStartTime = null;
+}
+
 function clearRoomAgentMemory(room, reason = 'room_reset') {
   if (!room || !Array.isArray(room.agentIds)) return;
   for (const aid of room.agentIds) {
@@ -5685,11 +6032,7 @@ function resetRoomSessionOnHostReconnect(room, reason = 'host_reconnect') {
   abortOpenClawRequests((requestId, entry) => (entry.roomId || null) === room.channelId, 'HostReconnect');
 
   // 3) 关闭该房间 TTS 连接，立刻停止音频链路
-  for (const ws of wss.clients) {
-    if (ws._isTTS && ws._roomId === room.channelId && ws.readyState === WebSocket.OPEN) {
-      try { ws.close(); } catch (_) {}
-    }
-  }
+  closeRoomTtsSockets(room.channelId, reason);
 
   // 4) 清理房间运行态
   room.isActive = false;
@@ -5912,7 +6255,7 @@ function handleUserInput(input, targetAgent, channelId = null) {
   return result;
 }
 
-// 构建 messages（包含最近10条记忆，平衡上下文和推理速度）
+// 构建 messages（仅携带最近 CONTEXT_MEMORY_TURNS 轮历史，控制上下文体积）
 function buildMessages(agentId, userMessage) {
   const agent = AGENTS[agentId] || null;
   const messages = [];
@@ -5930,8 +6273,8 @@ function buildMessages(agentId, userMessage) {
     console.log(`[${agentId}] ⚠️ 无人设，使用默认`);
   }
 
-  // 取最近10条记忆，既保持上下文连贯又不会太慢
-  const recentMemory = memory[agentId].slice(-10);
+  // 仅取最近 N 轮记忆，减少长会话下的首包延迟
+  const recentMemory = memory[agentId].slice(-CONTEXT_MEMORY_TURNS);
   recentMemory.forEach(m => {
     messages.push({ role: 'user', content: m.user });
     messages.push({ role: 'assistant', content: m.assistant });
@@ -9140,7 +9483,7 @@ function generateAudioStream(text, voiceId, onChunk, onComplete) {
     
     ws.on('open', () => {
         ws.send(JSON.stringify({
-            model: "speech-2.6-hd",
+            model: "speech-2.8-hd",
             voice_setting: {
                 voice_id: voiceId,
                 speed: 1.0,
@@ -9809,6 +10152,7 @@ wss.on('connection', (ws, req) => {
   // 解析URL和查询参数
   const url = new URL(req.url, `http://${req.headers.host}`);
   const channelId = url.searchParams.get('channel');
+  const runtimeId = url.searchParams.get('runtime_id') || null;
 
   // 支持 /agentId 或 /ws/agentId
   let agentId = req.url.replace('/', '').split('?')[0];
@@ -9839,6 +10183,7 @@ wss.on('connection', (ws, req) => {
   ws._agentId = agentId;
   ws._isTTS = false;
   ws._roomId = channelId || null;
+  ws._runtimeId = runtimeId;
   ws._connId = `${agentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   ws._connSeq = ++wsConnectionSeq;
 
@@ -9863,9 +10208,26 @@ wss.on('connection', (ws, req) => {
 
       // 主机 agent 新连接建立时，强制接管主机连接
       if (hostShouldTakeOver) {
+        const incomingRuntimeId = ws._runtimeId || null;
+        const roomRuntimeId = room.hostRuntimeId || null;
+        const currentHostRuntimeId = room.hostWs ? (room.hostWs._runtimeId || null) : roomRuntimeId;
+        const sameRuntimeAsCurrentHost =
+          !!incomingRuntimeId &&
+          !!currentHostRuntimeId &&
+          incomingRuntimeId === currentHostRuntimeId;
+        const sameRuntimeAsRoomHost =
+          !!incomingRuntimeId &&
+          !!roomRuntimeId &&
+          incomingRuntimeId === roomRuntimeId;
+
         if (room.hostWs && room.hostWs !== ws) {
-          // 刷新页面导致主机重连：先做“下播式”会话重置，再切到新连接
-          resetRoomSessionOnHostReconnect(room, 'host_ws_takeover');
+          // 同一页面实例的断线重连：仅切主机连接，不重置会话
+          // 不同页面实例接管：执行“下播式”重置，避免串会话
+          if (!sameRuntimeAsCurrentHost) {
+            resetRoomSessionOnHostReconnect(room, 'host_ws_takeover');
+          } else {
+            console.log(`[Room] ♻️ 同页主机重连，跳过会话重置: channel=${channelId}, runtime=${incomingRuntimeId}`);
+          }
 
           const oldHost = room.hostWs;
           oldHost._superseded = true;
@@ -9881,12 +10243,15 @@ wss.on('connection', (ws, req) => {
             !!room.nextPreparedAgent ||
             !!room.nextPreparedMessage ||
             !!(room.moderator && room.moderator.isActive);
-          if (hasStaleSession) {
+          if (hasStaleSession && !sameRuntimeAsRoomHost) {
             resetRoomSessionOnHostReconnect(room, 'host_ws_reconnect_no_old_host');
+          } else if (hasStaleSession) {
+            console.log(`[Room] ♻️ 同页主机无旧连接重连，跳过会话重置: channel=${channelId}, runtime=${incomingRuntimeId}`);
           }
         }
         ws._isHost = true;
         room.hostWs = ws;
+        room.hostRuntimeId = incomingRuntimeId || room.hostRuntimeId || null;
         console.log(`[Room] 设置主机: ${agentId}`);
         if (room.pendingStreamingControlCommand && ws.readyState === WebSocket.OPEN) {
           try {
@@ -9901,6 +10266,7 @@ wss.on('connection', (ws, req) => {
       } else if (!room.hostWs) {
         ws._isHost = true;
         room.hostWs = ws;
+        room.hostRuntimeId = ws._runtimeId || room.hostRuntimeId || null;
         console.log(`[Room] 设置主机: ${agentId}`);
       } else {
         ws._isHost = false;
@@ -10004,6 +10370,7 @@ wss.on('connection', (ws, req) => {
       if (room) {
         if (ws._isHost) {
           room.hostWs = null;
+          room.hostRuntimeId = null;
 
           // 主机断开后，先尝试从同房间现有连接中提升一个新主机，避免刷新/重连瞬间误判房间已结束
           let promotedHost = null;
@@ -10011,6 +10378,7 @@ wss.on('connection', (ws, req) => {
             if (c !== ws && c._roomId === ws._roomId && !c._isTTS && c.readyState === WebSocket.OPEN) {
               c._isHost = true;
               room.hostWs = c;
+              room.hostRuntimeId = c._runtimeId || null;
               promotedHost = c;
               console.log(`[Room] 🔁 主机已切换到 ${c._agentId}, conn=${c._connId}, seq=${c._connSeq}`);
               if (room.pendingStreamingControlCommand) {
@@ -10161,7 +10529,7 @@ wss.on('connection', (ws, req) => {
     console.log(`[${agentId}] MiniMax 已连接，发送 task_start`);
     minimaxWs.send(JSON.stringify({
       event: 'task_start',
-      model: 'speech-2.6-hd',
+      model: 'speech-2.8-hd',
       voice_setting: {
         voice_id: voiceId,
         speed: 1, vol: 1, pitch: 0,
@@ -10210,6 +10578,11 @@ wss.on('connection', (ws, req) => {
       
       if (msg.event === 'task_failed') {
         console.error(`[${agentId}] MiniMax task_failed:`, msg);
+        // 房间推流顺序推进：当前人失败也要尝试切到下一位，避免卡死在“无推流”
+        const failedRoomPusher = ws._roomId && rooms.get(ws._roomId)?.podcastPusher;
+        if (failedRoomPusher && failedRoomPusher.connected) {
+          failedRoomPusher.onSpeakerTtsFinished(agentId);
+        }
         // 转发给前端，让前端可以触发限流重试
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(msg));
@@ -10235,10 +10608,14 @@ wss.on('connection', (ws, req) => {
           console.log(`[${agentId}] 第一个音频块, roomId=${ws._roomId}, pusher=${!!roomPusher}, connected=${roomPusher?.connected}`);
         }
         if (roomPusher && roomPusher.connected) {
-          if (audioChunksReceived === 1) {
-            roomPusher.speakerJoin(agentId);
-          }
           roomPusher.pushAudio(agentId, msg.data.audio, fullTextForPodcast);
+        }
+      }
+
+      if (msg.event === 'task_finished') {
+        const finishedRoomPusher = ws._roomId && rooms.get(ws._roomId)?.podcastPusher;
+        if (finishedRoomPusher && finishedRoomPusher.connected) {
+          finishedRoomPusher.onSpeakerTtsFinished(agentId);
         }
       }
 
@@ -10314,12 +10691,14 @@ wss.on('connection', (ws, req) => {
   
   ws.on('close', () => {
     console.log(`[${agentId}] TTS 断开, conn=${ws._connId}, seq=${ws._connSeq}${ws._superseded ? `, supersededBy=${ws._supersededBy || 'n/a'}` : ''}`);
-    if (minimaxWs.readyState === WebSocket.OPEN) {
-      try {
+    try {
+      if (minimaxWs && minimaxWs.readyState === WebSocket.OPEN) {
         minimaxWs.send(JSON.stringify({ event: 'task_finish' }));
+      }
+      if (minimaxWs && minimaxWs.readyState !== WebSocket.CLOSED) {
         minimaxWs.close();
-      } catch (e) {}
-    }
+      }
+    } catch (e) {}
   });
 });
 
@@ -10527,27 +10906,24 @@ app.post('/api/roundtable/next-topic', (req, res) => {
 
 // 停止圆桌讨论
 app.post('/api/roundtable/stop', (req, res) => {
-  const { channelId } = req.body || {};
+  const { channelId, scope } = req.body || {};
   if (channelId && !ensureRoomExists(channelId, res)) {
     return;
   }
   stopRoundTable(channelId || null);
 
-  // 中止该房间（或全局）的进行中 LLM 推理请求
-  abortOpenClawRequests((requestId, entry) => {
-    if (!channelId) return true;
-    return (entry.roomId || null) === channelId;
-  }, 'Stop');
-
-  // 关闭该房间的 TTS WebSocket（会连带关闭 MiniMax 连接，停止音频生成）
-  for (const ws of wss.clients) {
-    if (ws._isTTS && ws.readyState === WebSocket.OPEN) {
-      // 如果指定了 channelId，只关闭该房间的；否则关闭所有
-      if (!channelId || ws._roomId === channelId) {
-        console.log(`[Stop] 🛑 关闭 TTS WebSocket: ${ws._agentId} (房间: ${ws._roomId || 'global'})`);
-        ws.close();
-      }
-    }
+  if (channelId) {
+    // 房间模式：严格只清理当前房间
+    abortOpenClawRequests((requestId, entry) => (entry.roomId || null) === channelId, 'Stop');
+    closeRoomTtsSockets(channelId, 'roundtable_stop_room');
+  } else if (scope === 'all') {
+    // 显式全局清理（仅在明确要求时）
+    abortOpenClawRequests(() => true, 'StopAll');
+    closeRoomTtsSockets(null, 'roundtable_stop_all');
+  } else {
+    // 默认全局模式：只清理非房间(global)会话，避免误伤其他房间
+    abortOpenClawRequests((requestId, entry) => (entry.roomId || null) === null, 'StopGlobal');
+    closeGlobalTtsSockets('roundtable_stop_global');
   }
 
   res.json({ success: true, message: '圆桌讨论已停止' });
@@ -10616,6 +10992,15 @@ app.post('/api/roundtable/speech-started', async (req, res) => {
     console.log(`[RoundTable] ✅ ${agentId} 开始播放，清除准备状态（准备耗时 ${elapsed}ms）`);
     state.preparingAgent = null;
     state.preparingStartTime = null;
+  }
+
+  // 房间模式：仅在真实开始播放时通知 Podcast 上麦，避免预准备阶段误触发下麦
+  if (channelId) {
+      const room = rooms.get(channelId);
+      const pusher = room?.podcastPusher;
+      if (pusher && pusher.connected) {
+          pusher.speakerJoin(agentId);
+      }
   }
   
   // [ADDED] 检查是否有暂存的新话题数据需要切换

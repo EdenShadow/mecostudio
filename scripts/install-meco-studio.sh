@@ -7,6 +7,10 @@ MECO_INSTALL_DIR="${MECO_INSTALL_DIR:-$HOME/meco-studio}"
 MECO_START_AFTER_INSTALL="${MECO_START_AFTER_INSTALL:-1}"
 MECO_RESET_RUNTIME_STATE="${MECO_RESET_RUNTIME_STATE:-1}"
 MECO_UPGRADE_OPENCLAW="${MECO_UPGRADE_OPENCLAW:-0}"
+MECO_NPM_INSTALL_MODE="${MECO_NPM_INSTALL_MODE:-auto}" # auto|ci|install
+MECO_SKIP_NPM_INSTALL_IF_UNCHANGED="${MECO_SKIP_NPM_INSTALL_IF_UNCHANGED:-1}"
+MECO_HEALTHCHECK_RETRIES="${MECO_HEALTHCHECK_RETRIES:-20}"
+MECO_HEALTHCHECK_INTERVAL_SEC="${MECO_HEALTHCHECK_INTERVAL_SEC:-1}"
 MECO_KIMI_CODING_API_KEY="${MECO_KIMI_CODING_API_KEY:-}"
 MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-coding/k2p5}"
 MECO_OPENCLAW_MODEL_API_KEY="${MECO_OPENCLAW_MODEL_API_KEY:-}"
@@ -49,6 +53,37 @@ die() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+hash_file() {
+  local file_path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file_path" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file_path" | awk '{print $1}'
+  else
+    die "missing hash command (shasum/sha256sum)"
+  fi
+}
+
+kill_and_wait() {
+  local pid="$1"
+  local wait_sec="${2:-5}"
+  [[ -n "$pid" ]] || return 0
+  if ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  kill "$pid" >/dev/null 2>&1 || true
+  local i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( i >= wait_sec )); then
+      warn "PID $pid still alive after ${wait_sec}s, force killing"
+      kill -9 "$pid" >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
 }
 
 extract_first_json() {
@@ -380,8 +415,54 @@ prepare_repo() {
 }
 
 install_dependencies() {
-  log "Installing npm dependencies..."
-  (cd "$MECO_INSTALL_DIR" && npm install --no-fund --no-audit >/dev/null)
+  local lockfile="$MECO_INSTALL_DIR/package-lock.json"
+  local hash_file_path="$MECO_INSTALL_DIR/.meco-install.npm-lock.sha256"
+  local lock_hash=""
+  local old_hash=""
+
+  if [[ -f "$lockfile" ]]; then
+    lock_hash="$(hash_file "$lockfile")"
+    if [[ -f "$hash_file_path" ]]; then
+      old_hash="$(cat "$hash_file_path" 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ "$MECO_SKIP_NPM_INSTALL_IF_UNCHANGED" == "1" && -d "$MECO_INSTALL_DIR/node_modules" && -n "$lock_hash" && "$lock_hash" == "$old_hash" ]]; then
+    log "npm dependencies unchanged, skip install"
+    return 0
+  fi
+
+  local npm_cmd="install"
+  case "$MECO_NPM_INSTALL_MODE" in
+    ci)
+      npm_cmd="ci"
+      ;;
+    install)
+      npm_cmd="install"
+      ;;
+    auto)
+      if [[ -f "$lockfile" ]]; then
+        npm_cmd="ci"
+      else
+        npm_cmd="install"
+      fi
+      ;;
+    *)
+      warn "Unknown MECO_NPM_INSTALL_MODE=$MECO_NPM_INSTALL_MODE, fallback to auto"
+      if [[ -f "$lockfile" ]]; then
+        npm_cmd="ci"
+      else
+        npm_cmd="install"
+      fi
+      ;;
+  esac
+
+  log "Installing npm dependencies via: npm $npm_cmd"
+  (cd "$MECO_INSTALL_DIR" && npm "$npm_cmd" --no-fund --no-audit >/dev/null)
+
+  if [[ -n "$lock_hash" ]]; then
+    printf '%s\n' "$lock_hash" > "$hash_file_path"
+  fi
 }
 
 get_openclaw_agents_json() {
@@ -536,13 +617,16 @@ start_service() {
   fi
 
   local pid_file="$MECO_INSTALL_DIR/.meco-studio.pid"
+  local node_bin
+  node_bin="$(command -v node || true)"
+  [[ -n "$node_bin" ]] || die "node command not found while starting service"
+
   if [[ -f "$pid_file" ]]; then
     local old_pid
     old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+    if [[ -n "$old_pid" ]]; then
       log "Stopping existing meco server process: $old_pid"
-      kill "$old_pid" >/dev/null 2>&1 || true
-      sleep 1
+      kill_and_wait "$old_pid" 5
     fi
   fi
 
@@ -551,25 +635,37 @@ start_service() {
   if [[ -n "$stale_pids" ]]; then
     while read -r pid; do
       [[ -n "$pid" ]] || continue
-      kill "$pid" >/dev/null 2>&1 || true
+      kill_and_wait "$pid" 3
     done <<< "$stale_pids"
   fi
 
   log "Starting meco-studio service..."
   (
     cd "$MECO_INSTALL_DIR"
-    nohup node server.js > server.log 2>&1 &
+    nohup "$node_bin" server.js > server.log 2>&1 &
     echo $! > "$pid_file"
   )
 
   local new_pid
   new_pid="$(cat "$pid_file" 2>/dev/null || true)"
-  sleep 1
-  if [[ -n "$new_pid" ]] && kill -0 "$new_pid" 2>/dev/null; then
-    log "Service started. pid=$new_pid, url=http://127.0.0.1:3456"
-  else
+  if [[ -z "$new_pid" ]] || ! kill -0 "$new_pid" 2>/dev/null; then
     die "service failed to start, check $MECO_INSTALL_DIR/server.log"
   fi
+
+  if command -v curl >/dev/null 2>&1; then
+    local i=1
+    while (( i <= MECO_HEALTHCHECK_RETRIES )); do
+      if curl -fsS "http://127.0.0.1:3456/api/status" >/dev/null 2>&1; then
+        log "Service started. pid=$new_pid, url=http://127.0.0.1:3456"
+        return 0
+      fi
+      sleep "$MECO_HEALTHCHECK_INTERVAL_SEC"
+      i=$((i + 1))
+    done
+    die "service process is running but healthcheck failed, check $MECO_INSTALL_DIR/server.log"
+  fi
+
+  log "Service started (curl not found, skipped healthcheck). pid=$new_pid, url=http://127.0.0.1:3456"
 }
 
 main() {

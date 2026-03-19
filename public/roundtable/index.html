@@ -524,19 +524,24 @@
     let currentChannel = null;
     let isHost = false;
     let isAgent = false;
+    let currentPodcastRoomId = '';
     let speakerPollingInterval = null;
     let lastKnownSpeakerIndex = -1;
     let lastSelectedLang = 'zh';
     let moderatorStartInFlight = false;
     let moderatorStopInFlight = false;
+    let roundtableStartedAtMs = 0;
     const processedStreamingControlIds = new Set();
+    const hostRuntimeId = 'rt-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 
     // 初始化时检查 URL 参数
     (function initRoomFromURL() {
       const urlParams = new URLSearchParams(window.location.search);
       const channelId = urlParams.get('channel');
+      const roomId = urlParams.get('room_id');
       const charactersParam = urlParams.get('characters');
       const characterVoicesParam = urlParams.get('character_voices');
+      currentPodcastRoomId = roomId ? roomId.trim() : '';
 
       if (channelId) {
         // 带频道参数：加入已有房间，但以主机模式运行
@@ -681,6 +686,9 @@
     });
 
     // TTS Manager 类
+    var TTS_RATE_LIMIT_BACKOFF_STEPS_MS = [8000, 15000, 30000];
+    var ttsGlobalCooldownUntil = 0;
+
     function TTSManager(agentId) {
       this.agentId = agentId;
       this.audioContext = null;
@@ -703,13 +711,17 @@
       this.callbackFired = false; // 回调是否已触发
       this.textComplete = false; // 文本推理是否完成
       this.audioStarted = false; // 音频是否已经开始播放
-      this._audioStartedForPreload = false; // 用于预加载的音频开始标记
       this.speechType = 'next'; // 'next' 或 'transition'，决定提前触发时间
       this.playQueue = Promise.resolve(); // 串行化解码播放，防止乱序
       this.firstPlay = true; // 首次播放标记，用于启动缓冲
       this._waitForPrevSpeaker = null;
       this._resolveMyDone = null;
       this.volumeGain = 1.0; // 每个 agent 独立音量倍率，默认 1.0 (100%)
+      this._retryTimer = null;
+      this._rateLimitCooldownUntil = 0;
+      this._speechStartedNotified = false;
+      this._speechStartedRetryTimer = null;
+      this._speechStartedRetryCount = 0;
     }
     
     TTSManager.prototype.init = function() {
@@ -739,14 +751,6 @@
       if (!this.audioContext) this.init();
       this._stopped = false; // 新文本到来，重置停止状态
 
-      // 新会话开始
-      if (!this.ws && text) {
-        this.seen.clear();
-        this.nextTime = this.audioContext.currentTime;
-        this.textBuf = ''; // 重置缓冲区
-        this.connectWS();
-      }
-      
       // 添加到缓冲区
       if (text) {
         this.textBuf += text;
@@ -781,12 +785,39 @@
         this.sendEnd();
       }
     };
-    
+
+    TTSManager.prototype.clearReconnectTimer = function() {
+      if (this._retryTimer) {
+        clearTimeout(this._retryTimer);
+        this._retryTimer = null;
+      }
+    };
+
+    TTSManager.prototype.scheduleReconnect = function(delayMs, reason) {
+      var self = this;
+      this.clearReconnectTimer();
+      var delay = Math.max(100, Number(delayMs) || 0);
+      this._retryTimer = setTimeout(function() {
+        self._retryTimer = null;
+        if (self._muted || self.ws) return;
+        console.log('[' + self.agentId + '] TTS 重连触发: reason=' + (reason || 'unknown') + ', delay=' + delay + 'ms');
+        self.connectWS();
+      }, delay);
+    };
 
     
     TTSManager.prototype.connectWS = function() {
-      if (this.ws) return;
+      if (this.ws || this._muted) return;
       var self = this;
+
+      var now = Date.now();
+      var cooldownUntil = Math.max(ttsGlobalCooldownUntil || 0, this._rateLimitCooldownUntil || 0);
+      if (cooldownUntil > now) {
+        var cooldownDelay = cooldownUntil - now;
+        console.warn('[' + this.agentId + '] TTS 冷却中，' + Math.ceil(cooldownDelay / 1000) + 's 后再连');
+        this.scheduleReconnect(cooldownDelay, 'cooldown');
+        return;
+      }
       
       // 先初始化 pendingTexts，避免 sendText 时出错
       if (!this.pendingTexts) this.pendingTexts = [];
@@ -802,6 +833,8 @@
       
       this.ws.onopen = function() {
         self.isOpen = true;
+        self.clearReconnectTimer();
+        self._ttsRetryCount = 0;
         console.log('[' + self.agentId + '] TTS WebSocket connected');
         // 发送队列中的文本
         while (self.pendingTexts && self.pendingTexts.length > 0) {
@@ -843,7 +876,8 @@
           // MiniMax TTS 失败处理
           if (d.event === 'task_failed') {
             var statusMsg = (d.base_resp && d.base_resp.status_msg) || '';
-            var isRateLimit = statusMsg.indexOf('rate limit') !== -1;
+            var statusMsgLower = String(statusMsg || '').toLowerCase();
+            var isRateLimit = statusMsgLower.indexOf('rate limit') !== -1 || statusMsgLower.indexOf('rpm') !== -1;
             if (!self._ttsRetryCount) self._ttsRetryCount = 0;
 
             // 限流错误：仅在“尚未产出任何音频”时重试，避免已播内容被重放两遍
@@ -853,29 +887,37 @@
               (self.audioChunks && self.audioChunks.length > 0) ||
               audioChunkCount > 0
             );
-            if (isRateLimit && self._ttsRetryCount < 2 && !self._muted && !hasAudioOutput) {
-              self._ttsRetryCount++;
-              var delay = 3000 * self._ttsRetryCount;
-              console.warn('[' + self.agentId + '] TTS 被限流，' + (delay/1000) + '秒后重试 (' + self._ttsRetryCount + '/2)');
-              // 关闭旧连接
-              try { self.ws.close(); } catch(e) {}
-              self.ws = null;
-              self.isOpen = false;
-              // 等待后重连并重放文本
-              setTimeout(function() {
-                if (self._muted) return;
-                console.log('[' + self.agentId + '] TTS 限流重试，重连...');
+
+            if (isRateLimit) {
+              var nextRetryCount = self._ttsRetryCount + 1;
+              var retryIndex = Math.min(nextRetryCount - 1, TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length - 1);
+              var retryDelay = TTS_RATE_LIMIT_BACKOFF_STEPS_MS[retryIndex] + Math.floor(Math.random() * 1200);
+              self._rateLimitCooldownUntil = Date.now() + retryDelay;
+              // 全局退避，减少同房间多人同时抢占 RPM
+              ttsGlobalCooldownUntil = Math.max(ttsGlobalCooldownUntil, Date.now() + Math.floor(retryDelay * 0.8));
+
+              if (self._ttsRetryCount < TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length && !self._muted && !hasAudioOutput) {
+                self._ttsRetryCount = nextRetryCount;
+                console.warn('[' + self.agentId + '] TTS 被限流，' + (retryDelay/1000).toFixed(1) + '秒后重试 (' + self._ttsRetryCount + '/' + TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length + ')');
+                // 关闭旧连接
+                try { self.ws.close(); } catch(e) {}
+                self.ws = null;
+                self.isOpen = false;
                 // 把已发文本放回 pending 队列
                 self.pendingTexts = (self._allSentTexts || []).slice();
                 // 标记需要在 onopen 后重新发送 end 信号（不能在这里直接调 sendEnd，WS 还没连上）
                 self._needResendEnd = !!self.endSignalSent;
                 self.endSignalSent = false;
-                self.connectWS(); // onopen 会自动发送 pendingTexts + end 信号
-              }, delay);
-              return; // 不标记 taskFinished，不触发兜底
+                self.scheduleReconnect(retryDelay, 'rate_limit');
+                return; // 不标记 taskFinished，不触发兜底
+              }
             }
+
             if (isRateLimit && hasAudioOutput) {
               console.warn('[' + self.agentId + '] TTS 限流发生在已产出音频后，跳过重试以避免重复播报');
+            }
+            if (isRateLimit && self._ttsRetryCount >= TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length && !hasAudioOutput) {
+              console.warn('[' + self.agentId + '] TTS 限流重试耗尽，走无音频兜底');
             }
 
             // 非限流或重试耗尽：走原有兜底逻辑
@@ -888,7 +930,7 @@
               self._resolveMyDone = null;
             }
             if (!self.audioChunks || self.audioChunks.length === 0) {
-              self.handleNoAudioCompletion('task_failed无音频兜底');
+              self.handleNoAudioCompletion('task_failed无音频兜底: ' + statusMsg);
               return;
             }
             if (self.audioStarted) {
@@ -952,6 +994,12 @@
             } else {
               // 没有音频在播放了，直接触发
               console.warn('[' + self.agentId + '] [ws.onclose 兜底] 无活跃音频，触发 nearEnd');
+              // 兜底释放等待链：即使 task_finished 事件丢失，只要连接已关闭且无活跃音频，就允许下一位开始
+              if (self._resolveMyDone && (!self.audioChunks || self.audioChunks.length === 0)) {
+                console.log('[' + self.agentId + '] ✅ ws.onclose 兜底，resolve prevSpeakerDone');
+                self._resolveMyDone();
+                self._resolveMyDone = null;
+              }
               self.fireNearEndCallback('ws.onclose兜底(playQueue完成+无活跃音频)');
             }
           });
@@ -970,6 +1018,11 @@
       } else {
         this.pendingTexts.push(text);
         console.log('[' + this.agentId + '] Queued text:', text.slice(0, 20));
+        if (!this.ws) {
+          this.seen.clear();
+          this.nextTime = this.audioContext.currentTime;
+          this.connectWS();
+        }
       }
     };
     
@@ -980,6 +1033,14 @@
         if (self.ws && self.ws.readyState === 1) {
           console.log('[' + self.agentId + '] 发送 TTS end 信号');
           self.ws.send(JSON.stringify({type: 'end'}));
+        } else if (self.ws && self.ws.readyState === 0) {
+          // 连接仍在握手：标记为待补发，等 onopen 后发送，避免 end 丢失导致 MiniMax 120s 超时
+          self._needResendEnd = true;
+          console.log('[' + self.agentId + '] TTS end 延迟补发（WS CONNECTING）');
+        } else if (!self.ws) {
+          // 无连接则不创建新会话；如果后续因重试重连，_needResendEnd 会在 onopen 后补发
+          self._needResendEnd = true;
+          console.log('[' + self.agentId + '] TTS end 暂存（无可用WS）');
         }
       }, 500);
     };
@@ -988,23 +1049,19 @@
     // 当文本推理完成 + 音频开始播放时，自动触发下一位准备
 
     // 检查是否可以准备下一位
-    // 预加载：在文本完成时立即触发（不等音频开始）
+    // 仅当“当前人已真正开始播放(audioStarted=true)”后，才允许触发下一位预加载
     TTSManager.prototype.checkPrepareNext = function(source) {
       if (this._muted) return;
 
-      // 预加载条件：当前发言人开始播放音频 + 文本预加载完成
+      // 预加载条件：当前发言人已开口 + 文本已完成
       if (source === '音频开始') {
-        // 记录音频已开始，等文本完成后再触发
-        this._audioStartedForPreload = true;
         // 如果文本已经完成，立即触发预加载
-        if (this.textComplete) {
-          this.callbackFired = false;
+        if (this.audioStarted && this.textComplete) {
           this.fireNearEndCallback(source);
         }
       } else if (source === '文本完成') {
         // 如果音频已经开始播放，立即触发预加载
-        if (this.audioStarted || this._audioStartedForPreload) {
-          this.callbackFired = false;
+        if (this.audioStarted) {
           this.fireNearEndCallback(source);
         }
       }
@@ -1013,16 +1070,18 @@
     // 无音频兜底：TTS 返回完成/失败但没有任何音频块时，主动收敛本轮，避免圆桌卡死
     TTSManager.prototype.handleNoAudioCompletion = function(reason) {
       if (this._muted) return;
+      var note = String(reason || '无音频兜底');
+      var isRateLimitFailure = /rate\s*limit|rpm/i.test(note);
       if (!AUTO_SKIP_ON_FAILURE) {
-        console.warn('[' + this.agentId + '] ⚠️ ' + (reason || '无音频') + '，按配置不自动跳过');
-        return;
+        // 即使全局关闭自动跳过，限流导致“完全无音频”时仍要收敛，避免整轮永久卡死
+        if (!isRateLimitFailure) {
+          console.warn('[' + this.agentId + '] ⚠️ ' + note + '，按配置不自动跳过');
+          return;
+        }
+        console.warn('[' + this.agentId + '] ⚠️ 检测到限流无音频，强制执行兜底收敛，避免卡死');
       }
       var self = this;
-      var note = reason || '无音频兜底';
       console.warn('[' + this.agentId + '] ⚠️ ' + note + '：无音频输出，启动兜底');
-
-      // 标记为“可预加载”，让文本完成时也能推进下一轮
-      this._audioStartedForPreload = true;
 
       if (this._noAudioRecoveryTimer) {
         clearTimeout(this._noAudioRecoveryTimer);
@@ -1032,8 +1091,11 @@
       var waited = 0;
       var step = 250;
       var maxWait = 6000;
+      var finalized = false;
 
       function finalize(trigger) {
+        if (finalized) return;
+        finalized = true;
         if (!self.callbackFired && self.onNearEnd) {
           self.fireNearEndCallback(trigger);
         }
@@ -1049,17 +1111,38 @@
         }
       }
 
+      // 关键保护：若当前是“预准备态”（audioStarted=false 且仍在等待前一位），
+      // 兜底推进前必须先等待前一位真正说完，避免出现两人同时说话。
+      function finalizeInOrder(trigger) {
+        if (self.audioStarted || !self._waitForPrevSpeaker) {
+          finalize(trigger);
+          return;
+        }
+        var waitRef = self._waitForPrevSpeaker;
+        console.log('[' + self.agentId + '] ⏳ 无音频兜底等待前一位播完后再推进');
+        Promise.resolve(waitRef).then(function() {
+          if (self._waitForPrevSpeaker === waitRef) {
+            self._waitForPrevSpeaker = null;
+          }
+          if (self._muted) return;
+          finalize(trigger + '(ordered)');
+        }).catch(function() {
+          if (self._muted) return;
+          finalize(trigger + '(ordered-fallback)');
+        });
+      }
+
       function tick() {
         if (self._muted || self.callbackFired) return;
         if (self.textComplete) {
           self.checkPrepareNext('文本完成');
-          finalize(note + '(文本完成)');
+          finalizeInOrder(note + '(文本完成)');
           return;
         }
         waited += step;
         if (waited >= maxWait) {
           console.warn('[' + self.agentId + '] ⚠️ 无音频兜底等待文本完成超时，强制收敛');
-          finalize(note + '(超时强制)');
+          finalizeInOrder(note + '(超时强制)');
           return;
         }
         self._noAudioRecoveryTimer = setTimeout(tick, step);
@@ -1098,14 +1181,47 @@
 
     // 通知服务器该 agent 已开始播放
     TTSManager.prototype.notifySpeechStarted = function() {
+      if (this._speechStartedNotified) return;
+      var self = this;
+      var payload = { agentId: this.agentId, channelId: currentChannel };
+
+      function clearRetryTimer() {
+        if (self._speechStartedRetryTimer) {
+          clearTimeout(self._speechStartedRetryTimer);
+          self._speechStartedRetryTimer = null;
+        }
+      }
+
+      function scheduleRetry() {
+        if (self._speechStartedNotified || self._muted || self._stopped) return;
+        var delay = Math.min(3000, 300 * Math.pow(2, self._speechStartedRetryCount));
+        self._speechStartedRetryCount++;
+        clearRetryTimer();
+        self._speechStartedRetryTimer = setTimeout(sendOnce, delay);
+      }
+
+      function sendOnce() {
+        if (self._speechStartedNotified || self._muted || self._stopped) return;
+        fetch('/api/roundtable/speech-started', {
+          method: 'POST',
+          keepalive: true,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        .then(function(res) {
+          if (!res.ok) throw new Error('http_' + res.status);
+          self._speechStartedNotified = true;
+          clearRetryTimer();
+          console.log('[' + self.agentId + '] ✅ speech-started 已确认');
+        })
+        .catch(function(err) {
+          console.error('[' + self.agentId + '] ❌ speech-started 通知失败:', err && err.message ? err.message : err);
+          scheduleRetry();
+        });
+      }
+
       console.log('[' + this.agentId + '] 🎵 首次播放，通知服务器清除准备状态');
-      fetch('/api/roundtable/speech-started', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId: this.agentId, channelId: currentChannel })
-      }).catch(function(err) {
-        console.error('[' + this.agentId + '] ❌ speech-started 通知失败:', err);
-      });
+      sendOnce();
     };
     
     // 合并缓冲的 chunks 并播放（串行化，防止 decodeAudioData 乱序完成导致音频段错位）
@@ -1230,6 +1346,18 @@
         console.log('[' + this.agentId + '] ✅ 上一位已播完，开始播放');
       }
 
+      // 二次保险：即使等待链异常提前释放，也必须等全局说话锁空闲后才能开口
+      if (this.firstPlay) {
+        var guardWaitStart = Date.now();
+        while (isSpeaking && currentSpeaker && currentSpeaker !== this.agentId) {
+          if (Date.now() - guardWaitStart > 120000) {
+            console.warn('[' + this.agentId + '] ⚠️ 等待说话锁超时，强制尝试开始播放');
+            break;
+          }
+          await new Promise(function(resolve) { setTimeout(resolve, 120); });
+        }
+      }
+
       var now = this.audioContext.currentTime;
 
       // 首次播放：加 600ms 启动缓冲 (原 350ms)，给后续 chunk 解码争取时间，减少卡顿
@@ -1237,6 +1365,9 @@
       if (this.firstPlay) {
         this.nextTime = now + 0.6;
         this.firstPlay = false;
+        isSpeaking = true;
+        currentSpeaker = this.agentId;
+        console.log('[' + this.agentId + '] 🔒 占用全局说话锁（开始实际播放）');
         // 注意：不要在这里清除 nextSpeakerPending！
         // 它需要保留到当前发言人的音频播完，以便滚动到下一位
         if (hasWaited) {
@@ -1294,20 +1425,21 @@
 
               console.log('[' + self.agentId + '] [src.onended] 全部音频播完 | endSignalSent=' + self.endSignalSent + ' | taskFinished=' + self.taskFinished + ' | callbackFired=' + self.callbackFired);
 
-              // 释放锁：只要音频播完就释放，不检查 currentSpeaker
-              if (isSpeaking) {
+              // 释放锁：仅释放自己的锁，避免误把其他正在说话的人清空
+              if (isSpeaking && currentSpeaker === self.agentId) {
                 console.log('[' + self.agentId + '] 语音播放完成，释放锁 (currentSpeaker=' + currentSpeaker + ')');
                 isSpeaking = false;
                 currentSpeaker = null;
               }
               // 通知下一位：我的音频已经播完了，你可以开始播了
               // [Fix] 必须确保文本生成也已完成（taskFinished），防止因网络卡顿导致音频中断时误判为结束
-              if (self._resolveMyDone && self.taskFinished && (!self.audioChunks || self.audioChunks.length === 0)) {
-                console.log('[' + self.agentId + '] ✅ 音频全部播完且文本已完成，resolve prevSpeakerDone');
+              var wsClosedOrMissing = !self.ws || self.ws.readyState !== 1;
+              if (self._resolveMyDone && (!self.audioChunks || self.audioChunks.length === 0) && (self.taskFinished || wsClosedOrMissing)) {
+                console.log('[' + self.agentId + '] ✅ 音频全部播完，resolve prevSpeakerDone (taskFinished=' + self.taskFinished + ', wsClosed=' + wsClosedOrMissing + ')');
                 self._resolveMyDone();
                 self._resolveMyDone = null;
               } else if (self._resolveMyDone) {
-                console.log('[' + self.agentId + '] ⏳ 音频缓冲耗尽但任务未结束，保持 prevSpeakerDone 锁定 (taskFinished=' + self.taskFinished + ')');
+                console.log('[' + self.agentId + '] ⏳ 音频缓冲耗尽但任务/连接未结束，保持 prevSpeakerDone 锁定 (taskFinished=' + self.taskFinished + ', wsReady=' + (self.ws ? self.ws.readyState : 'null') + ')');
               }
               // 兜底：如果回调从未触发（异常情况），在音频播完时强制触发避免卡死
               if (!self.callbackFired && self.audioStarted) {
@@ -1337,6 +1469,7 @@
     // 强制停止当前所有音频播放（用于用户点停止或异常）
     TTSManager.prototype.stopPlayback = function() {
       this._stopped = true; // 阻止异步解码完成后继续播放
+      this.clearReconnectTimer();
       var remaining = this.audioContext ? (this.nextTime - this.audioContext.currentTime) : 0;
       if (this.activeSources > 0 || (this.activeSrcList && this.activeSrcList.length > 0)) {
         console.log('[' + this.agentId + '] ⛔ stopPlayback 强制停止 | activeSources=' + this.activeSources + ' | srcList=' + (this.activeSrcList ? this.activeSrcList.length : 0) + ' | 剩余音频=' + remaining.toFixed(1) + 's');
@@ -1493,6 +1626,10 @@
         clearTimeout(this._noAudioRecoveryTimer);
         this._noAudioRecoveryTimer = null;
       }
+      if (this._speechStartedRetryTimer) {
+        clearTimeout(this._speechStartedRetryTimer);
+        this._speechStartedRetryTimer = null;
+      }
       if (this.ws) try { this.ws.close(); } catch(e) {}
       this.ws = null;
       this.isOpen = false;
@@ -1516,7 +1653,6 @@
       this.callbackFired = false;
       this.textComplete = false;
       this.audioStarted = false;
-      this._audioStartedForPreload = false;
       this.onNearEnd = null;
       this.speechType = 'next';
       this.playQueue = Promise.resolve();
@@ -1531,6 +1667,13 @@
       this._allSentTexts = [];
       this._ttsRetryCount = 0;
       this._needResendEnd = false;
+      this._rateLimitCooldownUntil = 0;
+      this._speechStartedNotified = false;
+      this._speechStartedRetryCount = 0;
+      if (this._speechStartedRetryTimer) {
+        clearTimeout(this._speechStartedRetryTimer);
+        this._speechStartedRetryTimer = null;
+      }
       this.showIndicator(false);
     };
 
@@ -1545,9 +1688,12 @@
     function initConnection(agentId) {
       // 构建 WebSocket URL（支持房间参数）
       var wsUrl = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws/' + agentId;
+      var query = new URLSearchParams();
       if (currentChannel) {
-        wsUrl += '?channel=' + currentChannel;
+        query.set('channel', currentChannel);
       }
+      query.set('runtime_id', hostRuntimeId);
+      wsUrl += '?' + query.toString();
       var ws = new WebSocket(wsUrl);
       connections[agentId].ws = ws;
       updateStatus(agentId, 'connecting');
@@ -1637,6 +1783,14 @@
       return [data && data.command ? data.command : '', ts, data && data.timestamp ? data.timestamp : ''].join('|');
     }
 
+    function parseStreamingControlTimestampMs(data) {
+      if (!data) return 0;
+      var raw = (data.timestamp || (data.data && data.data.timestamp) || '').toString().trim();
+      if (!raw) return 0;
+      var ms = Date.parse(raw);
+      return Number.isFinite(ms) ? ms : 0;
+    }
+
     function markStreamingControlHandled(key) {
       if (!key) return;
       processedStreamingControlIds.add(key);
@@ -1694,6 +1848,11 @@
 
       var command = data.command;
       if (command === 'start_streaming') {
+        var startTsMs = parseStreamingControlTimestampMs(data);
+        if (startTsMs > 0 && (Date.now() - startTsMs) > 120000) {
+          console.warn('[Room] 忽略过期 start_streaming: age=' + Math.round((Date.now() - startTsMs) / 1000) + 's');
+          return;
+        }
         if (roundTableActive || moderatorStartInFlight) {
           console.log('[Room] 忽略 start_streaming：当前已开播或正在开播');
           return;
@@ -1705,6 +1864,22 @@
       }
 
       if (command === 'stop_streaming') {
+        var stopTsMs = parseStreamingControlTimestampMs(data);
+        var cmdRoomId = (data && data.data && data.data.room_id) ? String(data.data.room_id).trim() : '';
+        if (cmdRoomId && currentPodcastRoomId && cmdRoomId !== currentPodcastRoomId) {
+          console.warn('[Room] 忽略 stop_streaming: room_id 不匹配 cmd=' + cmdRoomId + ', current=' + currentPodcastRoomId);
+          return;
+        }
+        // 保护：忽略明显过期的停播指令（通常是断线后补发的旧命令）
+        if (stopTsMs > 0 && (Date.now() - stopTsMs) > 120000) {
+          console.warn('[Room] 忽略过期 stop_streaming: age=' + Math.round((Date.now() - stopTsMs) / 1000) + 's');
+          return;
+        }
+        // 保护：若命令时间早于本轮开播时间，则判定为旧会话残留
+        if (stopTsMs > 0 && roundtableStartedAtMs > 0 && stopTsMs + 2000 < roundtableStartedAtMs) {
+          console.warn('[Room] 忽略旧会话 stop_streaming: cmd=' + new Date(stopTsMs).toISOString() + ', started=' + new Date(roundtableStartedAtMs).toISOString());
+          return;
+        }
         document.getElementById('rt-status').textContent = '收到 room 下播命令，正在下播...';
         // 服务端停播命令必须强制执行，避免前端状态不同步时音频继续推流
         stopAll({ force: true, source: 'room_stop_streaming' });
@@ -1908,10 +2083,9 @@
             ttsManagers[agentId]._resolveMyDone = resolve;
           });
 
-          // 标记当前说话者
-          isSpeaking = true;
-          currentSpeaker = agentId;
-          console.log('[' + agentId + '] 开始发言（文本+TTS 开始准备）');
+          // 进入“预准备”阶段：只准备文本/TTS，不抢占全局说话锁
+          // 全局说话锁在真正开始播放音频时再设置，避免出现“预准备的人提前占位”
+          console.log('[' + agentId + '] 开始发言准备（文本+TTS 预准备）');
 
           // 桌面端自动滚动到当前发言人（移动端在音频开始播放时滚动）
           if (window.innerWidth > 768) {
@@ -3015,7 +3189,9 @@
       lang = lang || lastSelectedLang || 'zh';
       lastSelectedLang = lang;
 
-      // 每轮开播前重置残留状态，避免上一轮未完成 Promise 卡住首发
+      // 每轮开播前先强制清理本地残留音频/TTS连接，避免占用 MiniMax 连接额度
+      hardStopLocalAudioAndTTS();
+      // 再重置残留状态，避免上一轮未完成 Promise 卡住首发
       resetRoundtableRuntime();
       clearAllAgentChats();
       var createBtn = document.getElementById('btn-create-room');
@@ -3060,6 +3236,7 @@
           }
 
           var statusText = lang === 'en' ? 'Live: random topic...' : '讨论中: 随机话题...';
+          roundtableStartedAtMs = Date.now();
           applyRoundTableUiState(true, { updateStatus: true, statusText: statusText });
           // 获取当前话题
           pollCurrentTopic();
@@ -3102,7 +3279,6 @@
         mgr.activeSrcList = [];
         mgr.firstPlay = true;
         mgr.audioStarted = false;
-        mgr._audioStartedForPreload = false;
         mgr.taskFinished = false;
         mgr.callbackFired = false;
         mgr.textComplete = false;
@@ -3137,6 +3313,7 @@
       clearAllAgentChats();
       resetRoundtableRuntime();
       hardStopLocalAudioAndTTS();
+      roundtableStartedAtMs = 0;
 
       var body = {};
       if (currentChannel) {
@@ -3408,6 +3585,15 @@
     window.onbeforeunload = function() {
       AGENT_IDS.forEach(function(id) {
         if (connections[id].ws) connections[id].ws.close();
+      });
+      Object.keys(ttsManagers || {}).forEach(function(id) {
+        var mgr = ttsManagers[id];
+        if (!mgr) return;
+        if (mgr.clearReconnectTimer) mgr.clearReconnectTimer();
+        if (mgr.ws) {
+          try { mgr.ws.close(); } catch (e) {}
+          mgr.ws = null;
+        }
       });
     };
   </script>

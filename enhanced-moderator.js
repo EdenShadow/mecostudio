@@ -127,6 +127,8 @@
     // 统一话题去重 key：url > path > title
     normalizeTopicKey(topic) {
       if (!topic) return '';
+      const queueId = (topic.queue_id || '').toString().trim();
+      if (queueId) return `queue:${queueId}`;
       const url = (topic.postData?.url || topic.postData?.original_url || topic.url || topic.reference_url || '').toString().trim();
       if (url) return `url:${url}`;
       if (topic.path) return `path:${topic.path}`;
@@ -165,7 +167,28 @@
     pickTrendingTopic() {
       // 优先使用外部注入的麦序话题
       if (this.priorityTopics.length > 0) {
-        const priority = this.priorityTopics.shift();
+        // 先跳过“已讨论过”的麦序话题，避免反复聊同一批
+        let pickedIndex = -1;
+        for (let i = 0; i < this.priorityTopics.length; i++) {
+          const t = this.priorityTopics[i];
+          if (!t) continue;
+          const key = this.normalizeTopicKey(t);
+          const usedByPath = !!(t.path && this.usedTopicPaths.has(t.path));
+          const usedByKey = !!(key && this.usedTopicKeys.has(key));
+          if (!usedByPath && !usedByKey) {
+            pickedIndex = i;
+            break;
+          }
+        }
+
+        // 所有优先话题都讨论过：允许重复（保持原有“全部用完才重复”的语义）
+        if (pickedIndex === -1) {
+          pickedIndex = 0;
+          console.log('[Moderator] 📋 麦序优先话题均已讨论过，允许重复选择');
+        }
+
+        const priority = this.priorityTopics.splice(pickedIndex, 1)[0];
+        this.markTopicAsUsed(priority);
         console.log(`[Moderator] 🎯 使用麦序优先话题: ${priority.title?.substring(0, 50)}...`);
         return priority;
       }

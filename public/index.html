@@ -2403,6 +2403,10 @@
                 setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
                 setValue('cfg-meowload-key', appRuntimeSettings.meowloadApiKey);
                 setValue('cfg-kimi-key', appRuntimeSettings.kimiApiKey);
+                setValue('cfg-oss-endpoint', appRuntimeSettings.ossEndpoint);
+                setValue('cfg-oss-bucket', appRuntimeSettings.ossBucket);
+                setValue('cfg-oss-key-id', appRuntimeSettings.ossAccessKeyId);
+                setValue('cfg-oss-key-secret', appRuntimeSettings.ossAccessKeySecret);
             } catch (e) {
                 console.error('Load settings failed', e);
                 alert('加载设置失败: ' + e.message);
@@ -2422,7 +2426,11 @@
                 minimaxWsUrl: document.getElementById('cfg-minimax-ws-url')?.value || '',
                 tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
                 meowloadApiKey: document.getElementById('cfg-meowload-key')?.value || '',
-                kimiApiKey: document.getElementById('cfg-kimi-key')?.value || ''
+                kimiApiKey: document.getElementById('cfg-kimi-key')?.value || '',
+                ossEndpoint: document.getElementById('cfg-oss-endpoint')?.value || '',
+                ossBucket: document.getElementById('cfg-oss-bucket')?.value || '',
+                ossAccessKeyId: document.getElementById('cfg-oss-key-id')?.value || '',
+                ossAccessKeySecret: document.getElementById('cfg-oss-key-secret')?.value || ''
             };
 
             try {
@@ -6738,6 +6746,22 @@
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Kimi Coding API Key</label>
                 <input id="cfg-kimi-key" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Kimi Coding key">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Aliyun OSS Endpoint</label>
+                <input id="cfg-oss-endpoint" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="https://cfplusvideo.oss-cn-hongkong.aliyuncs.com/">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Aliyun OSS Bucket</label>
+                <input id="cfg-oss-bucket" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="cfplusvideo">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Aliyun OSS AccessKey ID</label>
+                <input id="cfg-oss-key-id" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AccessKey ID">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Aliyun OSS AccessKey Secret</label>
+                <input id="cfg-oss-key-secret" type="password" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AccessKey Secret">
             </div>
         </div>
         <div class="px-6 py-4 border-t border-white/10 flex items-center justify-end gap-3">

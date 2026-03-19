@@ -14,6 +14,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   tikhubApiKey: '',
   meowloadApiKey: '',
   kimiApiKey: '',
+  ossEndpoint: 'https://cfplusvideo.oss-cn-hongkong.aliyuncs.com/',
+  ossBucket: 'cfplusvideo',
+  ossAccessKeyId: '',
+  ossAccessKeySecret: '',
   kimiCliCommand: 'kimi',
   hotTopicsKbPath: path.join(os.homedir(), 'Documents/知识库/热门话题'),
   openaiApiKey: ''
@@ -39,6 +43,10 @@ const ENV_MAP = Object.freeze({
   tikhubApiKey: 'TIKHUB_API_KEY',
   meowloadApiKey: 'MECO_MEOWLOAD_API_KEY',
   kimiApiKey: 'KIMI_API_KEY',
+  ossEndpoint: 'MECO_OSS_ENDPOINT',
+  ossBucket: 'MECO_OSS_BUCKET',
+  ossAccessKeyId: 'MECO_OSS_ACCESS_KEY_ID',
+  ossAccessKeySecret: 'MECO_OSS_ACCESS_KEY_SECRET',
   kimiCliCommand: 'MECO_KIMI_CLI_COMMAND',
   hotTopicsKbPath: 'HOT_TOPICS_KB_PATH',
   openaiApiKey: 'OPENAI_API_KEY'
@@ -217,6 +225,8 @@ function getMaskedSettings() {
     tikhubApiKey: maskSecret(current.tikhubApiKey),
     meowloadApiKey: maskSecret(current.meowloadApiKey),
     kimiApiKey: maskSecret(current.kimiApiKey),
+    ossAccessKeyId: maskSecret(current.ossAccessKeyId),
+    ossAccessKeySecret: maskSecret(current.ossAccessKeySecret),
     openaiApiKey: maskSecret(current.openaiApiKey)
   };
 }

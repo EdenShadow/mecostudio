@@ -12,6 +12,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "ali-oss": "^6.23.0",
     "axios": "^1.13.5",
     "body-parser": "^2.2.2",
     "cors": "^2.8.6",
