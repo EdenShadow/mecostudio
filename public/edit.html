@@ -345,6 +345,11 @@
     <div class="relative group/avatar">
         <div class="w-full h-64 rounded-2xl overflow-hidden border border-white/10 relative bg-black">
             <img id="agent-avatar" alt="Avatar" class="w-full h-full object-cover transition-transform duration-700 group-hover/avatar:scale-105" src=""/>
+            <div id="agent-avatar-fallback" class="hidden absolute inset-0 items-center justify-center bg-black/40">
+                <div id="agent-avatar-fallback-badge" class="w-24 h-24 rounded-full flex items-center justify-center text-white text-4xl font-bold ring-2 ring-white/20 shadow-lg">
+                    A
+                </div>
+            </div>
             <div class="absolute top-3 right-3 bg-black/60 px-2 py-1 rounded text-xs text-white backdrop-blur-md border border-white/10 flex items-center gap-1">
                 <span class="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span> 4K Ready
             </div>
@@ -519,22 +524,22 @@
     window.knowledgeRuleExperienceLineNumber = null;
     window.knowledgeRuleExperienceUploadingLineNumber = null;
     window.knowledgeRuleBusy = false;
+    const AVATAR_COLOR_CLASSES = [
+        'bg-red-600', 'bg-orange-600', 'bg-amber-600',
+        'bg-yellow-600', 'bg-lime-600', 'bg-green-600',
+        'bg-emerald-600', 'bg-teal-600', 'bg-cyan-600',
+        'bg-sky-600', 'bg-blue-600', 'bg-indigo-600',
+        'bg-violet-600', 'bg-purple-600', 'bg-fuchsia-600',
+        'bg-pink-600', 'bg-rose-600'
+    ];
 
     // --- Avatar Helper Functions ---
     function getRandomColor(name) {
-        const colors = [
-            'bg-red-600', 'bg-orange-600', 'bg-amber-600', 
-            'bg-yellow-600', 'bg-lime-600', 'bg-green-600', 
-            'bg-emerald-600', 'bg-teal-600', 'bg-cyan-600', 
-            'bg-sky-600', 'bg-blue-600', 'bg-indigo-600', 
-            'bg-violet-600', 'bg-purple-600', 'bg-fuchsia-600', 
-            'bg-pink-600', 'bg-rose-600'
-        ];
         let hash = 0;
         for (let i = 0; i < name.length; i++) {
             hash = name.charCodeAt(i) + ((hash << 5) - hash);
         }
-        return colors[Math.abs(hash) % colors.length];
+        return AVATAR_COLOR_CLASSES[Math.abs(hash) % AVATAR_COLOR_CLASSES.length];
     }
 
     function handleSidebarAvatarError(img, name) {
@@ -546,6 +551,36 @@
         div.innerText = initial;
         
         img.parentNode.replaceChild(div, img);
+    }
+
+    function showMainAvatarFallback(name) {
+        const displayName = String(name || 'A').trim() || 'A';
+        const initial = displayName.charAt(0).toUpperCase();
+        const img = document.getElementById('agent-avatar');
+        const fallback = document.getElementById('agent-avatar-fallback');
+        const badge = document.getElementById('agent-avatar-fallback-badge');
+        if (!img || !fallback || !badge) return;
+
+        AVATAR_COLOR_CLASSES.forEach((cls) => badge.classList.remove(cls));
+        badge.classList.add(getRandomColor(displayName));
+        badge.textContent = initial;
+
+        img.classList.add('hidden');
+        img.removeAttribute('src');
+        fallback.classList.remove('hidden');
+        fallback.classList.add('flex');
+    }
+
+    function showMainAvatarImage(src, nameForFallback) {
+        const img = document.getElementById('agent-avatar');
+        const fallback = document.getElementById('agent-avatar-fallback');
+        if (!img || !fallback) return;
+
+        img.onerror = () => showMainAvatarFallback(nameForFallback);
+        img.classList.remove('hidden');
+        fallback.classList.add('hidden');
+        fallback.classList.remove('flex');
+        img.src = src;
     }
     // --------------------------------
 
@@ -711,10 +746,11 @@
     function renderSidebar(agentsList) {
         const sidebarList = document.getElementById('sidebar-list');
         const currentId = window.currentAgentId;
+        const sortedAgents = sortAgentsMainFirst(agentsList);
         
         if (sidebarList) {
             sidebarList.innerHTML = '';
-            agentsList.forEach(a => {
+            sortedAgents.forEach(a => {
                 const displayName = a.displayName || a.name;
                 const hasCustomAvatar = a.avatarUrl && !a.avatarUrl.includes('googleusercontent.com');
                 const isActive = a.id === currentId;
@@ -746,6 +782,29 @@
                 sidebarList.appendChild(sidebarItem);
             });
         }
+    }
+
+    function isMainAgentEntry(agent) {
+        if (!agent || typeof agent !== 'object') return false;
+        const id = String(agent.id || '').trim().toLowerCase();
+        const name = String(agent.name || '').trim().toLowerCase();
+        const displayName = String(agent.displayName || '').trim().toLowerCase();
+        return id === 'main' || name === 'main' || displayName === 'main';
+    }
+
+    function sortAgentsMainFirst(agents) {
+        const list = Array.isArray(agents)
+            ? agents.filter(Boolean)
+            : Object.values(agents || {}).filter(Boolean);
+        return list
+            .map((agent, index) => ({ agent, index }))
+            .sort((a, b) => {
+                const aMain = isMainAgentEntry(a.agent) ? 0 : 1;
+                const bMain = isMainAgentEntry(b.agent) ? 0 : 1;
+                if (aMain !== bMain) return aMain - bMain;
+                return a.index - b.index;
+            })
+            .map((item) => item.agent);
     }
     
     function filterSidebar(query) {
@@ -784,7 +843,8 @@
             // 1. Load Agent Details
             const agentsRes = await fetch('/api/agents');
             const agentsData = await agentsRes.json();
-            const agents = agentsData.agents ? Object.values(agentsData.agents) : agentsData;
+            const rawAgents = agentsData.agents ? Object.values(agentsData.agents) : agentsData;
+            const agents = sortAgentsMainFirst(rawAgents);
             
             if (Array.isArray(agents)) {
                     // Find agent by ID (preferred) or Name
@@ -819,16 +879,12 @@
                 // Avatar: Use avatarUrl from API which handles both local and system agents
                 const avatarUrl = agent.avatarUrl;
                 const hasCustomAvatar = avatarUrl && !avatarUrl.includes('googleusercontent.com');
+                window.currentAgentDisplayName = agent.displayName || agent.name || 'A';
                 
                 if (hasCustomAvatar) {
-                    document.getElementById('agent-avatar').src = avatarUrl;
+                    showMainAvatarImage(avatarUrl, window.currentAgentDisplayName);
                 } else {
-                    // Generate placeholder if no custom avatar
-                    const initial = agent.name.charAt(0).toUpperCase();
-                    // We can't easily do the div replacement here without restructuring HTML, 
-                    // so let's use a placeholder image service or hide the img and show a div.
-                    // For now, let's use UI Avatars as a simple fallback which works with img tag
-                    document.getElementById('agent-avatar').src = `https://ui-avatars.com/api/?name=${encodeURIComponent(agent.name)}&background=random&size=512&font-size=0.5&bold=true&color=fff`;
+                    showMainAvatarFallback(window.currentAgentDisplayName);
                 }
 
                 // Load SOUL.md content for prompt textarea
@@ -1515,7 +1571,10 @@
 
             if (res.ok) {
                 const data = await res.json();
-                document.getElementById('agent-avatar').src = `/api/agents/${encodeURIComponent(agentId)}/avatar?t=${Date.now()}`;
+                showMainAvatarImage(
+                    `/api/agents/${encodeURIComponent(agentId)}/avatar?t=${Date.now()}`,
+                    window.currentAgentDisplayName || agentId
+                );
                 if (data.podcastSynced) {
                     console.log('[Avatar] Podcast API synced');
                 }

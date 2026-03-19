@@ -70,6 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 
 - 规则文件：`GITHUB-SYNC-RULES.md`
 - 上传策略铁律：`GITHUB-UPLOAD-RULES.md`
+- AI 安装/升级协议：`AI-UPDATE-PROTOCOL.md`
 - 统一版本文件：`VERSION`（默认 `0.0.1`）
 - 本机同步版本文件：`~/.meco-studio/VERSION`
 - 推荐提交前执行：
@@ -178,6 +179,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 ```yaml
 product: "Meco Studio"
 repo: "https://github.com/EdenShadow/mecostudio"
+update_protocol_doc: "AI-UPDATE-PROTOCOL.md"
 install_command: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash"
 upgrade_command: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash"
 default_install_dir: "~/meco-studio"
@@ -197,15 +199,19 @@ optional_api_keys:
 post_install_actions:
   - "openclaw install/upgrade if needed"
   - "python3/pip install if needed"
+  - "git pull latest code to install dir"
   - "auto discover openclaw http/ws/token from local config"
   - "bootstrap openclaw kimi-code auth profile to avoid moonshot 401 mismatch"
   - "write openclaw default model/provider config (kimi-coding/k2p5)"
   - "kimi cli install if missing"
   - "install skills runtime deps (python + node, including whisper)"
-  - "sync bootstrap agents/skills (idempotent)"
+  - "sync bootstrap OpenClaw skills + Kimi CLI skills"
+  - "sync OpenClaw agents/workspaces + local data-agents"
+  - "sync rule knowledge folders to upload root"
   - "ensure hot-topics category folders under ~/Documents/知识库/热门话题"
   - "reset default test rooms to empty"
   - "restart OpenClaw gateway and Meco Studio on upgrade"
+  - "sync repo VERSION to ~/.meco-studio/VERSION"
 ```
 
 ## 📦 维护者打包

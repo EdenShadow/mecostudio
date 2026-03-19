@@ -642,6 +642,47 @@ const OPENCLAW_ROOT_DIR = path.join(os.homedir(), '.openclaw');
 const OPENCLAW_HOME_DIR = path.join(OPENCLAW_ROOT_DIR, 'agents');
 const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_ROOT_DIR, 'openclaw.json');
 
+function resolvePreferredWorkspacePath(agentId, fallbackPath = '') {
+  const normalizedId = String(agentId || '').trim();
+  const lowerId = normalizedId.toLowerCase();
+  const candidates = [];
+  const seen = new Set();
+  const pushCandidate = (p) => {
+    if (!p) return;
+    const resolved = path.resolve(p);
+    if (seen.has(resolved)) return;
+    seen.add(resolved);
+    candidates.push(resolved);
+  };
+
+  if (lowerId === 'main') {
+    // OpenClaw main agent uses ~/.openclaw/workspace (not workspace-main).
+    pushCandidate(path.join(OPENCLAW_ROOT_DIR, 'workspace'));
+  }
+  if (normalizedId) {
+    pushCandidate(path.join(OPENCLAW_ROOT_DIR, `workspace-${normalizedId}`));
+    if (lowerId !== normalizedId) {
+      pushCandidate(path.join(OPENCLAW_ROOT_DIR, `workspace-${lowerId}`));
+    }
+    const capitalized = lowerId
+      ? `${lowerId.charAt(0).toUpperCase()}${lowerId.slice(1)}`
+      : '';
+    if (capitalized && capitalized !== normalizedId && capitalized !== lowerId) {
+      pushCandidate(path.join(OPENCLAW_ROOT_DIR, `workspace-${capitalized}`));
+    }
+  }
+  pushCandidate(fallbackPath);
+
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+        return dir;
+      }
+    } catch (_) {}
+  }
+  return fallbackPath || candidates[0] || '';
+}
+
 function patchOpenClawConfigCompat() {
   try {
     if (!fs.existsSync(OPENCLAW_CONFIG_PATH)) return;
@@ -865,12 +906,8 @@ function scanOpenClawAgents() {
         if (dirent.isDirectory()) {
           const agentId = dirent.name;
           let workspacePath = path.join(OPENCLAW_HOME_DIR, agentId);
-          
-          // Check override workspace
-          const rootWorkspacePath = path.join(OPENCLAW_ROOT_DIR, `workspace-${agentId}`);
-          if (fs.existsSync(rootWorkspacePath)) {
-              workspacePath = rootWorkspacePath;
-          }
+
+          workspacePath = resolvePreferredWorkspacePath(agentId, workspacePath);
           processAgent(agentId, workspacePath);
         }
       }
