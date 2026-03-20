@@ -30,6 +30,7 @@
 - 禁止提交任何真实 API Key / Token / Secret。
 - 所有密钥仅保存在本地 UI 配置或环境变量。
 - 怀疑泄漏时立即轮换密钥并补充脱敏提交。
+- 例外：默认角色 `data/agents/*/meta.json` 的 `podcastApiKey` + `podcastAgentId` 作为 Podcast 房间创建必需注册信息，需要随打包同步，禁止误清空。
 
 ## 5) 提交前检查（固定流程）
 

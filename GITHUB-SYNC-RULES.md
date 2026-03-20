@@ -36,6 +36,7 @@
 
 - 仓库不得提交真实密钥。
 - 打包脚本会做脱敏，但提交前仍需人工复核。
+- 例外：默认角色 `data/agents/*/meta.json` 的 `podcastApiKey` + `podcastAgentId` 作为房间创建必需注册信息，禁止被清空。
 
 ## 6) AI 升级协议
 

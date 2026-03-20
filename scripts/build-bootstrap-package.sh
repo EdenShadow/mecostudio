@@ -211,6 +211,8 @@ sanitize_json_secrets() {
   node -e '
     const fs = require("fs");
     const file = process.argv[1];
+    const normalizedFile = String(file || "").replace(/\\/g, "/");
+    const preservePodcastRegistration = /\/data-agents\/[^/]+\/meta\.json$/i.test(normalizedFile);
     let parsed;
     try {
       parsed = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -224,7 +226,11 @@ sanitize_json_secrets() {
       const out = {};
       for (const [k, v] of Object.entries(input)) {
         if (secretKeyRegex.test(k)) {
-          out[k] = "";
+          if (preservePodcastRegistration && (k === "podcastApiKey" || k === "podcastAgentId")) {
+            out[k] = v;
+          } else {
+            out[k] = "";
+          }
         } else {
           out[k] = walk(v);
         }
