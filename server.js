@@ -8670,44 +8670,98 @@ app.delete('/api/podcast/rooms/:roomId', async (req, res) => {
             return res.status(404).json({ success: false, error: 'Room not found' });
         }
 
-        // 获取 host API Key（优先使用保存的 hostApiKey，否则从 meta.json 读取）
-        let hostApiKey = room.hostApiKey || null;
-        if (!hostApiKey && room.agentIds && room.agentIds.length > 0) {
-            try {
-                const metaPath = path.join(DATA_AGENTS_DIR, room.agentIds[0], 'meta.json');
-                if (fs.existsSync(metaPath)) {
-                    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-                    hostApiKey = meta.podcastApiKey;
+        const maskApiKey = (key) => {
+            const value = String(key || '').trim();
+            if (!value) return '';
+            if (value.length <= 10) return `${value.slice(0, 2)}***`;
+            return `${value.slice(0, 6)}***${value.slice(-4)}`;
+        };
+        const toErrorMessage = (err) => {
+            if (!err) return 'unknown error';
+            if (err.response && err.response.data) {
+                try {
+                    return `${err.message || 'request failed'} | ${JSON.stringify(err.response.data)}`;
+                } catch (_) {
+                    return err.message || 'request failed';
                 }
-            } catch(e) {
-                console.warn(`[DeleteRoom] 获取API Key失败: ${e.message}`);
+            }
+            return err.message || String(err);
+        };
+
+        // 收集候选 API Key：优先 hostApiKey，其次 room.agentIds 对应角色 meta 中的 key
+        const apiKeyCandidates = [];
+        const seen = new Set();
+        const pushApiKey = (raw, source) => {
+            const key = String(raw || '').trim();
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            apiKeyCandidates.push({ key, source: String(source || '') });
+        };
+
+        pushApiKey(room.hostApiKey, 'room.hostApiKey');
+        const roomAgentIds = Array.isArray(room.agentIds) ? room.agentIds : [];
+        for (const agentId of roomAgentIds) {
+            try {
+                const metaPath = path.join(DATA_AGENTS_DIR, agentId, 'meta.json');
+                if (!fs.existsSync(metaPath)) continue;
+                const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+                pushApiKey(meta && meta.podcastApiKey, `meta:${agentId}`);
+            } catch (e) {
+                console.warn(`[DeleteRoom] 读取 ${agentId} meta 失败: ${e.message}`);
             }
         }
 
-        // Step 1: 先调用远程API结束房间
-        if (hostApiKey) {
+        const remoteDeleteAttempts = [];
+        let remoteEnded = false;
+        let remoteDeleted = false;
+        let remoteDeleteError = '';
+        let usedApiKeySource = '';
+        let usedApiKeyMasked = '';
+
+        for (const candidate of apiKeyCandidates) {
+            if (remoteDeleted) break;
+            const attempt = {
+                source: candidate.source,
+                apiKey: maskApiKey(candidate.key),
+                endOk: false,
+                endError: '',
+                deleteOk: false,
+                deleteError: ''
+            };
+
             try {
                 await axios.post(`${PODCAST_API_BASE}/agent/rooms/${roomId}/end`, {}, {
-                    headers: { 'X-API-Key': hostApiKey }, timeout: 15000
+                    headers: { 'X-API-Key': candidate.key }, timeout: 15000
                 });
-                console.log(`[DeleteRoom] 房间 ${roomId} 已结束`);
-            } catch(e) {
-                console.warn(`[DeleteRoom] 结束房间失败: ${e.message}`);
-                // 继续尝试删除，忽略结束失败
+                attempt.endOk = true;
+                remoteEnded = true;
+                console.log(`[DeleteRoom] 房间 ${roomId} 已结束 (source=${candidate.source})`);
+            } catch (e) {
+                attempt.endError = toErrorMessage(e);
+                console.warn(`[DeleteRoom] 结束房间失败 (source=${candidate.source}): ${attempt.endError}`);
             }
 
-            // Step 2: 调用远程API删除房间
             try {
                 await axios.delete(`${PODCAST_API_BASE}/agent/rooms/${roomId}`, {
-                    headers: { 'X-API-Key': hostApiKey }, timeout: 15000
+                    headers: { 'X-API-Key': candidate.key }, timeout: 15000
                 });
-                console.log(`[DeleteRoom] 房间 ${roomId} 已从远程API删除`);
-            } catch(e) {
-                console.warn(`[DeleteRoom] 远程API删除房间失败: ${e.message}`);
-                // 继续删除本地记录
+                attempt.deleteOk = true;
+                remoteDeleted = true;
+                usedApiKeySource = candidate.source;
+                usedApiKeyMasked = attempt.apiKey;
+                console.log(`[DeleteRoom] 房间 ${roomId} 已从远程API删除 (source=${candidate.source})`);
+            } catch (e) {
+                attempt.deleteError = toErrorMessage(e);
+                remoteDeleteError = attempt.deleteError;
+                console.warn(`[DeleteRoom] 远程API删除房间失败 (source=${candidate.source}): ${attempt.deleteError}`);
             }
-        } else {
-            console.warn(`[DeleteRoom] 未找到API Key，无法调用远程API`);
+
+            remoteDeleteAttempts.push(attempt);
+        }
+
+        if (!apiKeyCandidates.length) {
+            remoteDeleteError = 'no available api key';
+            console.warn(`[DeleteRoom] 未找到可用 API Key，无法调用远程API`);
         }
 
         // Step 3: 删除本地记录
@@ -8722,7 +8776,15 @@ app.delete('/api/podcast/rooms/:roomId', async (req, res) => {
             } catch(e) {}
         }
 
-        res.json({ success: true });
+        res.json({
+            success: true,
+            remoteDeleted,
+            remoteEnded,
+            remoteDeleteError,
+            remoteDeleteAttempts,
+            usedApiKeySource,
+            usedApiKeyMasked
+        });
     } catch(e) {
         console.error(`[DeleteRoom] 删除房间失败:`, e.message);
         res.status(500).json({ success: false, error: e.message });

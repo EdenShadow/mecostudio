@@ -3367,6 +3367,11 @@
                 const data = await res.json();
                 if (!res.ok || !data.success) throw new Error(data.error || 'Failed to delete room');
                 fetchRooms();
+                if (data && data.remoteDeleted === false) {
+                    const detail = data.remoteDeleteError ? `\n${data.remoteDeleteError}` : '';
+                    alert(`Room was removed locally, but remote Room API deletion failed.${detail}`);
+                    console.warn('[DeleteRoom] remote delete failed', data);
+                }
             } catch(e) {
                 console.error(e);
                 alert('Failed to delete room: ' + e.message);
