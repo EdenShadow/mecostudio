@@ -8,6 +8,18 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 
 同一条命令既可首次安装，也可后续升级（重跑即更新）。
 
+### Windows PowerShell 一行安装 / 升级
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
+```
+
+说明：
+- Windows 安装脚本路径：`scripts/install-meco-studio.ps1`
+- 会优先使用 `winget` 自动安装 `git / node / python`（若本机未安装）
+- 若 `kimi` 命令未安装，脚本会提示手动安装（不阻塞主安装流程）
+- 如当前终端未刷新 PATH，按提示重新打开 PowerShell 后重试
+
 ## 🌟 项目亮点
 
 - 🧠 **多智能体编排引擎**：角色化智能体协作、主持人机制、动态麦序与话题切换
@@ -150,6 +162,22 @@ HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
 
+Windows PowerShell（等价变量）：
+
+```powershell
+$env:MECO_INSTALL_DIR = "$env:USERPROFILE\\meco-studio"
+$env:MECO_OPENCLAW_MODEL = "kimi-coding/k2p5"
+$env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
+$env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
+$env:MECO_TIKHUB_API_KEY = "<your-tikhub-key>"
+$env:MECO_MEOWLOAD_API_KEY = "<your-meowload-key>"
+$env:MECO_OSS_ENDPOINT = "https://oss-cn-hongkong.aliyuncs.com/"
+$env:MECO_OSS_BUCKET = "cfplusvideo"
+$env:MECO_OSS_ACCESS_KEY_ID = "<your-oss-access-key-id>"
+$env:MECO_OSS_ACCESS_KEY_SECRET = "<your-oss-access-key-secret>"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
+```
+
 ## ⚡ 快速填参一键安装/更新
 
 把下面占位符替换成你自己的 Key，安装和更新都用同一条命令（重跑即更新）：
@@ -189,6 +217,7 @@ repo: "https://github.com/EdenShadow/mecostudio"
 update_protocol_doc: "AI-UPDATE-PROTOCOL.md"
 install_command: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash"
 upgrade_command: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash"
+install_command_windows: "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex\""
 default_install_dir: "~/meco-studio"
 default_openclaw_root: "~/.openclaw"
 default_hot_topics_root: "~/Documents/知识库/热门话题"

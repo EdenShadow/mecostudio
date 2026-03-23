@@ -14,6 +14,18 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 
 同一命令可重复执行，脚本为幂等设计。
 
+## Windows 一行安装 / 升级（PowerShell）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
+```
+
+说明：
+- Windows 安装脚本：`scripts/install-meco-studio.ps1`
+- 优先通过 `winget` 自动安装 `git / node / python`
+- 若 `kimi` 命令未安装，脚本会给出手动安装提示（不阻塞主安装流程）
+- 如果安装后当前终端仍找不到命令，请关闭并重开 PowerShell 再重试
+
 ## 安装脚本默认行为
 
 - 安装 git（未安装自动安装）
@@ -138,6 +150,22 @@ HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
 
+Windows PowerShell（等价变量）：
+
+```powershell
+$env:MECO_INSTALL_DIR = "$env:USERPROFILE\\meco-studio"
+$env:MECO_OPENCLAW_MODEL = "kimi-coding/k2p5"
+$env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
+$env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
+$env:MECO_TIKHUB_API_KEY = "<your-tikhub-key>"
+$env:MECO_MEOWLOAD_API_KEY = "<your-meowload-key>"
+$env:MECO_OSS_ENDPOINT = "https://oss-cn-hongkong.aliyuncs.com/"
+$env:MECO_OSS_BUCKET = "cfplusvideo"
+$env:MECO_OSS_ACCESS_KEY_ID = "<your-oss-access-key-id>"
+$env:MECO_OSS_ACCESS_KEY_SECRET = "<your-oss-access-key-secret>"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
+```
+
 ## 快速填参一键安装/更新
 
 将占位符替换为你的真实 Key，同一条命令即可安装或升级：
@@ -188,6 +216,7 @@ type: "OpenClaw multi-agent management platform"
 update_protocol_doc: "AI-UPDATE-PROTOCOL.md"
 install:
   command: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash"
+  command_windows: "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex\""
   idempotent: true
 defaults:
   install_dir: "~/meco-studio"

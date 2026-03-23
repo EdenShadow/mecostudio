@@ -1,0 +1,636 @@
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+function Get-EnvOrDefault {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][string]$Default
+  )
+
+  $value = [Environment]::GetEnvironmentVariable($Name)
+  if ([string]::IsNullOrWhiteSpace($value)) {
+    return $Default
+  }
+  return $value
+}
+
+$MecoRepoUrl = Get-EnvOrDefault -Name 'MECO_REPO_URL' -Default 'https://github.com/EdenShadow/mecostudio.git'
+$MecoBranch = Get-EnvOrDefault -Name 'MECO_BRANCH' -Default 'main'
+$MecoInstallDir = Get-EnvOrDefault -Name 'MECO_INSTALL_DIR' -Default (Join-Path $env:USERPROFILE 'meco-studio')
+$MecoStartAfterInstall = Get-EnvOrDefault -Name 'MECO_START_AFTER_INSTALL' -Default '1'
+$MecoResetRuntimeState = Get-EnvOrDefault -Name 'MECO_RESET_RUNTIME_STATE' -Default '1'
+$MecoUpgradeOpenclaw = Get-EnvOrDefault -Name 'MECO_UPGRADE_OPENCLAW' -Default '0'
+$MecoNpmInstallMode = Get-EnvOrDefault -Name 'MECO_NPM_INSTALL_MODE' -Default 'auto' # auto|ci|install
+$MecoHealthcheckRetries = [int](Get-EnvOrDefault -Name 'MECO_HEALTHCHECK_RETRIES' -Default '20')
+$MecoHealthcheckIntervalSec = [int](Get-EnvOrDefault -Name 'MECO_HEALTHCHECK_INTERVAL_SEC' -Default '1')
+$MecoOpenclawModel = Get-EnvOrDefault -Name 'MECO_OPENCLAW_MODEL' -Default 'kimi-coding/k2p5'
+$MecoKimiCodingApiKey = Get-EnvOrDefault -Name 'MECO_KIMI_CODING_API_KEY' -Default ''
+$MecoOpenclawModelApiKey = Get-EnvOrDefault -Name 'MECO_OPENCLAW_MODEL_API_KEY' -Default ''
+$MecoMinimaxApiKey = Get-EnvOrDefault -Name 'MECO_MINIMAX_API_KEY' -Default ''
+$MecoMinimaxWsUrl = Get-EnvOrDefault -Name 'MECO_MINIMAX_WS_URL' -Default 'wss://api.minimaxi.com/ws/v1/t2a_v2'
+$MecoTikhubApiKey = Get-EnvOrDefault -Name 'MECO_TIKHUB_API_KEY' -Default ''
+$MecoMeowloadApiKey = Get-EnvOrDefault -Name 'MECO_MEOWLOAD_API_KEY' -Default ''
+$MecoOpenAIApiKey = Get-EnvOrDefault -Name 'MECO_OPENAI_API_KEY' -Default ''
+$MecoOssEndpoint = Get-EnvOrDefault -Name 'MECO_OSS_ENDPOINT' -Default 'https://oss-cn-hongkong.aliyuncs.com/'
+$MecoOssBucket = Get-EnvOrDefault -Name 'MECO_OSS_BUCKET' -Default 'cfplusvideo'
+$MecoOssAccessKeyId = Get-EnvOrDefault -Name 'MECO_OSS_ACCESS_KEY_ID' -Default ''
+$MecoOssAccessKeySecret = Get-EnvOrDefault -Name 'MECO_OSS_ACCESS_KEY_SECRET' -Default ''
+$OpenclawRoot = Get-EnvOrDefault -Name 'OPENCLAW_ROOT' -Default (Join-Path $env:USERPROFILE '.openclaw')
+$ConfigSkillsRoot = Get-EnvOrDefault -Name 'CONFIG_SKILLS_ROOT' -Default (Join-Path $env:USERPROFILE '.config\agents\skills')
+$HotTopicsRoot = Get-EnvOrDefault -Name 'HOT_TOPICS_ROOT' -Default (Join-Path $env:USERPROFILE 'Documents\知识库\热门话题')
+
+$HotTopicsCategories = @(
+  'AI_Tech',
+  'Entertainment',
+  'Military',
+  'Sports',
+  'Design',
+  'Health',
+  'Politics',
+  'Technology',
+  'Economy',
+  'Medical',
+  'Society',
+  'Trending'
+)
+
+function Write-Log {
+  param([string]$Message)
+  Write-Host "[meco-install-win] $Message"
+}
+
+function Write-Warn {
+  param([string]$Message)
+  Write-Warning "[meco-install-win] $Message"
+}
+
+function Throw-Fail {
+  param([string]$Message)
+  throw "[meco-install-win] $Message"
+}
+
+function Test-Cmd {
+  param([string]$Name)
+  return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Invoke-Checked {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [Parameter()][string[]]$Arguments = @(),
+    [Parameter()][string]$WorkingDirectory = $null,
+    [Parameter()][switch]$IgnoreExitCode
+  )
+
+  if ($WorkingDirectory) {
+    Push-Location $WorkingDirectory
+  }
+
+  try {
+    & $FilePath @Arguments
+    $exitCode = $LASTEXITCODE
+    if (-not $IgnoreExitCode -and $exitCode -ne 0) {
+      Throw-Fail "Command failed: $FilePath $($Arguments -join ' ') (exit=$exitCode)"
+    }
+  }
+  finally {
+    if ($WorkingDirectory) {
+      Pop-Location
+    }
+  }
+}
+
+function Install-WithWinget {
+  param(
+    [Parameter(Mandatory = $true)][string]$PackageId,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+
+  if (-not (Test-Cmd 'winget')) {
+    Write-Warn "winget not found, cannot auto install $Label"
+    return $false
+  }
+
+  Write-Log "Installing $Label via winget ($PackageId)..."
+  & winget install -e --id $PackageId --silent --accept-package-agreements --accept-source-agreements | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warn "winget install failed for $Label"
+    return $false
+  }
+
+  Start-Sleep -Seconds 2
+  return $true
+}
+
+function Ensure-Git {
+  if (Test-Cmd 'git') {
+    return
+  }
+
+  if (-not (Install-WithWinget -PackageId 'Git.Git' -Label 'Git')) {
+    Throw-Fail 'git is required. Please install Git and re-run script.'
+  }
+
+  if (-not (Test-Cmd 'git')) {
+    Throw-Fail 'git install did not expose command in current shell. Open a new PowerShell window and re-run.'
+  }
+}
+
+function Ensure-NodeAndNpm {
+  $missing = (-not (Test-Cmd 'node')) -or (-not (Test-Cmd 'npm'))
+  if ($missing) {
+    if (-not (Install-WithWinget -PackageId 'OpenJS.NodeJS.LTS' -Label 'Node.js LTS')) {
+      Throw-Fail 'node/npm is required. Please install Node.js >= 22.12 and re-run script.'
+    }
+  }
+
+  if (-not (Test-Cmd 'node') -or -not (Test-Cmd 'npm')) {
+    Throw-Fail 'node/npm not found in current shell. Open a new PowerShell window and re-run.'
+  }
+
+  $nodeVersion = (& node -p "process.versions.node").Trim()
+  $parts = $nodeVersion.Split('.')
+  $major = [int]$parts[0]
+  $minor = [int]$parts[1]
+  $ok = ($major -gt 22) -or ($major -eq 22 -and $minor -ge 12)
+  if (-not $ok) {
+    Throw-Fail "Node.js >= 22.12 is required (current=$nodeVersion)"
+  }
+}
+
+function Get-PythonLauncher {
+  if (Test-Cmd 'python') {
+    return @{ Exe = 'python'; Prefix = @() }
+  }
+  if (Test-Cmd 'py') {
+    return @{ Exe = 'py'; Prefix = @('-3') }
+  }
+  return $null
+}
+
+function Ensure-PythonAndPip {
+  $launcher = Get-PythonLauncher
+  if (-not $launcher) {
+    if (-not (Install-WithWinget -PackageId 'Python.Python.3.11' -Label 'Python 3')) {
+      Throw-Fail 'python is required. Please install Python 3 and re-run script.'
+    }
+    $launcher = Get-PythonLauncher
+  }
+
+  if (-not $launcher) {
+    Throw-Fail 'python command not found after install. Open a new PowerShell window and re-run.'
+  }
+
+  & $launcher.Exe @($launcher.Prefix + @('-m', 'pip', '--version')) | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    & $launcher.Exe @($launcher.Prefix + @('-m', 'ensurepip', '--upgrade')) | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Throw-Fail 'failed to bootstrap pip'
+    }
+  }
+
+  $script:PythonLauncher = $launcher
+}
+
+function Ensure-Openclaw {
+  if (Test-Cmd 'openclaw') {
+    if ($MecoUpgradeOpenclaw -eq '1') {
+      Write-Log 'Updating OpenClaw to latest...'
+      Invoke-Checked -FilePath 'npm' -Arguments @('install', '-g', 'openclaw@latest')
+    }
+    else {
+      Write-Log 'OpenClaw already installed, skip upgrade (set MECO_UPGRADE_OPENCLAW=1 to upgrade)'
+    }
+    return
+  }
+
+  Write-Log 'Installing OpenClaw...'
+  Invoke-Checked -FilePath 'npm' -Arguments @('install', '-g', 'openclaw@latest')
+
+  if (-not (Test-Cmd 'openclaw')) {
+    Throw-Fail 'openclaw install failed or command not available in PATH.'
+  }
+}
+
+function Ensure-KimiCli {
+  if (Test-Cmd 'kimi') {
+    Write-Log 'Kimi CLI already installed'
+    return
+  }
+
+  Write-Warn 'Kimi CLI command not found on Windows. Please install Kimi CLI manually if you need local kimi command support.'
+}
+
+function Configure-OpenclawKimiAuth {
+  param([string]$OpenclawModelApiKey)
+
+  if ([string]::IsNullOrWhiteSpace($OpenclawModelApiKey)) {
+    Write-Warn 'MECO_OPENCLAW_MODEL_API_KEY (or fallback MECO_KIMI_CODING_API_KEY) is empty, skip OpenClaw kimi-code auth bootstrap'
+    return
+  }
+
+  if (-not (Test-Cmd 'openclaw')) {
+    Write-Warn 'openclaw command not found, skip OpenClaw kimi auth bootstrap'
+    return
+  }
+
+  $workspaceDir = Join-Path $OpenclawRoot 'workspace'
+  New-Item -ItemType Directory -Force -Path $workspaceDir | Out-Null
+
+  Write-Log 'Configuring OpenClaw auth via kimi-code-api-key...'
+  & openclaw onboard `
+    --non-interactive `
+    --accept-risk `
+    --mode local `
+    --auth-choice kimi-code-api-key `
+    --kimi-code-api-key $OpenclawModelApiKey `
+    --skip-daemon `
+    --skip-skills `
+    --skip-search `
+    --skip-ui `
+    --skip-channels `
+    --workspace $workspaceDir | Out-Null
+
+  if ($LASTEXITCODE -eq 0) {
+    Write-Log 'Configured OpenClaw auth via kimi-code-api-key'
+  }
+  else {
+    Write-Warn 'openclaw onboard (kimi-code-api-key) failed, continue with direct config patch'
+  }
+}
+
+function Configure-KimiApiKey {
+  param([string]$KimiApiKey)
+
+  if ([string]::IsNullOrWhiteSpace($KimiApiKey)) {
+    return
+  }
+
+  $kimiHome = Join-Path $env:USERPROFILE '.kimi'
+  New-Item -ItemType Directory -Force -Path $kimiHome | Out-Null
+  $kimiConfigPath = Join-Path $kimiHome 'config.json'
+
+  $payload = @{
+    api_key = $KimiApiKey
+    base_url = 'https://api.moonshot.cn/v1'
+  } | ConvertTo-Json -Depth 5
+
+  Set-Content -Path $kimiConfigPath -Value $payload -Encoding UTF8
+  Write-Log "Updated Kimi config: $kimiConfigPath"
+}
+
+function Configure-OpenclawDefaults {
+  param(
+    [Parameter(Mandatory = $true)][string]$Model,
+    [Parameter(Mandatory = $false)][string]$ProviderKey
+  )
+
+  New-Item -ItemType Directory -Force -Path $OpenclawRoot | Out-Null
+  $openclawConfigPath = Join-Path $OpenclawRoot 'openclaw.json'
+
+  $conf = @{}
+  if (Test-Path $openclawConfigPath) {
+    try {
+      $conf = Get-Content -Raw -Path $openclawConfigPath | ConvertFrom-Json -AsHashtable
+    }
+    catch {
+      $conf = @{}
+    }
+  }
+
+  if (-not $conf.ContainsKey('gateway') -or $null -eq $conf.gateway) { $conf.gateway = @{} }
+  if (-not $conf.gateway.ContainsKey('port')) { $conf.gateway.port = 18789 }
+  if (-not $conf.gateway.ContainsKey('auth') -or $null -eq $conf.gateway.auth) { $conf.gateway.auth = @{} }
+
+  if (-not $conf.ContainsKey('agents') -or $null -eq $conf.agents) { $conf.agents = @{} }
+  if (-not $conf.agents.ContainsKey('defaults') -or $null -eq $conf.agents.defaults) { $conf.agents.defaults = @{} }
+  if (-not $conf.agents.defaults.ContainsKey('model') -or $null -eq $conf.agents.defaults.model) { $conf.agents.defaults.model = @{} }
+  $conf.agents.defaults.model.primary = $Model
+
+  if (-not $conf.ContainsKey('models') -or $null -eq $conf.models) { $conf.models = @{} }
+  if (-not $conf.models.ContainsKey('providers') -or $null -eq $conf.models.providers) { $conf.models.providers = @{} }
+  if (-not $conf.models.providers.ContainsKey('kimi-coding') -or $null -eq $conf.models.providers.'kimi-coding') {
+    $conf.models.providers.'kimi-coding' = @{}
+  }
+
+  $conf.models.providers.'kimi-coding'.baseUrl = 'https://api.kimi.com/coding/'
+  $conf.models.providers.'kimi-coding'.api = 'anthropic-messages'
+  $conf.models.providers.'kimi-coding'.models = @(@{ id = 'k2p5'; name = 'Kimi K2.5' })
+
+  if (-not [string]::IsNullOrWhiteSpace($ProviderKey)) {
+    $providerId = ''
+    if ($Model.Contains('/')) { $providerId = $Model.Split('/')[0] }
+    if (-not [string]::IsNullOrWhiteSpace($providerId)) {
+      if (-not $conf.models.providers.ContainsKey($providerId) -or $null -eq $conf.models.providers[$providerId]) {
+        $conf.models.providers[$providerId] = @{}
+      }
+      $conf.models.providers[$providerId].apiKey = $ProviderKey
+    }
+    $conf.models.providers.'kimi-coding'.apiKey = $ProviderKey
+  }
+
+  if ($conf.agents.ContainsKey('list') -and $conf.agents.list -is [System.Collections.IEnumerable]) {
+    foreach ($agent in $conf.agents.list) {
+      if ($agent -is [hashtable] -or $agent.PSObject.Properties.Name -contains 'model') {
+        $agent.model = $Model
+      }
+    }
+  }
+
+  $json = $conf | ConvertTo-Json -Depth 20
+  Set-Content -Path $openclawConfigPath -Value $json -Encoding UTF8
+  Write-Log "Configured OpenClaw defaults: model=$Model"
+}
+
+function Configure-MecoRuntimeSettings {
+  param(
+    [Parameter(Mandatory = $true)][string]$KimiApiKey,
+    [Parameter(Mandatory = $true)][string]$OpenclawModelApiKey
+  )
+
+  $settingsPath = Get-EnvOrDefault -Name 'MECO_SETTINGS_PATH' -Default (Join-Path $env:USERPROFILE '.meco-studio\app-settings.json')
+  $settingsDir = Split-Path -Parent $settingsPath
+  New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
+
+  $current = @{}
+  if (Test-Path $settingsPath) {
+    try {
+      $current = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json -AsHashtable
+    }
+    catch {
+      $current = @{}
+    }
+  }
+
+  $patch = @{
+    openclawModel = $MecoOpenclawModel
+    openclawModelApiKey = $OpenclawModelApiKey
+    minimaxApiKey = $MecoMinimaxApiKey
+    minimaxWsUrl = $MecoMinimaxWsUrl
+    tikhubApiKey = $MecoTikhubApiKey
+    meowloadApiKey = $MecoMeowloadApiKey
+    kimiApiKey = $KimiApiKey
+    hotTopicsKbPath = $HotTopicsRoot
+    openaiApiKey = $MecoOpenAIApiKey
+    ossEndpoint = $MecoOssEndpoint
+    ossBucket = $MecoOssBucket
+    ossAccessKeyId = $MecoOssAccessKeyId
+    ossAccessKeySecret = $MecoOssAccessKeySecret
+  }
+
+  foreach ($key in $patch.Keys) {
+    $value = [string]$patch[$key]
+    if (-not [string]::IsNullOrWhiteSpace($value)) {
+      $current[$key] = $value
+    }
+    elseif (-not $current.ContainsKey($key)) {
+      $current[$key] = ''
+    }
+  }
+
+  $json = $current | ConvertTo-Json -Depth 10
+  Set-Content -Path $settingsPath -Value $json -Encoding UTF8
+  Write-Log "Updated Meco runtime settings: $settingsPath"
+}
+
+function Prepare-Repo {
+  $gitDir = Join-Path $MecoInstallDir '.git'
+  if (Test-Path $gitDir) {
+    Write-Log 'Meco Studio exists, pulling latest...'
+    Invoke-Checked -FilePath 'git' -Arguments @('-C', $MecoInstallDir, 'fetch', 'origin', $MecoBranch)
+    Invoke-Checked -FilePath 'git' -Arguments @('-C', $MecoInstallDir, 'checkout', $MecoBranch)
+    Invoke-Checked -FilePath 'git' -Arguments @('-C', $MecoInstallDir, 'pull', '--ff-only', 'origin', $MecoBranch)
+    return
+  }
+
+  Write-Log "Cloning Meco Studio into $MecoInstallDir ..."
+  Invoke-Checked -FilePath 'git' -Arguments @('clone', '--branch', $MecoBranch, $MecoRepoUrl, $MecoInstallDir)
+}
+
+function Install-NpmDependencies {
+  $lockFile = Join-Path $MecoInstallDir 'package-lock.json'
+  $npmCmd = 'install'
+
+  switch ($MecoNpmInstallMode) {
+    'ci' { $npmCmd = 'ci' }
+    'install' { $npmCmd = 'install' }
+    default {
+      if (Test-Path $lockFile) { $npmCmd = 'ci' } else { $npmCmd = 'install' }
+    }
+  }
+
+  Write-Log "Installing npm dependencies via: npm $npmCmd"
+  Invoke-Checked -FilePath 'npm' -Arguments @($npmCmd, '--no-fund', '--no-audit') -WorkingDirectory $MecoInstallDir
+}
+
+function Copy-Overlay {
+  param(
+    [Parameter(Mandatory = $true)][string]$Source,
+    [Parameter(Mandatory = $true)][string]$Target
+  )
+
+  if (-not (Test-Path $Source)) {
+    return
+  }
+
+  New-Item -ItemType Directory -Force -Path $Target | Out-Null
+
+  $sourceRoot = (Resolve-Path $Source).Path
+  $items = Get-ChildItem -Path $sourceRoot -Recurse -Force
+  foreach ($item in $items) {
+    $relative = $item.FullName.Substring($sourceRoot.Length).TrimStart('\\', '/')
+    if ([string]::IsNullOrWhiteSpace($relative)) {
+      continue
+    }
+
+    $destPath = Join-Path $Target $relative
+    if ($item.PSIsContainer) {
+      New-Item -ItemType Directory -Force -Path $destPath | Out-Null
+    }
+    else {
+      $destDir = Split-Path -Parent $destPath
+      New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+      Copy-Item -Path $item.FullName -Destination $destPath -Force
+    }
+  }
+}
+
+function Ensure-HotTopicsSkill {
+  $hotTopicsTarget = Join-Path $ConfigSkillsRoot 'hot-topics'
+  $src1 = Join-Path $MecoInstallDir 'bootstrap\openclaw\skills\config\hot-topics'
+  $src2 = Join-Path $MecoInstallDir 'bootstrap\openclaw\skills\openclaw\hot-topics'
+  $src3 = Join-Path $OpenclawRoot 'skills\hot-topics'
+
+  $src = $null
+  if (Test-Path $src1) { $src = $src1 }
+  elseif (Test-Path $src2) { $src = $src2 }
+  elseif (Test-Path $src3) { $src = $src3 }
+
+  if ($null -eq $src) {
+    Write-Warn 'hot-topics skill source not found, skipped'
+    return
+  }
+
+  New-Item -ItemType Directory -Force -Path $ConfigSkillsRoot | Out-Null
+  Copy-Overlay -Source $src -Target $hotTopicsTarget
+  Write-Log "Installed hot-topics skill to $hotTopicsTarget"
+}
+
+function Ensure-HotTopicsKnowledgeBase {
+  $kbRoot = Split-Path -Parent $HotTopicsRoot
+  New-Item -ItemType Directory -Force -Path $kbRoot | Out-Null
+
+  if (-not (Test-Path $HotTopicsRoot)) {
+    New-Item -ItemType Directory -Force -Path $HotTopicsRoot | Out-Null
+    Write-Log "Created knowledge base root: $HotTopicsRoot"
+  }
+  else {
+    Write-Log "Knowledge base root already exists, keep existing data: $HotTopicsRoot"
+  }
+
+  $createdCount = 0
+  foreach ($category in $HotTopicsCategories) {
+    $categoryDir = Join-Path $HotTopicsRoot $category
+    if (Test-Path $categoryDir) {
+      continue
+    }
+
+    New-Item -ItemType Directory -Force -Path $categoryDir | Out-Null
+    $createdCount++
+    Write-Log "Created category folder: $categoryDir"
+  }
+
+  Write-Log "Ensured hot-topics categories under $HotTopicsRoot (total=$($HotTopicsCategories.Count), created=$createdCount)"
+}
+
+function Install-SkillRuntimeDependencies {
+  if (-not $script:PythonLauncher) {
+    return
+  }
+
+  Write-Log 'Installing Python skill dependencies...'
+  & $script:PythonLauncher.Exe @($script:PythonLauncher.Prefix + @('-m', 'pip', 'install', '--user', '--upgrade', 'requests', 'aiohttp', 'aiofiles', 'pillow', 'openai', 'openai-whisper')) | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warn 'Python skill dependency install failed. You can retry manually with pip.'
+  }
+}
+
+function Reset-RuntimeState {
+  if ($MecoResetRuntimeState -ne '1') {
+    return
+  }
+
+  Write-Log 'Resetting runtime room state (no default test room)...'
+  $dataDir = Join-Path $MecoInstallDir 'data'
+  New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+
+  $roomsFile = Join-Path $dataDir 'rooms.json'
+  Set-Content -Path $roomsFile -Value '[]' -Encoding UTF8
+
+  $coversDir = Join-Path $dataDir 'room-covers'
+  New-Item -ItemType Directory -Force -Path $coversDir | Out-Null
+  Get-ChildItem -Path $coversDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-OldServerProcess {
+  $pidFile = Join-Path $MecoInstallDir '.meco-studio.pid'
+
+  if (Test-Path $pidFile) {
+    try {
+      $oldPidText = (Get-Content -Raw -Path $pidFile).Trim()
+      if (-not [string]::IsNullOrWhiteSpace($oldPidText)) {
+        $oldPid = [int]$oldPidText
+        $proc = Get-Process -Id $oldPid -ErrorAction SilentlyContinue
+        if ($proc) {
+          Write-Log "Stopping existing meco server process: $oldPid"
+          Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
+    catch {
+      Write-Warn 'Failed to parse existing pid file, continue...'
+    }
+  }
+
+  $nodeProcs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+  foreach ($proc in $nodeProcs) {
+    if ($null -eq $proc.CommandLine) {
+      continue
+    }
+    if ($proc.CommandLine -like "*$MecoInstallDir*server.js*") {
+      try {
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+      catch {
+        Write-Warn "Failed stopping stale node process: $($proc.ProcessId)"
+      }
+    }
+  }
+}
+
+function Start-Service {
+  if ($MecoStartAfterInstall -ne '1') {
+    Write-Log "Skip start service (MECO_START_AFTER_INSTALL=$MecoStartAfterInstall)"
+    return
+  }
+
+  Stop-OldServerProcess
+
+  Write-Log 'Starting meco-studio service...'
+  $pidFile = Join-Path $MecoInstallDir '.meco-studio.pid'
+  $stdout = Join-Path $MecoInstallDir 'server.log'
+  $stderr = Join-Path $MecoInstallDir 'server.err.log'
+
+  $process = Start-Process -FilePath 'node' -ArgumentList @('server.js') -WorkingDirectory $MecoInstallDir -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+  Set-Content -Path $pidFile -Value $process.Id -Encoding UTF8
+
+  $healthy = $false
+  for ($i = 0; $i -lt $MecoHealthcheckRetries; $i++) {
+    try {
+      $resp = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3456/api/status' -TimeoutSec 3
+      if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
+        $healthy = $true
+        break
+      }
+    }
+    catch {
+      Start-Sleep -Seconds $MecoHealthcheckIntervalSec
+    }
+  }
+
+  if (-not $healthy) {
+    Throw-Fail "service process started but healthcheck failed, check $stdout / $stderr"
+  }
+
+  Write-Log "Service started. pid=$($process.Id), url=http://127.0.0.1:3456"
+}
+
+function Main {
+  Ensure-Git
+  Ensure-NodeAndNpm
+  Ensure-PythonAndPip
+  Ensure-Openclaw
+
+  $effectiveModelKey = $MecoOpenclawModelApiKey
+  if ([string]::IsNullOrWhiteSpace($effectiveModelKey)) {
+    $effectiveModelKey = $MecoKimiCodingApiKey
+  }
+
+  Configure-OpenclawKimiAuth -OpenclawModelApiKey $effectiveModelKey
+  Configure-OpenclawDefaults -Model $MecoOpenclawModel -ProviderKey $effectiveModelKey
+  Prepare-Repo
+  Ensure-KimiCli
+  Install-NpmDependencies
+  Ensure-HotTopicsKnowledgeBase
+  Ensure-HotTopicsSkill
+  Ensure-HotTopicsKnowledgeBase
+  Install-SkillRuntimeDependencies
+  Configure-KimiApiKey -KimiApiKey $MecoKimiCodingApiKey
+  Configure-MecoRuntimeSettings -KimiApiKey $MecoKimiCodingApiKey -OpenclawModelApiKey $effectiveModelKey
+  Reset-RuntimeState
+  Start-Service
+
+  Write-Log 'Install/upgrade done.'
+}
+
+Main
