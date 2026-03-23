@@ -9,6 +9,25 @@
 - `scripts/install-meco-studio.sh`（安装/更新下发逻辑）
 - `README.md` / `MECO-STUDIO-INSTALL.md` / `GITHUB-SYNC-RULES.md`（策略文档）
 
+### 1.1 打包依赖铁律（强制）
+
+凡是“打包提交”必须检查并同步以下依赖范围（按业务口径）：
+
+1. OpenClaw（`workspaces` + `openclaw-agents`）
+2. 智能体（`data-agents`）
+3. 知识库（`knowledge-rule-folders`）
+4. skills（`skills/openclaw`）
+5. Kimi CLI（`skills/config`）
+6. Kimi CLI skills（`skills/config` 下的子技能与脚本）
+
+对应路径：
+- `bootstrap/openclaw/workspaces/*`
+- `bootstrap/openclaw/openclaw-agents/*/agent/*`
+- `bootstrap/openclaw/data-agents/*`
+- `bootstrap/openclaw/knowledge-rule-folders/*`
+- `bootstrap/openclaw/skills/openclaw/*`
+- `bootstrap/openclaw/skills/config/*`
+
 ## 2) 上传相关禁止提交（运行态/临时态）
 
 - `uploads/*`（运行时附件）

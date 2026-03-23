@@ -11,6 +11,20 @@
 - `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
 - `bootstrap/openclaw/knowledge-rule-folders/*`（Rule 模式知识库文件夹）
 
+### 1.1 打包依赖铁律（每次“打包/发布”都要核对）
+
+以下 6 类是强依赖，打包提交时必须逐项确认，不得漏项：
+
+1. OpenClaw：`bootstrap/openclaw/workspaces/*` + `bootstrap/openclaw/openclaw-agents/*/agent/*`
+2. 智能体资产：`bootstrap/openclaw/data-agents/*`
+3. 知识库（Rule）：`bootstrap/openclaw/knowledge-rule-folders/*`
+4. OpenClaw skills：`bootstrap/openclaw/skills/openclaw/*`
+5. Kimi CLI：`bootstrap/openclaw/skills/config/*`
+6. Kimi CLI skills：`bootstrap/openclaw/skills/config/*`（含其子技能目录与脚本）
+
+说明：
+- 即使本次改动主要在前端/服务端，凡涉及“打包发布”，也必须先执行 `scripts/sync-bootstrap-and-version.sh`，并核对上面 6 类目录的变更是否符合预期。
+
 ## 2) 禁止同步的运行态数据
 
 - `data/rooms.json`

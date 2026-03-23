@@ -49,6 +49,16 @@ sync_local_version_file() {
   fi
 }
 
+print_packaging_iron_law_scope() {
+  log "Packaging iron-law scope (must verify on each package/release):"
+  log "  1) OpenClaw: bootstrap/openclaw/workspaces/* + bootstrap/openclaw/openclaw-agents/*/agent/*"
+  log "  2) Agents:   bootstrap/openclaw/data-agents/*"
+  log "  3) Knowledge:bootstrap/openclaw/knowledge-rule-folders/*"
+  log "  4) Skills:   bootstrap/openclaw/skills/openclaw/*"
+  log "  5) Kimi CLI: bootstrap/openclaw/skills/config/*"
+  log "  6) Kimi CLI skills: bootstrap/openclaw/skills/config/* (sub-skills/scripts)"
+}
+
 enforce_no_room_runtime_tracking() {
   if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     return 0
@@ -62,6 +72,7 @@ main() {
   (cd "$REPO_ROOT" && bash scripts/build-bootstrap-package.sh)
   enforce_no_room_runtime_tracking
   sync_local_version_file
+  print_packaging_iron_law_scope
   log "Done. Review changes with: git status"
 }
 
