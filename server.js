@@ -23,7 +23,142 @@ const OPENCLAW_HTTP_TIMEOUT_MS = 120000;
 const OPENCLAW_FIRST_CHUNK_TIMEOUT_MS = 12000;
 const OPENCLAW_FIRST_CHUNK_TIMEOUT_ROUNDTABLE_MS = 45000;
 const OPENCLAW_FIRST_CHUNK_TIMEOUT_MULTIMODAL_MS = 65000;
+const ROOM_SPEAKER_STALL_TIMEOUT_MS = 20000;
+const ROOM_SPEAKER_SWEEP_INTERVAL_MS = 3000;
+const ROOM_PREPARED_STALL_TIMEOUT_MS = 45000;
+const ROOM_PREPARED_SWEEP_INTERVAL_MS = 3000;
+const ROOM_PREPARED_MAX_REDISPATCH = 2;
+const TTS_TEXT_FLUSH_ACTIVE_INTERVAL_MS = 500;
+const TTS_TEXT_FLUSH_ACTIVE_MIN_CHARS = 80;
+const TTS_TEXT_FLUSH_PRELOAD_INTERVAL_MS = 1300;
+const TTS_TEXT_FLUSH_PRELOAD_MIN_CHARS = 220;
+const MINIMAX_TASK_CONTINUE_MIN_GAP_MS = 900;
+const MINIMAX_RATE_LIMIT_COOLDOWN_MS = 10000;
+const MINIMAX_TASK_CONTINUE_QUEUE_LIMIT = 500;
+const MINIMAX_RPM_WINDOW_MS = 60000;
+const MINIMAX_TASK_CONTINUE_HISTORY_LIMIT = 10000;
 let wsConnectionSeq = 0;
+
+const minimaxTaskContinueQueue = [];
+const minimaxTaskContinueSentHistory = [];
+let minimaxTaskContinueTimer = null;
+let minimaxLastTaskContinueAt = 0;
+let minimaxRateLimitCooldownUntil = 0;
+
+function pruneMinimaxTaskContinueHistory(now = Date.now()) {
+  const cutoff = now - MINIMAX_RPM_WINDOW_MS;
+  while (minimaxTaskContinueSentHistory.length > 0 && minimaxTaskContinueSentHistory[0].at < cutoff) {
+    minimaxTaskContinueSentHistory.shift();
+  }
+  if (minimaxTaskContinueSentHistory.length > MINIMAX_TASK_CONTINUE_HISTORY_LIMIT) {
+    minimaxTaskContinueSentHistory.splice(
+      0,
+      minimaxTaskContinueSentHistory.length - MINIMAX_TASK_CONTINUE_HISTORY_LIMIT
+    );
+  }
+}
+
+function recordMinimaxTaskContinueSent(meta = {}) {
+  const now = Date.now();
+  minimaxTaskContinueSentHistory.push({
+    at: now,
+    agentId: meta && meta.agentId ? String(meta.agentId) : null,
+    roomId: meta && Object.prototype.hasOwnProperty.call(meta, 'roomId') ? (meta.roomId == null ? null : String(meta.roomId)) : null
+  });
+  pruneMinimaxTaskContinueHistory(now);
+}
+
+function getMinimaxTaskContinueRpmStats(scope = {}) {
+  const now = Date.now();
+  pruneMinimaxTaskContinueHistory(now);
+
+  const hasAgentScope = typeof scope.agentId === 'string' && scope.agentId.trim().length > 0;
+  const scopedAgentId = hasAgentScope ? scope.agentId.trim() : null;
+  const hasRoomScope = Object.prototype.hasOwnProperty.call(scope, 'roomId');
+  const scopedRoomId = hasRoomScope ? (scope.roomId == null ? null : String(scope.roomId)) : null;
+
+  let scoped = 0;
+  for (const entry of minimaxTaskContinueSentHistory) {
+    if (!entry) continue;
+    if (hasAgentScope && entry.agentId !== scopedAgentId) continue;
+    if (hasRoomScope && (entry.roomId || null) !== scopedRoomId) continue;
+    scoped++;
+  }
+
+  return {
+    rpmWindowMs: MINIMAX_RPM_WINDOW_MS,
+    realTaskContinueLast60sGlobal: minimaxTaskContinueSentHistory.length,
+    realTaskContinueRpmGlobal: minimaxTaskContinueSentHistory.length,
+    realTaskContinueLast60sScoped: scoped,
+    realTaskContinueRpmScoped: scoped
+  };
+}
+
+function scheduleMinimaxTaskContinueDrain(delayMs = 0) {
+  if (minimaxTaskContinueTimer) return;
+  minimaxTaskContinueTimer = setTimeout(() => {
+    minimaxTaskContinueTimer = null;
+    drainMinimaxTaskContinueQueue();
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function drainMinimaxTaskContinueQueue() {
+  if (minimaxTaskContinueQueue.length === 0) return;
+  const now = Date.now();
+  const waitForCooldown = Math.max(0, minimaxRateLimitCooldownUntil - now);
+  const waitForGap = Math.max(0, MINIMAX_TASK_CONTINUE_MIN_GAP_MS - (now - minimaxLastTaskContinueAt));
+  const waitMs = Math.max(waitForCooldown, waitForGap);
+  if (waitMs > 0) {
+    scheduleMinimaxTaskContinueDrain(waitMs);
+    return;
+  }
+
+  const item = minimaxTaskContinueQueue.shift();
+  if (!item || !item.ws || item.ws.readyState !== WebSocket.OPEN) {
+    scheduleMinimaxTaskContinueDrain(0);
+    return;
+  }
+
+  try {
+    item.ws.send(JSON.stringify({ event: 'task_continue', text: item.text }));
+    minimaxLastTaskContinueAt = Date.now();
+    recordMinimaxTaskContinueSent(item.meta || {});
+    if (typeof item.onSent === 'function') item.onSent();
+  } catch (e) {
+    if (typeof item.onError === 'function') item.onError(e);
+  }
+
+  scheduleMinimaxTaskContinueDrain(0);
+}
+
+function enqueueMinimaxTaskContinue(ws, text, hooks = {}) {
+  const payload = String(text || '').trim();
+  if (!payload || !ws) return false;
+
+  if (minimaxTaskContinueQueue.length >= MINIMAX_TASK_CONTINUE_QUEUE_LIMIT) {
+    // 丢弃最老任务，避免极端情况下队列无限膨胀占用内存
+    minimaxTaskContinueQueue.shift();
+  }
+
+  minimaxTaskContinueQueue.push({
+    ws,
+    text: payload,
+    onSent: hooks.onSent,
+    onError: hooks.onError,
+    meta: hooks.meta || null
+  });
+  scheduleMinimaxTaskContinueDrain(0);
+  return true;
+}
+
+function registerMinimaxRateLimit(source = '') {
+  const cooldownMs = MINIMAX_RATE_LIMIT_COOLDOWN_MS + Math.floor(Math.random() * 1500);
+  minimaxRateLimitCooldownUntil = Math.max(minimaxRateLimitCooldownUntil, Date.now() + cooldownMs);
+  console.warn(
+    `[MiniMax] ⏳ 触发全局限流冷却 ${cooldownMs}ms, queue=${minimaxTaskContinueQueue.length}, source=${source || 'unknown'}`
+  );
+  scheduleMinimaxTaskContinueDrain(cooldownMs);
+}
 
 function getRuntimeSettings() {
   return appSettings.getSettings();
@@ -69,6 +204,34 @@ function abortOpenClawRequests(predicate, logPrefix = 'Abort') {
     try { controller.abort(); } catch (_) {}
     openclawRequests.delete(requestId);
   }
+}
+
+function hasInFlightOpenClawRequest(agentId, roomId = null) {
+  const targetAgent = String(agentId || '').trim();
+  if (!targetAgent) return false;
+  const targetRoom = roomId == null ? null : String(roomId);
+  for (const [, entry] of openclawRequests) {
+    if (!entry) continue;
+    if ((entry.agentId || null) !== targetAgent) continue;
+    if ((entry.roomId || null) !== targetRoom) continue;
+    return true;
+  }
+  return false;
+}
+
+function hasOpenRoomAgentTtsSocket(roomId, agentId) {
+  const targetRoom = roomId == null ? null : String(roomId);
+  const targetAgent = String(agentId || '').trim();
+  if (!targetAgent) return false;
+  for (const ws of wss.clients) {
+    if (!ws || !ws._isTTS) continue;
+    if ((ws._roomId || null) !== targetRoom) continue;
+    if ((ws._agentId || null) !== targetAgent) continue;
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function fallbackToOpenClawCLI(agentId, userMessage, ws, state) {
@@ -173,6 +336,29 @@ function extractSseContentDelta(parsed) {
   return normalizeSseTextValue(fallbackText);
 }
 
+function isSseTerminalPayload(parsed) {
+  if (!parsed || typeof parsed !== 'object') return false;
+
+  const choice = parsed?.choices?.[0] || {};
+  const finishReason = choice?.finish_reason ?? choice?.delta?.finish_reason ?? null;
+  if (typeof finishReason === 'string' && finishReason.trim() && finishReason !== 'null') {
+    return true;
+  }
+
+  const event = String(parsed.event || parsed.type || '').toLowerCase();
+  if (
+    event === 'message_stop' ||
+    event === 'response.completed' ||
+    event === 'done' ||
+    event === 'stream_end'
+  ) {
+    return true;
+  }
+
+  if (parsed.done === true) return true;
+  return false;
+}
+
 // 使用 Gateway HTTP SSE 流式方式发送请求到 OpenClaw
 async function sendToOpenClawHTTP(agentId, userMessage, ws) {
   const requestId = `${agentId}-${Date.now()}`;
@@ -244,6 +430,7 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
       }
     }, firstChunkTimeoutMs);
 
+    let streamFinished = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -269,7 +456,10 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
 
         if (trimmed.startsWith('data:')) {
           const data = trimmed.slice(5).trimStart();
-          if (data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            streamFinished = true;
+            break;
+          }
 
           try {
             const parsed = JSON.parse(data);
@@ -283,10 +473,19 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
               fullResponse += content;
               ws.send(JSON.stringify({ type: 'chunk', content }));
             }
+            if (isSseTerminalPayload(parsed)) {
+              streamFinished = true;
+              break;
+            }
           } catch (e) {
             // 跳过无法解析的行
           }
         }
+      }
+
+      if (streamFinished) {
+        try { await reader.cancel(); } catch (_) {}
+        break;
       }
     }
 
@@ -445,6 +644,7 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
       }
     }, firstChunkTimeoutMs);
 
+    let streamFinished = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -458,7 +658,10 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
         if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data:')) continue;
 
         const payload = trimmed.slice(5).trimStart();
-        if (payload === '[DONE]') continue;
+        if (payload === '[DONE]') {
+          streamFinished = true;
+          break;
+        }
 
         try {
           const parsed = JSON.parse(payload);
@@ -491,9 +694,18 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
             fullResponse += content;
             onText(content);
           }
+          if (isSseTerminalPayload(parsed)) {
+            streamFinished = true;
+            break;
+          }
         } catch (e) {
           // 忽略不可解析行
         }
+      }
+
+      if (streamFinished) {
+        try { await reader.cancel(); } catch (_) {}
+        break;
       }
     }
 
@@ -1345,7 +1557,7 @@ function getAgentDisplayName(agentId) {
 function extractNextDirectives(text) {
   const source = typeof text === 'string' ? text : '';
   if (!source) return [];
-  const regex = /\{next[:：]\s*["'“”‘’]?([^}"'“”‘’]+)["'“”‘’]?\s*\}/gi;
+  const regex = /\{\s*next\s*[:：]\s*["'“”‘’]?([^}"'“”‘’]+)["'“”‘’]?\s*\}/gi;
   const names = [];
   let match = null;
   while ((match = regex.exec(source)) !== null) {
@@ -1362,7 +1574,7 @@ function stripNextDirectives(text) {
   const source = typeof text === 'string' ? text : '';
   if (!source) return '';
   return source
-    .replace(/\{next[:：]\s*["'“”‘’]?([^}"'“”‘’]+)["'“”‘’]?\s*\}/gi, '')
+    .replace(/\{\s*next\s*[:：]\s*["'“”‘’]?([^}"'“”‘’]+)["'“”‘’]?\s*\}/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -2364,6 +2576,15 @@ function getAgentById(agentId) {
     return null;
 }
 
+function getRuntimeAgentById(agentId) {
+  if (AGENTS[agentId]) return AGENTS[agentId];
+  const found = getAgentById(agentId);
+  if (found && !AGENTS[agentId]) {
+    AGENTS[agentId] = found;
+  }
+  return AGENTS[agentId] || found || null;
+}
+
 // Serve Agent Assets (Avatar/Video/Files)
 app.use('/assets/:agentId', (req, res, next) => {
     const { agentId } = req.params;
@@ -2411,7 +2632,48 @@ app.use('/assets/:agentId', (req, res, next) => {
 });
 
 // ========== 知识库话题加载 ==========
-const KNOWLEDGE_BASE_PATH = path.join(os.homedir(), 'Documents/知识库/热门话题');
+const HOT_TOPICS_CATEGORY_WHITELIST = Object.freeze([
+  'AI_Tech',
+  'Entertainment',
+  'Military',
+  'Sports',
+  'Design',
+  'Health',
+  'Politics',
+  'Technology',
+  'Economy',
+  'Medical',
+  'Society',
+  'Trending'
+]);
+const HOT_TOPICS_CATEGORY_SET = new Set(HOT_TOPICS_CATEGORY_WHITELIST);
+
+function normalizeHotTopicsRootPath(inputPath) {
+  let raw = String(inputPath || '').trim();
+  if (!raw) raw = path.join(os.homedir(), 'Documents/知识库/热门话题');
+  if (raw.startsWith('~')) {
+    raw = path.join(os.homedir(), raw.slice(1));
+  }
+  const resolved = path.resolve(raw);
+  if (path.basename(resolved) === '热门话题') return resolved;
+  return path.join(resolved, '热门话题');
+}
+
+function getHotTopicsKnowledgeBasePath() {
+  const runtime = getRuntimeSettings();
+  return normalizeHotTopicsRootPath(runtime.hotTopicsKbPath || '');
+}
+
+function getHotTopicsSkillBasePath() {
+  const knowledgeBasePath = getHotTopicsKnowledgeBasePath();
+  return path.dirname(knowledgeBasePath);
+}
+
+function isAllowedHotTopicsCategory(name) {
+  return HOT_TOPICS_CATEGORY_SET.has(String(name || '').trim());
+}
+
+const KNOWLEDGE_BASE_PATH = getHotTopicsKnowledgeBasePath();
 app.use('/knowledge-assets', express.static(KNOWLEDGE_BASE_PATH));
 
 const EN_TITLE_TRAILING_WORDS = new Set([
@@ -2492,7 +2754,7 @@ function loadTopicsFromKnowledgeBase() {
     
     // 获取所有分类目录
     const categories = fs.readdirSync(KNOWLEDGE_BASE_PATH, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory() && !dirent.name.startsWith('.'))
+      .filter(dirent => dirent.isDirectory() && !dirent.name.startsWith('.') && isAllowedHotTopicsCategory(dirent.name))
       .map(dirent => dirent.name);
     
     console.log('[KnowledgeBase] 发现分类:', categories);
@@ -4093,8 +4355,9 @@ class PodcastPusher {
     this.onStartStreaming = null;  // 开播命令回调 (msg) => void
     this.onStopStreaming = null;   // 下播命令回调 (msg) => void
     this.controlConnectedAtMs = 0; // 控制连接建立时间（用于过滤陈旧控制命令）
+    this.controlToken = ''; // Control token（用于部分服务端要求在 C→S 消息中显式透传）
     this.liveJoinedAgents = new Set(); // 当前开播周期已上麦的主播（避免发言切换时反复上下麦）
-    this.speakerPlanQueue = []; // 预加载发言顺序计划队列（用于按顺序提前推流）
+    this.speakerPlanQueue = []; // 仅保留“后一位”预加载计划（用于按顺序提前推流）
   }
 
   _extractMessageTimestampMs(msg) {
@@ -4137,6 +4400,7 @@ class PodcastPusher {
       console.log(`[Podcast] 正在获取控制权: ${this.podcastRoomId}`);
       const axios = require('axios');
       let wsUrl;
+      let controlToken = '';
       try {
         const resp = await axios.post(
           `${PODCAST_API_BASE}/agent/rooms/${this.podcastRoomId}/control`,
@@ -4144,6 +4408,7 @@ class PodcastPusher {
           { headers: { 'X-API-Key': this.hostApiKey }, timeout: 10000 }
         );
         wsUrl = resp.data?.data?.ws_url;
+        controlToken = String(resp.data?.data?.token || '').trim();
         console.log(`[Podcast] POST /control 成功, ws_url: ${wsUrl}`);
       } catch (postErr) {
         const status = postErr.response?.status;
@@ -4168,6 +4433,11 @@ class PodcastPusher {
         console.log(`[Podcast] 规范化控制连接地址: ${wsUrl} -> ${normalizedWsUrl}`);
       }
       wsUrl = normalizedWsUrl;
+      try {
+        const parsed = new URL(wsUrl);
+        if (!controlToken) controlToken = String(parsed.searchParams.get('token') || '').trim();
+      } catch (_) {}
+      this.controlToken = controlToken;
 
       // Step 2: 连接 WebSocket
       return new Promise((resolve) => {
@@ -4325,6 +4595,10 @@ class PodcastPusher {
       if (this.onStopStreaming) {
         this.onStopStreaming(msg);
       }
+    } else if (msg.type === 'error') {
+      const code = String(msg?.data?.code || '').trim();
+      const detail = String(msg?.data?.message || msg?.message || '').trim();
+      console.error(`[Podcast] ❌ 服务端错误: code=${code || 'unknown'}, message=${detail || 'unknown'}`);
     } else {
       console.log(`[Podcast] 收到消息: ${msg.type}`);
     }
@@ -4380,12 +4654,13 @@ class PodcastPusher {
     const id = String(agentId || '').trim();
     if (!id) return;
     if (id === this.currentSpeaker) return;
-    const lastPlanned = this.speakerPlanQueue.length > 0
-      ? this.speakerPlanQueue[this.speakerPlanQueue.length - 1]
+    const plannedNext = this.speakerPlanQueue.length > 0
+      ? this.speakerPlanQueue[0]
       : null;
-    if (lastPlanned === id) return;
-    this.speakerPlanQueue.push(id);
-    console.log(`[Podcast] 🧭 计划下一个发言人: ${id} (queue=${this.speakerPlanQueue.join(' -> ')})`);
+    if (plannedNext === id) return;
+    // 关键约束：永远只预加载后面一位，新的计划会覆盖旧计划
+    this.speakerPlanQueue = [id];
+    console.log(`[Podcast] 🧭 仅预加载下一位发言人: ${id}`);
   }
 
   _promotePlannedSpeaker(reason = 'unknown') {
@@ -4677,6 +4952,40 @@ class PodcastPusher {
     return true;
   }
 
+  // 发送房间级 start_streaming / stop_streaming 指令（C→S）
+  reportStreamingLifecycleEvent(isLive = true, reason = 'manual_click') {
+    if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    if (!this.podcastRoomId) return false;
+
+    const type = isLive ? 'start_streaming' : 'stop_streaming';
+    const token = String(this.controlToken || '').trim();
+    const data = {
+      room_id: this.podcastRoomId,
+      timestamp: Date.now()
+    };
+    if (token) {
+      data.token = token;
+      data.control_token = token;
+    }
+    if (!isLive && reason) {
+      data.reason = String(reason);
+    }
+
+    const msg = {
+      type,
+      message_id: `manual_${type}_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      data
+    };
+    if (token) {
+      msg.token = token;
+    }
+
+    this.ws.send(JSON.stringify(msg));
+    console.log(`[Podcast] 📡 手动${isLive ? '开播' : '下播'}命令已发送(C→S): type=${type}, room=${this.podcastRoomId}, reason=${reason}`);
+    return true;
+  }
+
   getTopicQueue() {
     if (!this.connected || !this.ws) return;
     this.ws.send(JSON.stringify({
@@ -4809,6 +5118,7 @@ async function syncTopicToPodcast(room, topicData, raisedAgentId) {
             if (rawQueueTopic) {
                 if (!topicData.created_by && rawQueueTopic.created_by) topicData.created_by = rawQueueTopic.created_by;
                 if (!topicData.created_by_nickname && rawQueueTopic.created_by_nickname) topicData.created_by_nickname = rawQueueTopic.created_by_nickname;
+                if (!topicData.user_question && rawQueueTopic.question) topicData.user_question = rawQueueTopic.question;
             }
         }
 
@@ -5278,7 +5588,43 @@ Ignore any examples in this file that mention other names.
 - If you reply, answer that person's point directly before expanding to anything else.
 - If a message contains \`@Name\` and Name is not you, do not jump in. Let the @mentioned person handle this turn.
 - If you are @mentioned, read the caller's context first. You may decide whether to reply (recommended to reply); if you reply, answer the caller first.
-- If no \`{next: ...}\` appears, follow the normal turn order.`;
+- If no \`{next: ...}\` appears, follow the normal turn order.
+
+## Expressive TTS Cues (Optional)
+
+You may use the following inline cue tokens to make speech more natural when appropriate:
+
+- \`(laughs)\` = laughter
+- \`(chuckle)\` = a light chuckle
+- \`(coughs)\` = coughing
+- \`(clear-throat)\` = clearing throat
+- \`(groans)\` = groaning
+- \`(breath)\` = normal breath
+- \`(pant)\` = panting
+- \`(inhale)\` = inhaling
+- \`(exhale)\` = exhaling
+- \`(gasps)\` = gasping
+- \`(sniffs)\` = sniffing
+- \`(sighs)\` = sighing
+- \`(snorts)\` = snorting
+- \`(burps)\` = burping
+- \`(lip-smacking)\` = lip smacking
+- \`(humming)\` = humming
+- \`(hissing)\` = hissing
+- \`(emm)\` = filler sound ("emm")
+- \`(sneezes)\` = sneezing
+
+Usage rules:
+- Keep the token format exactly as shown: lowercase + parentheses.
+- Use cues sparingly (normally 0-2 per reply), only when it sounds natural.
+- Place cues at natural sentence boundaries, not in the middle of words.
+- Do not overuse cues or stack many cues together.
+- In roundtable speaking mode, try to include one cue in roughly every 2-4 turns when it fits the tone.
+
+Examples (natural placement):
+- "(chuckle) That's a fair point, but I'd frame it differently."
+- "If we're being honest, this risk is non-trivial. (sighs)"
+- "(inhale) Let me answer that directly in one sentence first."`;
 
                 fs.writeFileSync(soulPath, content + context, 'utf-8');
                 console.log(`[Roundtable] Updated SOUL.md for ${id} with context: ${otherNames.join(', ')}`);
@@ -5378,6 +5724,11 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
     currentSpeaker: null,  // 当前正在说话的speaker {agentId, text, audioCache:[], startTime, ttsStreaming, audioDuration}
     nextPreparedAgent: null, // 下一个准备好的发言人
     nextPreparedMessage: null, // 下一个发言人的消息
+    nextPreparedAt: 0,        // 下一个发言人被派发的时间戳（用于卡住检测）
+    nextPreparedRetryCount: 0, // 下一个发言人自动重派发次数
+    activeTurnAgentId: null,   // 当前“已开口并进入本轮”的发言者
+    activeTurnStartedAt: 0,    // 当前发言轮次开始时间戳
+    preloadIssuedByAgentId: null, // 本轮已触发预加载的发言者（同一轮仅允许一次）
     participants: new Set(useAgentIds),
     isActive: false,
     preparingAgent: null,       // 房间级：当前正在准备中的 agent
@@ -5387,6 +5738,7 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
     hostRuntimeId: null,   // 主机页面运行实例ID（用于区分同页重连 vs 新页接管）
     podcastPusher: null,   // 该房间独立的 Podcast 推流连接
     pendingPodcastLiveEvent: null, // 待补发的开播/下播事件
+    pendingPodcastStreamingLifecycleEvent: null, // 待补发的 C→S 开播/下播命令（仅手动）
     _suppressNextPodcastLiveEvent: false, // 避免服务端 stop_streaming 触发的停播回环上报
     pendingStreamingControlCommand: null, // 待补发给主机前端的开播/下播控制命令
     topicQueue: [],              // 当前麦序话题列表（从服务端拉取）
@@ -5410,6 +5762,78 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
 // 获取房间
 function getRoom(channelId) {
   return rooms.get(channelId);
+}
+
+function setRoomNextPrepared(room, nextAgentId, nextMessage) {
+  if (!room) return;
+  room.nextPreparedAgent = nextAgentId || null;
+  room.nextPreparedMessage = nextMessage || null;
+  room.nextPreparedAt = Date.now();
+  room.nextPreparedRetryCount = 0;
+}
+
+function clearRoomNextPrepared(room) {
+  if (!room) return;
+  room.nextPreparedAgent = null;
+  room.nextPreparedMessage = null;
+  room.nextPreparedAt = 0;
+  room.nextPreparedRetryCount = 0;
+  room.preloadIssuedByAgentId = null;
+}
+
+function listRuntimeRoomsSnapshot() {
+  return Array.from(rooms.values()).map((room) => {
+    const topicData = room.currentDisplayTopic || room.moderator?.currentTopicData || null;
+    return {
+      channelId: room.channelId,
+      hostAgentId: room.hostAgentId,
+      podcastRoomId: room.podcastRoomId || null,
+      agentIds: Array.isArray(room.agentIds) ? room.agentIds : [],
+      isActive: !!room.isActive,
+      currentTopic: room.moderator?.currentTopic || null,
+      currentTopicData: topicData,
+      createdAt: room.createdAt ? new Date(room.createdAt).toISOString() : null
+    };
+  });
+}
+
+function stopActiveRoomRoundtables(options = {}) {
+  const source = String(options?.source || 'pre_restart').trim() || 'pre_restart';
+  const activeRooms = Array.from(rooms.values()).filter((room) => room && room.channelId && room.isActive);
+  const stopped = [];
+
+  for (const room of activeRooms) {
+    const channelId = room.channelId;
+    stopRoundTable(channelId, { source });
+    abortOpenClawRequests((requestId, entry) => (entry.roomId || null) === channelId, 'StopBeforeRestart');
+    const closedTtsSockets = closeRoomTtsSockets(channelId, 'pre_restart_stop_room');
+    stopped.push({
+      channelId,
+      podcastRoomId: room.podcastRoomId || null,
+      closedTtsSockets
+    });
+  }
+
+  return {
+    source,
+    totalRooms: rooms.size,
+    activeRoomsBeforeStop: activeRooms.length,
+    stoppedCount: stopped.length,
+    stopped,
+    timestamp: new Date().toISOString()
+  };
+}
+
+function forceInterruptRoomPlayback(room, reason = 'server_stop', initiator = 'server') {
+  if (!room || !room.channelId) return;
+  try {
+    broadcastToRoom(room, {
+      type: 'interrupt',
+      initiator,
+      reason,
+      forceStopAudio: true
+    });
+  } catch (_) {}
 }
 
 function buildClientRoomAgents(room) {
@@ -5567,27 +5991,61 @@ function calculateAudioTimestamp(room) {
 
 // 缓存音频块
 function cacheAudioChunk(room, agentId, audioHex, isComplete, text = '') {
+  const incomingAudio = typeof audioHex === 'string' ? audioHex : '';
+  const incomingText = typeof text === 'string' ? text : '';
+  const hasAudio = incomingAudio.length > 0;
+
   if (!room.currentSpeaker || room.currentSpeaker.agentId !== agentId) {
+    // 仅凭“空 complete 包”不创建新说话人，避免链表出现重复空条目
+    if (!hasAudio) {
+      if (isComplete) {
+        console.warn(
+          `[Room] ⏭️ 忽略孤儿完成包: channel=${room.channelId}, agent=${agentId}, reason=no_active_speaker_and_no_audio`
+        );
+      }
+      return;
+    }
+
     // 新发言者 - 创建新条目
     room.currentSpeaker = {
       agentId,
-      text: text,
+      text: incomingText,
       audioCache: [],
+      audioBytes: 0,
       startTime: Date.now(),
+      lastChunkAt: Date.now(),
       ttsStreaming: true,
       audioDuration: 0
     };
   }
 
+  // 容错：若 speech-started 回调丢失，只要该 agent 已有真实音频到达，就视为已开口并消费 nextPrepared。
+  if (room.nextPreparedAgent === agentId) {
+    clearRoomNextPrepared(room);
+    const state = getRoundTableState(room.channelId);
+    if (state.preparingAgent === agentId) {
+      state.preparingAgent = null;
+      state.preparingStartTime = null;
+    }
+    console.log(`[RoundTable] 🧹 ${agentId} 音频已到达，兜底清除 nextPrepared/preparing`);
+  }
+  if (room.activeTurnAgentId !== agentId) {
+    room.activeTurnAgentId = agentId;
+    room.activeTurnStartedAt = Date.now();
+    room.preloadIssuedByAgentId = null;
+  }
+
   // 更新文本（累积）
-  if (text && text.length > room.currentSpeaker.text.length) {
-    room.currentSpeaker.text = text;
+  if (incomingText && incomingText.length > room.currentSpeaker.text.length) {
+    room.currentSpeaker.text = incomingText;
   }
 
   // 只有非空的音频块才缓存
-  if (audioHex && audioHex.length > 0) {
-    room.currentSpeaker.audioCache.push(audioHex);
+  if (hasAudio) {
+    room.currentSpeaker.audioCache.push(incomingAudio);
+    room.currentSpeaker.audioBytes += incomingAudio.length / 2;
   }
+  room.currentSpeaker.lastChunkAt = Date.now();
   room.currentSpeaker.ttsStreaming = !isComplete;
 
   // 实时广播当前说话者状态给所有分机
@@ -5603,9 +6061,179 @@ function cacheAudioChunk(room, agentId, audioHex, isComplete, text = '') {
 
   // TTS完成，加入链表
   if (isComplete) {
+    const completedAgentId = room.currentSpeaker.agentId;
+    const completedText = room.currentSpeaker.text || incomingText || '';
+    const completedStartTime = room.currentSpeaker.startTime;
     // 估算音频时长（简单估算：每100字符约1秒，实际由TTS返回）
     room.currentSpeaker.audioDuration = Math.max(room.currentSpeaker.audioCache.join('').length / 100, 1000);
     addToSpeakerChain(room);
+
+    // 兜底：如果前端未上报 /speech-ended，自动推进下一轮
+    // 典型症状：
+    // 1) speakerChain 有新增，但 currentSpeaker=null 且 nextPreparedAgent===completedAgentId
+    // 2) speakerChain 有新增，但 currentSpeaker=null 且 nextPreparedAgent===null（本次修复覆盖）
+    setTimeout(() => {
+      const latestRoom = rooms.get(room.channelId);
+      if (!latestRoom || !latestRoom.isActive) return;
+      if (latestRoom.currentSpeaker) return; // 已有新发言者
+      const stuckOnSelfPrepared = latestRoom.nextPreparedAgent === completedAgentId;
+      const stuckWithNoPrepared = !latestRoom.nextPreparedAgent;
+      if (!stuckOnSelfPrepared && !stuckWithNoPrepared) return; // 前端已正常推进到其他人
+
+      // 避免同一条发言被重复兜底
+      if (
+        latestRoom._lastAutoSpeechEnded &&
+        latestRoom._lastAutoSpeechEnded.agentId === completedAgentId &&
+        latestRoom._lastAutoSpeechEnded.startTime === completedStartTime
+      ) {
+        return;
+      }
+
+      latestRoom._lastAutoSpeechEnded = {
+        agentId: completedAgentId,
+        startTime: completedStartTime,
+        at: Date.now()
+      };
+
+      console.warn(
+        `[RoundTable] ⚠️ 检测到 speech-ended 丢失/未推进，自动推进下一轮: channel=${latestRoom.channelId}, agent=${completedAgentId}, nextPrepared=${latestRoom.nextPreparedAgent || 'null'}`
+      );
+      onSpeechEnded(completedAgentId, completedText || '自动兜底推进', null, latestRoom.channelId, false);
+    }, 1500);
+  }
+}
+
+function forceCompleteStalledSpeaker(room, reason = 'stalled_speaker_timeout') {
+  if (!room || !room.currentSpeaker) return false;
+  const stalled = room.currentSpeaker;
+  const stalledAgentId = stalled.agentId;
+  const stalledText = String(stalled.text || '').trim();
+  const stalledStartTime = stalled.startTime;
+
+  if (
+    room._lastForcedSpeakerCompletion &&
+    room._lastForcedSpeakerCompletion.agentId === stalledAgentId &&
+    room._lastForcedSpeakerCompletion.startTime === stalledStartTime
+  ) {
+    return false;
+  }
+
+  room._lastForcedSpeakerCompletion = {
+    agentId: stalledAgentId,
+    startTime: stalledStartTime,
+    at: Date.now(),
+    reason
+  };
+
+  // 先广播一个完成态，避免分机一直显示 ttsStreaming=true
+  try {
+    broadcastToRoom(room, {
+      type: 'speaker_update',
+      agentId: stalledAgentId,
+      text: stalled.text || '',
+      audioTimestamp: Math.max(0, Date.now() - stalled.startTime),
+      ttsStreaming: false,
+      isComplete: true
+    });
+  } catch (_) {}
+
+  stalled.audioDuration = Math.max((stalled.audioCache || []).join('').length / 100, 1000);
+  addToSpeakerChain(room);
+
+  const fallbackContent = stalledText || '[系统兜底] 当前轮文本未完整返回，请继续下一位。';
+  console.warn(
+    `[RoundTable] ⚠️ 强制收敛卡住发言: channel=${room.channelId}, agent=${stalledAgentId}, reason=${reason}`
+  );
+  try {
+    onSpeechEnded(stalledAgentId, fallbackContent, null, room.channelId, false);
+  } catch (e) {
+    console.error(
+      `[RoundTable] ❌ 强制收敛后推进下一轮失败: channel=${room.channelId}, agent=${stalledAgentId}, err=${e.message}`
+    );
+  }
+  return true;
+}
+
+function sweepStalledCurrentSpeakers() {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    if (!room || !room.isActive || !room.currentSpeaker) continue;
+    const speaker = room.currentSpeaker;
+    if (!speaker.ttsStreaming) continue;
+    const lastAt = speaker.lastChunkAt || speaker.startTime || now;
+    if (now - lastAt < ROOM_SPEAKER_STALL_TIMEOUT_MS) continue;
+
+    // 保护：如果当前说话人已缓存了较长音频，且理论播放时长尚未走完，
+    // 说明前端可能仍在播放本地缓冲，不应过早判定“卡住”并强制切人。
+    const cachedBytes = Number(speaker.audioBytes || 0);
+    const bufferedDurationMs = cachedBytes > 0 ? (cachedBytes / 16000) * 1000 : 0; // 128kbps mp3 约 16KB/s
+    const elapsedSinceStart = Math.max(0, now - (speaker.startTime || now));
+    const playbackGuardMs = bufferedDurationMs + 3000; // 给解码/调度留 3s 余量
+    if (bufferedDurationMs > 0 && elapsedSinceStart < playbackGuardMs) {
+      continue;
+    }
+
+    forceCompleteStalledSpeaker(room, 'no_audio_chunk_timeout');
+  }
+}
+
+function sweepStalledPreparedDispatch() {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    if (!room || !room.isActive) continue;
+    if (room.currentSpeaker) continue;
+    if (!room.nextPreparedAgent || !room.nextPreparedMessage) continue;
+
+    const state = getRoundTableState(room.channelId);
+    const stuckSince = state.preparingStartTime || room.nextPreparedAt || 0;
+    if (!stuckSince) continue;
+    if (now - stuckSince < ROOM_PREPARED_STALL_TIMEOUT_MS) continue;
+
+    const nextAgent = room.nextPreparedAgent;
+    const nextMessage = room.nextPreparedMessage;
+    const retryCount = Number(room.nextPreparedRetryCount || 0);
+
+    // 若该房间内 nextAgent 的 LLM 请求仍在进行，说明“预准备”尚未完成，不应误判超时重派发。
+    if (hasInFlightOpenClawRequest(nextAgent, room.channelId)) {
+      continue;
+    }
+    // 若 nextAgent 的 TTS 连接仍活跃，说明预加载音频仍在生成/传输，也不应重派发。
+    if (hasOpenRoomAgentTtsSocket(room.channelId, nextAgent)) {
+      continue;
+    }
+
+    if (retryCount < ROOM_PREPARED_MAX_REDISPATCH) {
+      room.nextPreparedRetryCount = retryCount + 1;
+      room.nextPreparedAt = now;
+      state.preparingAgent = null;
+      state.preparingStartTime = null;
+
+      abortOpenClawRequests(
+        (requestId, entry) => entry.agentId === nextAgent && (entry.roomId || null) === room.channelId,
+        'PrepareRetryAbort'
+      );
+      closeRoomAgentTtsSockets(room.channelId, nextAgent, 'prepare_timeout_retry');
+
+      console.warn(
+        `[RoundTable] ⚠️ nextPrepared 长时间未开口，自动重派发: channel=${room.channelId}, agent=${nextAgent}, retry=${room.nextPreparedRetryCount}/${ROOM_PREPARED_MAX_REDISPATCH}`
+      );
+      dispatchToAgentWithRetry(nextAgent, nextMessage, 'moderator', 'prepare_timeout_retry', room.channelId, 2, 300);
+      continue;
+    }
+
+    console.warn(
+      `[RoundTable] ⚠️ nextPrepared 重派发耗尽，强制推进下一轮: channel=${room.channelId}, agent=${nextAgent}`
+    );
+    state.preparingAgent = null;
+    state.preparingStartTime = null;
+    clearRoomNextPrepared(room);
+    try {
+      onSpeechEnded(nextAgent, '[系统兜底] 当前发言未完整开始，自动推进下一位。', null, room.channelId, false);
+    } catch (e) {
+      console.error(
+        `[RoundTable] ❌ nextPrepared 强制推进失败: channel=${room.channelId}, agent=${nextAgent}, err=${e.message}`
+      );
+    }
   }
 }
 
@@ -5702,6 +6330,29 @@ function sendToAgent(agentId, message, from = 'moderator', speechType = 'next', 
   return false;
 }
 
+function dispatchToAgentWithRetry(
+  agentId,
+  message,
+  from = 'moderator',
+  speechType = 'next',
+  channelId = null,
+  retries = 3,
+  delayMs = 500
+) {
+  const sent = sendToAgent(agentId, message, from, speechType, channelId);
+  if (sent) return true;
+  if (!channelId || retries <= 0) return false;
+
+  const nextDelay = Math.min(Math.max(delayMs, 200), 2000);
+  console.warn(`[RoundTable] ⏳ ${agentId} 暂无连接，${nextDelay}ms 后重试派发 (${retries})`);
+  setTimeout(() => {
+    const room = rooms.get(channelId);
+    if (!room || !room.isActive) return;
+    dispatchToAgentWithRetry(agentId, message, from, speechType, channelId, retries - 1, Math.min(nextDelay * 2, 2000));
+  }, nextDelay);
+  return false;
+}
+
 function sendPodcastRoomLiveEvent(room, isLive, reason = 'manual') {
   if (!room || !room.channelId || !room.podcastRoomId) return false;
 
@@ -5722,6 +6373,29 @@ function sendPodcastRoomLiveEvent(room, isLive, reason = 'manual') {
   room.pendingPodcastLiveEvent = { isLive, reason, ts: Date.now() };
   reconnectPodcastPusher(room.channelId).catch((e) => {
     console.warn(`[Podcast] ⚠️ 重连失败，待补发${isLive ? '开播' : '下播'}事件: ${e.message}`);
+  });
+  return false;
+}
+
+function sendPodcastStreamingLifecycleEvent(room, isLive, reason = 'manual_click') {
+  if (!room || !room.channelId || !room.podcastRoomId) return false;
+
+  const trySend = () => {
+    const pusher = room.podcastPusher;
+    if (!pusher || !pusher.connected || !pusher.ws || pusher.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    return pusher.reportStreamingLifecycleEvent(isLive, reason);
+  };
+
+  if (trySend()) {
+    room.pendingPodcastStreamingLifecycleEvent = null;
+    return true;
+  }
+
+  room.pendingPodcastStreamingLifecycleEvent = { isLive, reason, ts: Date.now() };
+  reconnectPodcastPusher(room.channelId).catch((e) => {
+    console.warn(`[Podcast] ⚠️ 重连失败，待补发手动${isLive ? '开播' : '下播'}命令: ${e.message}`);
   });
   return false;
 }
@@ -5867,6 +6541,12 @@ async function reconnectPodcastPusher(channelId) {
           room.pendingPodcastLiveEvent = null;
         }
       }
+      if (room.pendingPodcastStreamingLifecycleEvent) {
+        const pending = room.pendingPodcastStreamingLifecycleEvent;
+        if (pusher.reportStreamingLifecycleEvent(!!pending.isLive, pending.reason || 'pending_replay')) {
+          room.pendingPodcastStreamingLifecycleEvent = null;
+        }
+      }
       // 设置麦序话题回调
       let initialQueueResolved = false;
       pusher.onTopicQueueList = (data) => {
@@ -5942,6 +6622,21 @@ function saveKimiCache() {
 
 function resolveHotTopicsRunner() {
   const runtime = getRuntimeSettings();
+  const bundledScript = path.join(__dirname, 'bootstrap/openclaw/skills/openclaw/hot-topics/scripts/fetch_tweets.py');
+  if (fs.existsSync(bundledScript)) {
+    return {
+      cmd: 'python3',
+      argsPrefix: [bundledScript],
+      cwd: path.dirname(bundledScript),
+      env: {
+        HOT_TOPICS_KB_PATH: getHotTopicsSkillBasePath(),
+        TIKHUB_API_KEY: runtime.tikhubApiKey || '',
+        OPENAI_API_KEY: runtime.openaiApiKey || '',
+        KIMI_COMMAND: runtime.kimiCliCommand || 'kimi'
+      }
+    };
+  }
+
   const modernScript = path.join(os.homedir(), '.config/agents/skills/hot-topics/scripts/fetch_tweets.py');
   if (fs.existsSync(modernScript)) {
     return {
@@ -5949,7 +6644,7 @@ function resolveHotTopicsRunner() {
       argsPrefix: [modernScript],
       cwd: path.dirname(modernScript),
       env: {
-        HOT_TOPICS_KB_PATH: runtime.hotTopicsKbPath || path.join(os.homedir(), 'Documents/知识库/热门话题'),
+        HOT_TOPICS_KB_PATH: getHotTopicsSkillBasePath(),
         TIKHUB_API_KEY: runtime.tikhubApiKey || '',
         OPENAI_API_KEY: runtime.openaiApiKey || '',
         KIMI_COMMAND: runtime.kimiCliCommand || 'kimi'
@@ -5964,7 +6659,7 @@ function resolveHotTopicsRunner() {
       argsPrefix: [legacyCli],
       cwd: path.join(os.homedir(), '.openclaw/skills/hot-topics'),
       env: {
-        HOT_TOPICS_KB_PATH: runtime.hotTopicsKbPath || path.join(os.homedir(), 'Documents/知识库/热门话题'),
+        HOT_TOPICS_KB_PATH: getHotTopicsSkillBasePath(),
         TIKHUB_API_KEY: runtime.tikhubApiKey || '',
         OPENAI_API_KEY: runtime.openaiApiKey || '',
         KIMI_COMMAND: runtime.kimiCliCommand || 'kimi'
@@ -5990,6 +6685,14 @@ function addToQueueTopics(room, topicResult, crawlStatus = 'ready', crawlError =
       topicResult.created_by = raw.created_by;
     }
   }
+  // 从原始麦序列表补齐用户原始提问（缓存命中/抓取后都可能缺失）
+  if (!topicResult.user_question && room.topicQueue && topicResult.queue_id) {
+    const raw = room.topicQueue.find(t => t.queue_id === topicResult.queue_id);
+    const rawQuestion = typeof raw?.question === 'string' ? raw.question.trim() : '';
+    if (rawQuestion) {
+      topicResult.user_question = rawQuestion;
+    }
+  }
 
   // 检查：如果当前正在讨论的话题 URL 与该麦序话题相同，说明已在讨论中
   // 直接发 select_topic_from_queue 通知服务端移除，不入待讨论队列
@@ -6013,6 +6716,10 @@ function addToQueueTopics(room, topicResult, crawlStatus = 'ready', crawlError =
     // 如果当前话题是用户麦序话题，补上创建者ID
     if (room.moderator?.currentTopicData && topicResult.created_by && !room.moderator.currentTopicData.created_by) {
       room.moderator.currentTopicData.created_by = topicResult.created_by;
+    }
+    // 如果当前话题是用户麦序话题，补上用户原始提问
+    if (room.moderator?.currentTopicData && topicResult.user_question && !room.moderator.currentTopicData.user_question) {
+      room.moderator.currentTopicData.user_question = topicResult.user_question;
     }
     // 从原始麦序列表移除
     if (room.topicQueue) {
@@ -6076,7 +6783,8 @@ function startHotTopicsCrawl(room) {
           topic.question || topic.title || '麦序话题'
         ),
         created_by_nickname: kimiQueueCache[queueId].created_by_nickname || topic.created_by_nickname || '',
-        created_by: kimiQueueCache[queueId].created_by || topic.created_by || ''
+        created_by: kimiQueueCache[queueId].created_by || topic.created_by || '',
+        user_question: kimiQueueCache[queueId].user_question || topic.question || ''
       };
       const cachedPath = String(cached.path || '');
       const cachedFolder = path.basename(cachedPath);
@@ -6119,6 +6827,7 @@ function startHotTopicsCrawl(room) {
         source: topic.source || '',
         created_by_nickname: topic.created_by_nickname || '',
         created_by: topic.created_by || '',
+        user_question: topic.question || '',
         url: '',
         path: '',
         postData: null
@@ -6183,11 +6892,23 @@ function startHotTopicsCrawl(room) {
       let crawlStatus = 'ready';
       let crawlError = '';
 
-      const folderMatch = output.match(/•\s*\[(\w+)\]\s*(.+)/);
+      const folderMatch = output.match(/•\s*\[([^\]]+)\]\s*(.+)/);
       if (code === 0 && folderMatch) {
         const category = folderMatch[1].trim();
         const folderName = folderMatch[2].trim();
-        savedPath = path.join(KNOWLEDGE_BASE_PATH, category, folderName);
+        const preferredRoot = getHotTopicsKnowledgeBasePath();
+        const skillRoot = path.join(getHotTopicsSkillBasePath(), '热门话题');
+        const legacyNestedRoot = path.join(preferredRoot, '热门话题');
+        const candidateRoots = [preferredRoot, skillRoot, legacyNestedRoot].filter((root, idx, arr) => root && arr.indexOf(root) === idx);
+        let matchedRoot = '';
+        for (const root of candidateRoots) {
+          const candidate = path.join(root, category, folderName);
+          if (fs.existsSync(candidate)) {
+            matchedRoot = root;
+            break;
+          }
+        }
+        savedPath = path.join(matchedRoot || preferredRoot, category, folderName);
         const isPendingFolder = folderName.startsWith('_pending_');
         if (isPendingFolder) {
           crawlStatus = 'failed';
@@ -6243,6 +6964,7 @@ function startHotTopicsCrawl(room) {
         source: topic.source || '',
         created_by_nickname: topic.created_by_nickname || '',
         created_by: topic.created_by || '',
+        user_question: topic.question || '',
         url: url,
         path: savedPath,
         category: folderMatch ? folderMatch[1].trim() : '',
@@ -6272,6 +6994,7 @@ function startHotTopicsCrawl(room) {
           source: entry.topic.source || '',
           created_by_nickname: entry.topic.created_by_nickname || '',
           created_by: entry.topic.created_by || '',
+          user_question: entry.topic.question || '',
           url: entry.topic.url || '',
           path: '',
           postData: null
@@ -6285,9 +7008,20 @@ function startHotTopicsCrawl(room) {
 }
 
 // 开始圆桌讨论（指定话题）
-function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, channelId = null) {
+function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, channelId = null, options = {}) {
+  const source = String(options?.source || '').trim();
+  const isManualClick = source === 'manual_click';
   const moderatorToUse = mod || moderator;
-  console.log('[RoundTable] 开始话题:', topic, '语言:', lang, fromUser ? '(用户输入)' : '(自动)', channelId ? `(房间: ${channelId})` : '');
+  console.log('[RoundTable] 开始话题:', topic, '语言:', lang, fromUser ? '(用户输入)' : '(自动)', channelId ? `(房间: ${channelId})` : '', source ? `(source: ${source})` : '');
+
+  // 仅在本场首次开播时注入圆桌人设（避免中途换话题重复清空会话）
+  if (channelId) {
+    const roomAtStart = rooms.get(channelId);
+    if (roomAtStart && !roomAtStart.isActive && Array.isArray(roomAtStart.agentIds) && roomAtStart.agentIds.length > 0) {
+      updateRoundtableSouls(roomAtStart.agentIds);
+      console.log(`[RoundTable] 开播前已刷新圆桌人设与语气词规则: ${roomAtStart.agentIds.join(', ')}`);
+    }
+  }
 
   // 开播前兜底清理：断开残留 TTS/MiniMax 与旧推理请求
   if (channelId) {
@@ -6307,6 +7041,10 @@ function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, chann
   if (channelId) {
     const room = rooms.get(channelId);
     if (room) {
+      // 仅手动点击开播：先发送 C→S start_streaming，再做后续流程
+      if (isManualClick) {
+        sendPodcastStreamingLifecycleEvent(room, true, 'manual_click_start');
+      }
       if (room.podcastPusher) {
         room.podcastPusher.resumeAudioPush('roundtable_start');
       }
@@ -6352,9 +7090,20 @@ function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, chann
 }
 
 // 从知识库随机选择话题
-async function startRandomTopic(lang = 'zh', mod = null, channelId = null) {
+async function startRandomTopic(lang = 'zh', mod = null, channelId = null, options = {}) {
+  const source = String(options?.source || '').trim();
+  const isManualClick = source === 'manual_click';
   const moderatorToUse = mod || moderator;
-  console.log('[RoundTable] 从知识库选择话题... 语言:', lang, channelId ? `(房间: ${channelId})` : '');
+  console.log('[RoundTable] 从知识库选择话题... 语言:', lang, channelId ? `(房间: ${channelId})` : '', source ? `(source: ${source})` : '');
+
+  // 仅在本场首次开播时注入圆桌人设（避免中途换话题重复清空会话）
+  if (channelId) {
+    const roomAtStart = rooms.get(channelId);
+    if (roomAtStart && !roomAtStart.isActive && Array.isArray(roomAtStart.agentIds) && roomAtStart.agentIds.length > 0) {
+      updateRoundtableSouls(roomAtStart.agentIds);
+      console.log(`[RoundTable] 开播前已刷新圆桌人设与语气词规则: ${roomAtStart.agentIds.join(', ')}`);
+    }
+  }
 
   // 开播前兜底清理：断开残留 TTS/MiniMax 与旧推理请求
   if (channelId) {
@@ -6374,6 +7123,10 @@ async function startRandomTopic(lang = 'zh', mod = null, channelId = null) {
   if (channelId) {
     const room = rooms.get(channelId);
     if (room) {
+      // 仅手动点击开播：先发送 C→S start_streaming，再做后续流程
+      if (isManualClick) {
+        sendPodcastStreamingLifecycleEvent(room, true, 'manual_click_start');
+      }
       if (room.podcastPusher) {
         room.podcastPusher.resumeAudioPush('roundtable_start');
       }
@@ -6454,13 +7207,30 @@ async function startRandomTopic(lang = 'zh', mod = null, channelId = null) {
 }
 
 // 结束圆桌讨论
-function stopRoundTable(channelId = null) {
-  console.log('[RoundTable] 讨论结束', channelId ? `(房间: ${channelId})` : '');
+function stopRoundTable(channelId = null, options = {}) {
+  const source = String(options?.source || '').trim();
+  const isManualClick = source === 'manual_click';
+  console.log('[RoundTable] 讨论结束', channelId ? `(房间: ${channelId})` : '', source ? `(source: ${source})` : '');
+
+  // 先打断前端本地播放（含已缓冲音频），确保“停房=立即停音频”
+  if (channelId) {
+    const room = rooms.get(channelId);
+    if (room) {
+      forceInterruptRoomPlayback(room, source || 'server_stop', 'server');
+    }
+  }
+
   const mod = getModerator(channelId);
   if (mod) mod.stop();
   if (channelId) {
     const room = rooms.get(channelId);
-    if (room) room.isActive = false;
+    if (room) {
+      room.isActive = false;
+      room.activeTurnAgentId = null;
+      room.activeTurnStartedAt = 0;
+      room.preloadIssuedByAgentId = null;
+      clearRoomNextPrepared(room);
+    }
   }
 
   // 下播：仅发送下播事件，不断开 Podcast 控制连接
@@ -6480,6 +7250,10 @@ function stopRoundTable(channelId = null) {
         room.podcastPusher.clearAudio();
         room.podcastPusher.playlistReset('stream_restart', true);
       }
+      // 仅手动点击下播后，发送 C→S stop_streaming
+      if (isManualClick) {
+        sendPodcastStreamingLifecycleEvent(room, false, 'manual_click_stop');
+      }
     }
   }
 }
@@ -6490,6 +7264,20 @@ function closeRoomTtsSockets(channelId = null, reason = 'manual') {
     if (!ws._isTTS || ws.readyState !== WebSocket.OPEN) continue;
     if (channelId && ws._roomId !== channelId) continue;
     console.log(`[Stop] 🛑 关闭 TTS WebSocket: ${ws._agentId} (房间: ${ws._roomId || 'global'}, reason=${reason})`);
+    try { ws.close(); } catch (_) {}
+    closed++;
+  }
+  return closed;
+}
+
+function closeRoomAgentTtsSockets(channelId, agentId, reason = 'manual_agent') {
+  if (!channelId || !agentId) return 0;
+  let closed = 0;
+  for (const ws of wss.clients) {
+    if (!ws._isTTS || ws.readyState !== WebSocket.OPEN) continue;
+    if (ws._roomId !== channelId) continue;
+    if (ws._agentId !== agentId) continue;
+    console.log(`[Stop] 🛑 关闭房间TTS连接: ${agentId} (房间: ${channelId}, reason=${reason})`);
     try { ws.close(); } catch (_) {}
     closed++;
   }
@@ -6510,6 +7298,7 @@ function closeGlobalTtsSockets(reason = 'manual_global') {
 
 function cleanupRoomStreamingResidue(channelId, reason = 'start_guard') {
   if (!channelId) return;
+  const room = rooms.get(channelId);
 
   // 开播前保护：中止同房间残留推理，避免老请求继续占用资源
   abortOpenClawRequests((requestId, entry) => (entry.roomId || null) === channelId, `StartGuard:${reason}`);
@@ -6524,6 +7313,12 @@ function cleanupRoomStreamingResidue(channelId, reason = 'start_guard') {
   const state = getRoundTableState(channelId);
   state.preparingAgent = null;
   state.preparingStartTime = null;
+  if (room) {
+    room.activeTurnAgentId = null;
+    room.activeTurnStartedAt = 0;
+    room.preloadIssuedByAgentId = null;
+    clearRoomNextPrepared(room);
+  }
 }
 
 function clearRoomAgentMemory(room, reason = 'room_reset') {
@@ -6553,8 +7348,10 @@ function resetRoomSessionOnHostReconnect(room, reason = 'host_reconnect') {
   room.isActive = false;
   room.currentSpeaker = null;
   room.speakerChain = [];
-  room.nextPreparedAgent = null;
-  room.nextPreparedMessage = null;
+  room.activeTurnAgentId = null;
+  room.activeTurnStartedAt = 0;
+  room.preloadIssuedByAgentId = null;
+  clearRoomNextPrepared(room);
   room.nextTopicData = null;
   room.pendingTopicData = null;
   room.currentDisplayTopic = null;
@@ -6571,14 +7368,24 @@ function resetRoomSessionOnHostReconnect(room, reason = 'host_reconnect') {
 // 处理语音完成回调（现在是在文本完成+音频开始时触发，而不是音频播放完成时）
 function onSpeechEnded(agentId, content, designatedNextAgent = null, channelId = null, changeTopic = false) {
   const mod = getModerator(channelId);
+  const room = channelId ? rooms.get(channelId) : null;
+  let effectiveDesignatedNextAgent = typeof designatedNextAgent === 'string'
+    ? designatedNextAgent.trim()
+    : '';
+  if (!effectiveDesignatedNextAgent) {
+    const directives = extractNextDirectives(String(content || ''));
+    if (directives.length > 0) {
+      effectiveDesignatedNextAgent = directives[directives.length - 1];
+      console.log(
+        `[RoundTable] 🧩 speech-ended 未携带 designatedNextAgent，已从内容兜底提取: ${effectiveDesignatedNextAgent}`
+      );
+    }
+  }
   // 不再检查 isActive，因为打断后需要继续处理
 
   // 将麦序抓取结果注入 moderator 的优先队列
-  if (channelId) {
-    const room = rooms.get(channelId);
-    if (room && room.queueTopics && room.queueTopics.length > 0) {
-      mod.priorityTopics = room.queueTopics;
-    }
+  if (room && room.queueTopics && room.queueTopics.length > 0) {
+    mod.priorityTopics = room.queueTopics;
   }
 
   // 清除当前agent的准备状态（它已经开始播放了）
@@ -6588,7 +7395,7 @@ function onSpeechEnded(agentId, content, designatedNextAgent = null, channelId =
     state.preparingStartTime = null;
   }
 
-  console.log(`[RoundTable] ${agentId} 已满足准备条件（文本完成+音频开始）` + (designatedNextAgent ? ` | 🎯 指定下一个: ${designatedNextAgent}` : '') + (changeTopic ? ' | 🔄 换话题' : '') + (channelId ? ` | 房间: ${channelId}` : ''));
+  console.log(`[RoundTable] ${agentId} 已满足准备条件（文本完成+音频开始）` + (effectiveDesignatedNextAgent ? ` | 🎯 指定下一个: ${effectiveDesignatedNextAgent}` : '') + (changeTopic ? ' | 🔄 换话题' : '') + (channelId ? ` | 房间: ${channelId}` : ''));
 
   // 发言者请求换话题 → 跳过指定发言者逻辑，直接触发话题过渡
   if (changeTopic) {
@@ -6615,16 +7422,16 @@ function onSpeechEnded(agentId, content, designatedNextAgent = null, channelId =
   }
 
   // 如果有指定下一个发言者，优先处理指定的人
-  if (designatedNextAgent) {
+  if (effectiveDesignatedNextAgent) {
     console.log(`[RoundTable] 🎯 检测到指定发言者，清空队列，插入指定的人`);
     
     // 使用预构建的名字映射（支持所有配置的 Agent，方便后续扩展）
 
     // 清理名字：转小写、去掉多余空格、去掉引号和大括号等标点（保留中文字符）
-    const normalizedName = designatedNextAgent.toLowerCase().trim().replace(/\s+/g, ' ').replace(/[{}"'""'']/g, '');
+    const normalizedName = effectiveDesignatedNextAgent.toLowerCase().trim().replace(/\s+/g, ' ').replace(/[{}"'""'']/g, '');
     const designatedId = agentNameToIdCache[normalizedName];
 
-    console.log(`[RoundTable] 🎯 解析指定发言者: "${designatedNextAgent}" -> "${normalizedName}" -> "${designatedId}"`);
+    console.log(`[RoundTable] 🎯 解析指定发言者: "${effectiveDesignatedNextAgent}" -> "${normalizedName}" -> "${designatedId}"`);
     console.log(`[RoundTable] 🎯 可用映射:`, Object.keys(agentNameToIdCache).filter(k => k.includes('steve') || k.includes('job')).join(', '));
 
     if (designatedId && AGENTS[designatedId]) {
@@ -6635,8 +7442,21 @@ function onSpeechEnded(agentId, content, designatedNextAgent = null, channelId =
         sendToAgent(result.nextAgent, result.message, 'moderator', 'designated', channelId);
         return;
       }
+      // 兜底：指定链路状态漂移时，强制派发给指定人，避免整场停住
+      console.warn(`[RoundTable] ⚠️ 指定发言者链路返回空，启用强制派发兜底: ${designatedId}`);
+      const targetName = AGENTS[designatedId]?.displayName || AGENTS[designatedId]?.name || designatedId;
+      const speakerName = AGENTS[agentId]?.displayName || AGENTS[agentId]?.name || agentId;
+      const topicTitle = (mod.currentTopicData && mod.currentTopicData.title) || mod.currentTopic || '当前话题';
+      const fallbackMessage = mod.lang === 'en'
+        ? `Current topic: "${topicTitle}". ${speakerName} just called on you. Please directly respond to ${speakerName}'s point first, then continue on-topic naturally.`
+        : `当前话题：「${topicTitle}」。${speakerName}刚刚点名了你，请先直接回应${speakerName}的观点，再自然继续围绕主话题展开。`;
+
+      mod.expectedSpeaker = designatedId;
+      sendToAgent(designatedId, fallbackMessage, 'moderator', 'designated_fallback', channelId);
+      console.log(`[RoundTable] 🎯 强制派发兜底成功: ${targetName}`);
+      return;
     } else {
-      console.log(`[RoundTable] ⚠️ 指定的发言者 "${designatedNextAgent}" 无效，回退到正常流程`);
+      console.log(`[RoundTable] ⚠️ 指定的发言者 "${effectiveDesignatedNextAgent}" 无效，回退到正常流程`);
     }
   }
 
@@ -6651,8 +7471,7 @@ function onSpeechEnded(agentId, content, designatedNextAgent = null, channelId =
   if (channelId) {
     const room = rooms.get(channelId);
     if (room) {
-      room.nextPreparedAgent = decision.nextAgent;
-      room.nextPreparedMessage = decision.message;
+      setRoomNextPrepared(room, decision.nextAgent, decision.message);
 
       // 广播给所有分机
       broadcastToRoom(room, {
@@ -6772,7 +7591,7 @@ function handleUserInput(input, targetAgent, channelId = null) {
 
 // 构建 messages（仅携带最近 CONTEXT_MEMORY_TURNS 轮历史，控制上下文体积）
 function buildMessages(agentId, userMessage) {
-  const agent = AGENTS[agentId] || null;
+  const agent = getRuntimeAgentById(agentId);
   const messages = [];
 
   // 确保 memory 已初始化
@@ -6818,6 +7637,22 @@ function addMemory(agentId, userMsg, assistantMsg) {
 // 测试端点
 app.get('/api/room/test', (req, res) => {
   res.json({ ok: true, rooms: rooms.size });
+});
+
+// 获取运行中房间快照（含开播状态）
+app.get('/api/room/runtime', (req, res) => {
+  const activeOnly = String(req.query.activeOnly || '').toLowerCase();
+  const snapshot = listRuntimeRoomsSnapshot();
+  const activeRooms = snapshot.filter((room) => room.isActive);
+  const shouldActiveOnly = activeOnly === '1' || activeOnly === 'true' || activeOnly === 'yes';
+  const outputRooms = shouldActiveOnly ? activeRooms : snapshot;
+
+  res.json({
+    rooms: outputRooms,
+    total: snapshot.length,
+    activeCount: activeRooms.length,
+    updatedAt: new Date().toISOString()
+  });
 });
 
 // 获取 agents 配置
@@ -8067,6 +8902,7 @@ app.get('/api/knowledge/folders', (req, res) => {
         for (const child of children) {
             if (!child.isDirectory()) continue;
             if (child.name.startsWith('.')) continue;
+            if (depth === 0 && !isAllowedHotTopicsCategory(child.name)) continue;
             const absPath = path.join(dirPath, child.name);
             const relativePath = path.relative(KNOWLEDGE_BASE_PATH, absPath).replace(/\\/g, '/');
             if (!relativePath) continue;
@@ -8093,7 +8929,7 @@ app.get('/api/agents/:agentId/knowledge', (req, res) => {
   if (fs.existsSync(KNOWLEDGE_BASE_PATH)) {
       const categories = fs.readdirSync(KNOWLEDGE_BASE_PATH, { withFileTypes: true });
       for (const cat of categories) {
-          if (cat.isDirectory()) {
+          if (cat.isDirectory() && isAllowedHotTopicsCategory(cat.name)) {
               const catPath = path.join(KNOWLEDGE_BASE_PATH, cat.name);
               const topics = fs.readdirSync(catPath, { withFileTypes: true });
               
@@ -9048,6 +9884,16 @@ app.post('/api/room/:channelId/speech-ended', (req, res) => {
   const { channelId } = req.params;
   const { agentId, content, designatedNextAgent, changeTopic } = req.body;
   const room = rooms.get(channelId);
+  let effectiveDesignatedNextAgent = typeof designatedNextAgent === 'string'
+    ? designatedNextAgent.trim()
+    : '';
+  if (!effectiveDesignatedNextAgent) {
+    const directives = extractNextDirectives(String(content || ''));
+    if (directives.length > 0) {
+      effectiveDesignatedNextAgent = directives[directives.length - 1];
+      console.log(`[Room:${channelId}] 🧩 speech-ended 未携带 designatedNextAgent，已从内容兜底提取: ${effectiveDesignatedNextAgent}`);
+    }
+  }
 
   if (!room) {
     return res.status(404).json({ error: '房间不存在' });
@@ -9069,10 +9915,10 @@ app.post('/api/room/:channelId/speech-ended', (req, res) => {
       // 发言者请求换话题 → 直接触发话题过渡
       console.log(`[Room:${channelId}] 🔄 ${agentId} 请求换话题`);
       result = room.moderator.onSpeechEnded(agentId, content, true);
-  } else if (designatedNextAgent) {
+  } else if (effectiveDesignatedNextAgent) {
       // 如果前端传来了明确的指定发言人（通常是从回复内容中解析出的 {next: ...}）
-      console.log(`[Room:${channelId}] 🎯 收到前端指定的下一位发言者: ${designatedNextAgent}`);
-      result = room.moderator.handleDesignatedNext(agentId, content, designatedNextAgent);
+      console.log(`[Room:${channelId}] 🎯 收到前端指定的下一位发言者: ${effectiveDesignatedNextAgent}`);
+      result = room.moderator.handleDesignatedNext(agentId, content, effectiveDesignatedNextAgent);
   } else {
       result = room.moderator.onSpeechEnded(agentId, content);
   }
@@ -9090,8 +9936,8 @@ app.post('/api/room/:channelId/speech-ended', (req, res) => {
   */
 
   if (result) {
-    room.nextPreparedAgent = result.nextAgent;
-    room.nextPreparedMessage = result.message;
+    setRoomNextPrepared(room, result.nextAgent, result.message);
+    room.preloadIssuedByAgentId = agentId;
 
     // changeTopic 或 transition 类型：暂存新话题数据，等 speech-started 时广播
     if ((changeTopic || result.type === 'transition') && room.moderator.currentTopicData) {
@@ -9116,8 +9962,7 @@ app.post('/api/room/:channelId/preload', (req, res) => {
   }
 
   // 更新房间状态
-  room.nextPreparedAgent = nextAgentId;
-  room.nextPreparedMessage = nextMessage;
+  setRoomNextPrepared(room, nextAgentId, nextMessage);
 
   // 广播给所有分机
   broadcastToRoom(room, {
@@ -10855,7 +11700,8 @@ wss.on('connection', (ws, req) => {
   console.log(`[${agentId}] WebSocket 连接${channelId ? `, 房间: ${channelId}, 主机: ${ws._isHost}` : ''}, conn=${ws._connId}, seq=${ws._connSeq}`);
   
   // 检查并刷新人设
-  if (!AGENTS[agentId].systemPrompt) {
+  const wsAgent = getRuntimeAgentById(agentId);
+  if (!wsAgent || !wsAgent.systemPrompt) {
     refreshPersona(agentId);
   }
   
@@ -10908,8 +11754,8 @@ wss.on('connection', (ws, req) => {
         const messages = buildMessages(agentId, userMessage);
 
         // 调试：打印 systemPrompt 前缀确认身份
-        const agent = AGENTS[agentId];
-        if (agent.systemPrompt) {
+        const agent = getRuntimeAgentById(agentId);
+        if (agent && agent.systemPrompt) {
           console.log(`[${agentId}] 🎭 发送消息时使用人设: ${agent.systemPrompt.substring(0, 100)}...`);
         } else {
           console.log(`[${agentId}] ⚠️ 没有加载人设！`);
@@ -10979,8 +11825,7 @@ wss.on('connection', (ws, req) => {
             }
             room.isActive = false;
             room.currentSpeaker = null;
-            room.nextPreparedAgent = null;
-            room.nextPreparedMessage = null;
+            clearRoomNextPrepared(room);
             room.nextTopicData = null;
             room.pendingTopicData = null;
             // 主机页面关闭/刷新：释放 Podcast 长连接（下次进入页面会自动重连）
@@ -11056,8 +11901,127 @@ wss.on('connection', (ws, req) => {
   let textAccumulator = ''; // 文本聚合缓冲区
   let flushTimer = null; // 聚合刷新定时器
   let fullTextForPodcast = ''; // 完整文本（给 podcast 推流用）
-  const FLUSH_INTERVAL = 500; // 每 500ms 刷新一次
-  const FLUSH_MIN_CHARS = 80; // 或者积累到 80 字符就刷新
+  const SENTENCE_END_RE = /[。！？.!?;；]/;
+  let lastTextFlushProfileKey = '';
+
+  function resolveTextFlushProfile() {
+    const activeProfile = {
+      key: 'active',
+      label: 'active',
+      intervalMs: TTS_TEXT_FLUSH_ACTIVE_INTERVAL_MS,
+      minChars: TTS_TEXT_FLUSH_ACTIVE_MIN_CHARS,
+      flushOnSentenceEnd: true
+    };
+    if (!ws._roomId) return activeProfile;
+
+    const room = rooms.get(ws._roomId);
+    if (!room || !room.isActive) return activeProfile;
+
+    const state = getRoundTableState(ws._roomId);
+    const currentSpeakerId = room.currentSpeaker && room.currentSpeaker.agentId ? room.currentSpeaker.agentId : null;
+    const hasOtherCurrentSpeaker = !!currentSpeakerId && currentSpeakerId !== agentId;
+    const isPreparingThisAgent = !!state && state.preparingAgent === agentId;
+    const isMarkedNextPrepared = room.nextPreparedAgent === agentId;
+
+    // 预加载态：当前有人在说话，本 agent 正在“下一位准备”。
+    // 该阶段降低 task_continue 频率，减少 MiniMax RPM 压力。
+    if (hasOtherCurrentSpeaker && (isPreparingThisAgent || isMarkedNextPrepared)) {
+      return {
+        key: 'preload',
+        label: 'preload',
+        intervalMs: TTS_TEXT_FLUSH_PRELOAD_INTERVAL_MS,
+        minChars: TTS_TEXT_FLUSH_PRELOAD_MIN_CHARS,
+        flushOnSentenceEnd: false
+      };
+    }
+
+    return activeProfile;
+  }
+
+  function getTextFlushProfile() {
+    const profile = resolveTextFlushProfile();
+    if (profile.key !== lastTextFlushProfileKey) {
+      lastTextFlushProfileKey = profile.key;
+      console.log(
+        `[${agentId}] TTS 文本聚合策略切换: mode=${profile.label}, minChars=${profile.minChars}, interval=${profile.intervalMs}ms`
+      );
+      pushRpmProfile('flush_profile_switch', {
+        flushMode: profile.label,
+        textFlushIntervalMs: profile.intervalMs,
+        textFlushMinChars: profile.minChars,
+        flushOnSentenceEnd: !!profile.flushOnSentenceEnd
+      });
+    }
+    return profile;
+  }
+
+  function buildRpmProfilePayload(reason, extras = {}) {
+    const profile = resolveTextFlushProfile();
+    const now = Date.now();
+    const taskContinueMinGap = Math.max(1, Number(MINIMAX_TASK_CONTINUE_MIN_GAP_MS) || 1);
+    const estimatedTaskContinueRpmCap = Math.floor(60000 / taskContinueMinGap);
+    const rpmStats = getMinimaxTaskContinueRpmStats({
+      agentId,
+      roomId: ws._roomId || null
+    });
+
+    return Object.assign({
+      event: 'rpm_profile',
+      reason: reason || 'snapshot',
+      agentId,
+      channelId: ws._roomId || null,
+      flushMode: profile.label,
+      textFlushIntervalMs: profile.intervalMs,
+      textFlushMinChars: profile.minChars,
+      flushOnSentenceEnd: !!profile.flushOnSentenceEnd,
+      taskContinueMinGapMs: taskContinueMinGap,
+      estimatedTaskContinueRpmCap,
+      rateLimitCooldownMs: MINIMAX_RATE_LIMIT_COOLDOWN_MS,
+      queueLimit: MINIMAX_TASK_CONTINUE_QUEUE_LIMIT,
+      queueDepth: minimaxTaskContinueQueue.length,
+      cooldownRemainingMs: Math.max(0, minimaxRateLimitCooldownUntil - now),
+      rpmWindowMs: rpmStats.rpmWindowMs,
+      realTaskContinueLast60sGlobal: rpmStats.realTaskContinueLast60sGlobal,
+      realTaskContinueRpmGlobal: rpmStats.realTaskContinueRpmGlobal,
+      realTaskContinueLast60sScoped: rpmStats.realTaskContinueLast60sScoped,
+      realTaskContinueRpmScoped: rpmStats.realTaskContinueRpmScoped
+    }, extras || {});
+  }
+
+  function pushRpmProfile(reason, extras = {}) {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify(buildRpmProfilePayload(reason, extras)));
+    } catch (_) {}
+  }
+
+  // 兜底：TTS 连接建立后立即下发一次 RPM 快照，避免前端因时序看不到日志
+  setTimeout(() => {
+    pushRpmProfile('tts_proxy_connected');
+  }, 0);
+
+  function sendTaskContinueToMinimax(text, meta = {}) {
+    const textToSend = String(text || '').trim();
+    if (!textToSend) return false;
+    const mode = meta.mode || 'unknown';
+    const reason = meta.reason || 'stream';
+
+    return enqueueMinimaxTaskContinue(minimaxWs, textToSend, {
+      onSent: () => {
+        textChunksSent++;
+        console.log(
+          `[${agentId}] → MiniMax 文本块 #${textChunksSent} (${textToSend.length} 字, mode=${mode}, reason=${reason}): "${textToSend.substring(0, 40)}..."`
+        );
+      },
+      onError: (e) => {
+        console.error(`[${agentId}] ❌ task_continue 发送失败: ${e.message}`);
+      },
+      meta: {
+        agentId,
+        roomId: ws._roomId || null
+      }
+    });
+  }
 
   // 刷新聚合的文本到 MiniMax
   function flushTextToMinimax() {
@@ -11066,11 +12030,10 @@ wss.on('connection', (ws, req) => {
 
     const textToSend = textAccumulator.trim();
     textAccumulator = '';
+    const profile = getTextFlushProfile();
 
     if (isReady && minimaxWs && minimaxWs.readyState === WebSocket.OPEN) {
-      minimaxWs.send(JSON.stringify({ event: 'task_continue', text: textToSend }));
-      textChunksSent++;
-      console.log(`[${agentId}] → MiniMax 文本块 #${textChunksSent} (${textToSend.length} 字): "${textToSend.substring(0, 40)}..."`);
+      sendTaskContinueToMinimax(textToSend, { mode: profile.label, reason: 'flush' });
     } else {
       pendingTexts.push(textToSend);
     }
@@ -11079,15 +12042,16 @@ wss.on('connection', (ws, req) => {
   // 添加文本到聚合器
   function accumulateText(text) {
     textAccumulator += text;
+    const profile = getTextFlushProfile();
 
-    // 遇到句号等标点，或者累积够了，就立即刷新
-    var hasSentenceEnd = /[。！？.!?;；]/.test(textAccumulator);
-    if (hasSentenceEnd || textAccumulator.length >= FLUSH_MIN_CHARS) {
+    // 普通发言：保留“句号即刷”提升实时性；预加载：仅按阈值/间隔刷新，降低 RPM 峰值。
+    const hasSentenceEnd = SENTENCE_END_RE.test(textAccumulator);
+    if (textAccumulator.length >= profile.minChars || (profile.flushOnSentenceEnd && hasSentenceEnd)) {
       flushTextToMinimax();
     } else {
-      // 否则等 500ms 后刷新
+      // 否则按当前策略间隔刷新
       if (flushTimer) clearTimeout(flushTimer);
-      flushTimer = setTimeout(flushTextToMinimax, FLUSH_INTERVAL);
+      flushTimer = setTimeout(flushTextToMinimax, profile.intervalMs);
     }
   }
   
@@ -11117,6 +12081,7 @@ wss.on('connection', (ws, req) => {
         format: 'mp3', channel: 1
       }
     }));
+    pushRpmProfile('minimax_open');
   });
   
   minimaxWs.on('message', (data) => {
@@ -11135,8 +12100,7 @@ wss.on('connection', (ws, req) => {
         if (pendingTexts.length > 0) {
           const allText = pendingTexts.join(' ');
           pendingTexts = [];
-          minimaxWs.send(JSON.stringify({ event: 'task_continue', text: allText }));
-          textChunksSent++;
+          sendTaskContinueToMinimax(allText, { mode: 'pending', reason: 'ready_flush' });
           console.log(`[${agentId}] MiniMax 就绪，发送 pending 文本 (${allText.length} 字)`);
         } else {
           console.log(`[${agentId}] MiniMax 就绪，无待处理文本`);
@@ -11155,6 +12119,15 @@ wss.on('connection', (ws, req) => {
       
       if (msg.event === 'task_failed') {
         console.error(`[${agentId}] MiniMax task_failed:`, msg);
+        const statusMsg = String(msg?.base_resp?.status_msg || msg?.error || '').toLowerCase();
+        const isRateLimit = statusMsg.includes('rate limit') || statusMsg.includes('rpm');
+        if (statusMsg.includes('rate limit') || statusMsg.includes('rpm')) {
+          registerMinimaxRateLimit(`${agentId}${ws._roomId ? `@${ws._roomId}` : ''}`);
+        }
+        pushRpmProfile('task_failed', {
+          isRateLimit,
+          statusMsg: String(msg?.base_resp?.status_msg || msg?.error || '')
+        });
         // 房间推流顺序推进：当前人失败也要尝试切到下一位，避免卡死在“无推流”
         const failedRoomPusher = ws._roomId && rooms.get(ws._roomId)?.podcastPusher;
         if (failedRoomPusher && failedRoomPusher.connected) {
@@ -11247,8 +12220,7 @@ wss.on('connection', (ws, req) => {
           if (pendingTexts.length > 0) {
             const text = pendingTexts.join(' ');
             pendingTexts = [];
-            minimaxWs.send(JSON.stringify({ event: 'task_continue', text }));
-            textChunksSent++;
+            sendTaskContinueToMinimax(text, { mode: 'pending', reason: 'end_flush' });
             console.log(`[${agentId}] 刷新 pending 文本 (${text.length} 字)`);
           }
           // 等待 2 秒让 MiniMax 充分处理最后的文本再发送 finish
@@ -11326,11 +12298,15 @@ app.delete('/api/agents/:agentId', async (req, res) => {
     try {
         // Step 1: 如果有 Podcast API 注册，先调用远程删除
         let podcastDeleted = false;
+        let podcastDeleteTried = false;
+        let podcastDeleteError = '';
+        let podcastDeleteStatus = '';
         try {
             const metaPath = path.join(DATA_AGENTS_DIR, agentId, 'meta.json');
             if (fs.existsSync(metaPath)) {
                 const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
                 if (meta.podcastApiKey && meta.podcastAgentId) {
+                    podcastDeleteTried = true;
                     const axios = require('axios');
                     const delResp = await axios.delete(`${PODCAST_API_BASE}/agent/me`, {
                         headers: { 'X-API-Key': meta.podcastApiKey },
@@ -11338,22 +12314,65 @@ app.delete('/api/agents/:agentId', async (req, res) => {
                     });
                     if (delResp.data && delResp.data.code === 200) {
                         podcastDeleted = true;
+                        podcastDeleteStatus = 'deleted';
                         console.log(`[Delete] Podcast Agent ${meta.podcastAgentId} 已删除`);
+                    } else if (delResp.data && Number(delResp.data.code) === 404) {
+                        // 部分服务会返回 code=404，区分为远端不存在（不算失败）
+                        podcastDeleted = false;
+                        podcastDeleteStatus = 'already_absent';
+                        podcastDeleteError = 'remote agent not found';
+                        console.log(`[Delete] Podcast Agent ${meta.podcastAgentId} 远端不存在(code=404)`);
                     } else {
+                        podcastDeleteStatus = 'failed';
+                        podcastDeleteError = `unexpected response: ${JSON.stringify(delResp.data)}`;
                         console.warn(`[Delete] Podcast API 返回异常: ${JSON.stringify(delResp.data)}`);
                     }
                 }
             }
         } catch (podcastErr) {
-            console.warn(`[Delete] Podcast API 删除失败: ${podcastErr.message}`);
+            podcastDeleteTried = true;
+            const status = Number(podcastErr?.response?.status || 0);
+            const responseDataRaw = podcastErr?.response?.data;
+            const responseText = typeof responseDataRaw === 'string'
+                ? responseDataRaw
+                : JSON.stringify(responseDataRaw || '');
+            if (status === 404) {
+                if (/page not found/i.test(responseText)) {
+                    // 路由不存在：当前 Room 服务不支持删除 Agent 接口
+                    podcastDeleted = false;
+                    podcastDeleteStatus = 'unsupported';
+                    podcastDeleteError = 'room service does not support DELETE /agent/me';
+                    console.warn(`[Delete] Room 服务不支持删除 Agent 接口: ${responseText}`);
+                } else {
+                    // 路由存在但对象不存在
+                    podcastDeleted = false;
+                    podcastDeleteStatus = 'already_absent';
+                    podcastDeleteError = 'remote agent not found';
+                    console.log(`[Delete] Podcast Agent 远端不存在(HTTP 404)`);
+                }
+            } else {
+                podcastDeleteStatus = 'failed';
+                podcastDeleteError = podcastErr.message || 'podcast delete failed';
+                console.warn(`[Delete] Podcast API 删除失败: ${podcastErr.message}`);
+            }
             // 远程删除失败不阻塞本地删除
+        }
+        if (!podcastDeleteTried && !podcastDeleteStatus) {
+            podcastDeleteStatus = 'skipped';
+            podcastDeleteError = 'missing podcast registration';
         }
 
         // Step 2: 删除本地智能体
         const success = await openclaw.deleteAgent(agentId);
         if (success) {
             if (AGENTS[agentId]) delete AGENTS[agentId];
-            res.json({ success: true, podcastDeleted });
+            res.json({
+                success: true,
+                podcastDeleted,
+                podcastDeleteTried,
+                podcastDeleteStatus,
+                podcastDeleteError
+            });
         } else {
             res.status(404).json({ error: 'Agent not found or failed to delete' });
         }
@@ -11414,7 +12433,7 @@ function ensureRoomExists(channelId, res) {
 
 // 开始圆桌讨论（指定话题）
 app.post('/api/roundtable/start', (req, res) => {
-  const { topic, lang, channelId } = req.body;
+  const { topic, lang, channelId, source } = req.body;
   if (!topic) {
     return res.status(400).json({ error: '请提供讨论话题' });
   }
@@ -11425,19 +12444,19 @@ app.post('/api/roundtable/start', (req, res) => {
   const mod = getModerator(channelId);
 
   res.json({ success: true, message: '圆桌讨论开始', topic });
-  startRoundTable(topic, true, lang || 'zh', mod, channelId);
+  startRoundTable(topic, true, lang || 'zh', mod, channelId, { source: source || '' });
 });
 
 // 从知识库随机选择话题开始
 app.post('/api/roundtable/random', (req, res) => {
-  const { lang, channelId } = req.body || {};
+  const { lang, channelId, source } = req.body || {};
   if (channelId && !ensureRoomExists(channelId, res)) {
     return;
   }
   const mod = getModerator(channelId);
 
   res.json({ success: true, message: '从知识库选择话题' });
-  startRandomTopic(lang || 'zh', mod, channelId);
+  startRandomTopic(lang || 'zh', mod, channelId, { source: source || '' });
 });
 
 // 切换到下一个话题（更换话题）
@@ -11482,12 +12501,20 @@ app.post('/api/roundtable/next-topic', (req, res) => {
 });
 
 // 停止圆桌讨论
+app.post('/api/roundtable/stop-active-rooms', (req, res) => {
+  const source = (req.body && typeof req.body.source === 'string')
+    ? req.body.source
+    : 'pre_restart';
+  const result = stopActiveRoomRoundtables({ source });
+  res.json({ success: true, ...result });
+});
+
 app.post('/api/roundtable/stop', (req, res) => {
-  const { channelId, scope } = req.body || {};
+  const { channelId, scope, source } = req.body || {};
   if (channelId && !ensureRoomExists(channelId, res)) {
     return;
   }
-  stopRoundTable(channelId || null);
+  stopRoundTable(channelId || null, { source: source || '' });
 
   if (channelId) {
     // 房间模式：严格只清理当前房间
@@ -11544,14 +12571,15 @@ app.get('/api/roundtable/status', (req, res) => {
 app.post('/api/roundtable/speech-ended', async (req, res) => {
   const { agentId, content, designatedNextAgent, channelId, changeTopic } = req.body;
 
-  if (!agentId || !content) {
+  if (!agentId) {
     return res.status(400).json({ error: '缺少参数' });
   }
 
   res.json({ success: true, message: '已接收回调' });
 
   // 异步处理（不阻塞响应）
-  onSpeechEnded(agentId, content, designatedNextAgent, channelId, changeTopic);
+  const safeContent = String(content || '').trim() || '[系统兜底] 当前轮文本未完整返回，请继续下一位。';
+  onSpeechEnded(agentId, safeContent, designatedNextAgent, channelId, changeTopic);
 });
 
 // 语音开始播放回调（首次音频块播放时触发）
@@ -11562,8 +12590,10 @@ app.post('/api/roundtable/speech-started', async (req, res) => {
     return res.status(400).json({ error: '缺少参数' });
   }
 
-  // 清除准备状态（该 agent 已经开始播放）
+  const room = channelId ? rooms.get(channelId) : null;
   const state = getRoundTableState(channelId);
+
+  // 清除准备状态（该 agent 已经开始播放）
   if (state.preparingAgent === agentId) {
     const elapsed = Date.now() - state.preparingStartTime;
     console.log(`[RoundTable] ✅ ${agentId} 开始播放，清除准备状态（准备耗时 ${elapsed}ms）`);
@@ -11573,7 +12603,6 @@ app.post('/api/roundtable/speech-started', async (req, res) => {
 
   // 房间模式：仅在真实开始播放时通知 Podcast 上麦，避免预准备阶段误触发下麦
   if (channelId) {
-      const room = rooms.get(channelId);
       const pusher = room?.podcastPusher;
       if (pusher && pusher.connected) {
           pusher.speakerJoin(agentId);
@@ -11582,7 +12611,6 @@ app.post('/api/roundtable/speech-started', async (req, res) => {
   
   // [ADDED] 检查是否有暂存的新话题数据需要切换
   if (channelId) {
-      const room = rooms.get(channelId);
       if (room && room.nextTopicData) {
           console.log(`[RoundTable] 🔄 [房间] 发言开始，正式切换话题卡: ${room.nextTopicData.title.substring(0, 20)}...`);
           room.currentDisplayTopic = room.nextTopicData;
@@ -11705,8 +12733,52 @@ app.get('/api/roundtable/agents', (req, res) => {
   res.json({ agents });
 });
 
+app.get('/api/roundtable/rpm-profile', (req, res) => {
+  const now = Date.now();
+  const taskContinueMinGapMs = Math.max(1, Number(MINIMAX_TASK_CONTINUE_MIN_GAP_MS) || 1);
+  const estimatedTaskContinueRpmCap = Math.floor(60000 / taskContinueMinGapMs);
+  const cooldownRemainingMs = Math.max(0, minimaxRateLimitCooldownUntil - now);
+  const queryAgentId = typeof req.query.agentId === 'string' ? req.query.agentId.trim() : '';
+  const hasChannelParam = Object.prototype.hasOwnProperty.call(req.query || {}, 'channelId');
+  const queryRoomId = hasChannelParam
+    ? ((req.query.channelId == null || String(req.query.channelId).trim() === '') ? null : String(req.query.channelId).trim())
+    : undefined;
+  const rpmStats = getMinimaxTaskContinueRpmStats({
+    agentId: queryAgentId || undefined,
+    roomId: queryRoomId
+  });
+
+  res.json({
+    taskContinueMinGapMs,
+    estimatedTaskContinueRpmCap,
+    rateLimitCooldownMs: MINIMAX_RATE_LIMIT_COOLDOWN_MS,
+    queueLimit: MINIMAX_TASK_CONTINUE_QUEUE_LIMIT,
+    queueDepth: minimaxTaskContinueQueue.length,
+    cooldownRemainingMs,
+    rpmWindowMs: rpmStats.rpmWindowMs,
+    realTaskContinueLast60sGlobal: rpmStats.realTaskContinueLast60sGlobal,
+    realTaskContinueRpmGlobal: rpmStats.realTaskContinueRpmGlobal,
+    realTaskContinueLast60sScoped: rpmStats.realTaskContinueLast60sScoped,
+    realTaskContinueRpmScoped: rpmStats.realTaskContinueRpmScoped,
+    flushProfiles: {
+      active: {
+        intervalMs: TTS_TEXT_FLUSH_ACTIVE_INTERVAL_MS,
+        minChars: TTS_TEXT_FLUSH_ACTIVE_MIN_CHARS,
+        flushOnSentenceEnd: true
+      },
+      preload: {
+        intervalMs: TTS_TEXT_FLUSH_PRELOAD_INTERVAL_MS,
+        minChars: TTS_TEXT_FLUSH_PRELOAD_MIN_CHARS,
+        flushOnSentenceEnd: false
+      }
+    }
+  });
+});
+
 const PORT = process.env.PORT || 3456;
 startUploadCleanupScheduler();
+setInterval(sweepStalledCurrentSpeakers, ROOM_SPEAKER_SWEEP_INTERVAL_MS);
+setInterval(sweepStalledPreparedDispatch, ROOM_PREPARED_SWEEP_INTERVAL_MS);
 server.listen(PORT, () => {
   console.log(`Meco Studio 运行在 http://localhost:${PORT}`);
   console.log(`圆桌会议: http://localhost:${PORT}/roundtable`);
