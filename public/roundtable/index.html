@@ -766,7 +766,7 @@
     });
 
     // TTS Manager 类
-    var TTS_RATE_LIMIT_BACKOFF_STEPS_MS = [8000, 15000, 30000];
+    var TTS_RATE_LIMIT_RETRY_DELAY_MS = 30000;
     // 调试开关：关闭“失败重试/自动跳过”，用于观察真实失败形态
     var ROUNDTABLE_DISABLE_FAILURE_RECOVERY = true;
     var ttsGlobalCooldownUntil = 0;
@@ -1071,43 +1071,33 @@
               audioChunkCount > 0
             );
 
-            if (isRateLimit) {
-              if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
-                console.warn('[' + self.agentId + '] TTS 被限流（调试模式：不自动重试）');
-              } else {
-              var nextRetryCount = self._ttsRetryCount + 1;
-              var retryIndex = Math.min(nextRetryCount - 1, TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length - 1);
-              var retryDelay = TTS_RATE_LIMIT_BACKOFF_STEPS_MS[retryIndex] + Math.floor(Math.random() * 1200);
+            if (isRateLimit && !self._muted && !hasAudioOutput) {
+              var retryDelay = TTS_RATE_LIMIT_RETRY_DELAY_MS;
+              self._ttsRetryCount = (self._ttsRetryCount || 0) + 1;
               self._rateLimitCooldownUntil = Date.now() + retryDelay;
-              // 全局退避，减少同房间多人同时抢占 RPM
-              ttsGlobalCooldownUntil = Math.max(ttsGlobalCooldownUntil, Date.now() + Math.floor(retryDelay * 0.8));
-
-              if (self._ttsRetryCount < TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length && !self._muted && !hasAudioOutput) {
-                self._ttsRetryCount = nextRetryCount;
-                console.warn('[' + self.agentId + '] TTS 被限流，' + (retryDelay/1000).toFixed(1) + '秒后重试 (' + self._ttsRetryCount + '/' + TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length + ')');
-                // 关闭旧连接
-                try { self.ws.close(); } catch(e) {}
-                self.ws = null;
-                self.isOpen = false;
-                // 把已发文本放回 pending 队列
-                self.pendingTexts = (self._allSentTexts || []).slice();
-                // 标记需要在 onopen 后重新发送 end 信号（不能在这里直接调 sendEnd，WS 还没连上）
-                self._needResendEnd = !!self.endSignalSent;
-                self.endSignalSent = false;
-                self.scheduleReconnect(retryDelay, 'rate_limit');
-                return; // 不标记 taskFinished，不触发兜底
-              }
-              }
+              // 全局退避，降低多房间/多人同一时刻再次打爆 RPM 的概率
+              ttsGlobalCooldownUntil = Math.max(ttsGlobalCooldownUntil, Date.now() + retryDelay);
+              console.warn(
+                '[' + self.agentId + '] TTS 被限流，' + (retryDelay / 1000).toFixed(0) +
+                '秒后重试（第' + self._ttsRetryCount + '次，无限重试）'
+              );
+              // 关闭旧连接
+              try { self.ws.close(); } catch(e) {}
+              self.ws = null;
+              self.isOpen = false;
+              // 把已发文本放回 pending 队列
+              self.pendingTexts = (self._allSentTexts || []).slice();
+              // 标记需要在 onopen 后重新发送 end 信号（不能在这里直接调 sendEnd，WS 还没连上）
+              self._needResendEnd = !!self.endSignalSent;
+              self.endSignalSent = false;
+              self.scheduleReconnect(retryDelay, 'rate_limit_forever');
+              return; // 不标记 taskFinished，不触发兜底
             }
 
             if (isRateLimit && hasAudioOutput) {
               console.warn('[' + self.agentId + '] TTS 限流发生在已产出音频后，跳过重试以避免重复播报');
             }
-            if (isRateLimit && self._ttsRetryCount >= TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length && !hasAudioOutput) {
-              console.warn('[' + self.agentId + '] TTS 限流重试耗尽，走无音频兜底');
-            }
-
-            // 非限流或重试耗尽：走原有兜底逻辑
+            // 非限流失败（或“已有音频产出时的限流”）走原有兜底逻辑
             console.error('[' + self.agentId + '] MiniMax task_failed (不可重试): ' + statusMsg);
             self.taskFinished = true;
             // 主机：task_failed 终态也要通知服务端完成，避免房间 currentSpeaker 永远停留在 ttsStreaming=true
@@ -1132,7 +1122,7 @@
               failRemaining <= 0.12 &&
               (!self.audioChunks || self.audioChunks.length === 0)
             ) {
-              console.log('[' + self.agentId + '] ✅ 重试耗尽 + 音频已播完，resolve prevSpeakerDone');
+              console.log('[' + self.agentId + '] ✅ task_failed 且音频已播完，resolve prevSpeakerDone');
               self._resolveMyDone();
               self._resolveMyDone = null;
             }

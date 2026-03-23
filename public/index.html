@@ -365,7 +365,10 @@
                 if (typeof renderContextSelection === 'function') renderContextSelection();
 
             } else if (viewName === 'agenttools') {
-                window.location.hash = 'agenttools';
+                const hashRoute = parseHashRoute();
+                if (hashRoute.view !== 'agenttools') {
+                    window.location.hash = 'agenttools';
+                }
                 if (atView) atView.classList.remove('hidden');
                 
                 if (navAgentTools) {
@@ -395,6 +398,69 @@
                 }
             }
         };
+
+        function parseHashRoute() {
+            const rawHash = String(window.location.hash || '').replace(/^#/, '');
+            if (!rawHash) {
+                return { view: '', params: new URLSearchParams() };
+            }
+            const queryIndex = rawHash.indexOf('?');
+            if (queryIndex < 0) {
+                return { view: rawHash, params: new URLSearchParams() };
+            }
+            const view = rawHash.slice(0, queryIndex);
+            const query = rawHash.slice(queryIndex + 1);
+            return { view, params: new URLSearchParams(query) };
+        }
+
+        function isHashView(viewName) {
+            return parseHashRoute().view === String(viewName || '');
+        }
+
+        function updateAgentToolsHashSelection(targetType, targetId, options = {}) {
+            const replace = options.replace !== false;
+            const route = parseHashRoute();
+            const params = new URLSearchParams(route.view === 'agenttools' ? route.params.toString() : '');
+            const safeId = String(targetId || '').trim();
+
+            if (targetType === 'channel' && safeId) {
+                params.set('channel', safeId);
+                params.delete('agent');
+            } else if (targetType === 'agent' && safeId) {
+                params.set('agent', safeId);
+                params.delete('channel');
+            } else {
+                params.delete('agent');
+                params.delete('channel');
+            }
+
+            const query = params.toString();
+            const nextHash = `#agenttools${query ? `?${query}` : ''}`;
+            if (window.location.hash === nextHash) return;
+
+            if (replace) {
+                const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+                window.history.replaceState(window.history.state, document.title, nextUrl);
+                return;
+            }
+            window.location.hash = nextHash;
+        }
+
+        function getAgentToolsHashTarget() {
+            const route = parseHashRoute();
+            if (route.view !== 'agenttools') {
+                return { type: null, id: '' };
+            }
+            const channelId = String(route.params.get('channel') || '').trim();
+            if (channelId) {
+                return { type: 'channel', id: channelId };
+            }
+            const agentId = String(route.params.get('agent') || '').trim();
+            if (agentId) {
+                return { type: 'agent', id: agentId };
+            }
+            return { type: null, id: '' };
+        }
 
         // Global Variables
         let allAgents = []; 
@@ -476,6 +542,26 @@
         let mecoUpdateLastLogs = [];
         let mecoUpdateLastTaskId = '';
         let mecoUpdateLastFinishedTaskId = '';
+
+        function openAgentToolsChat(agentId) {
+            if (!agentId) return;
+            const applySelection = () => {
+                const select = document.getElementById('at-agent-select');
+                if (select) {
+                    select.value = agentId;
+                }
+                setSidebarSelectedAgent(agentId);
+                loadAgentTools(agentId);
+            };
+
+            if (!isHashView('agenttools')) {
+                switchView('agenttools');
+                // Ensure Agent Tools view and select options are ready.
+                setTimeout(applySelection, 0);
+                return;
+            }
+            applySelection();
+        }
 
         function getSkillToggleKey(agentId, skillName) {
             return `${agentId || ''}::${skillName || ''}`;
@@ -979,7 +1065,7 @@
             atSingleChatImmersive = !atSingleChatImmersive;
             persistAgentToolsImmersivePref();
             updateAgentToolsImmersiveToggleUi();
-            if (window.location.hash !== '#agenttools') return;
+            if (!isHashView('agenttools')) return;
             applyAgentToolsLayoutMode();
             if (currentChannelId) {
                 renderAgentToolsChannelChat(currentChannelId);
@@ -2206,7 +2292,7 @@
                 };
                 item.appendChild(delBtn);
                 item.onclick = () => {
-                    if (window.location.hash !== '#agenttools') {
+                    if (!isHashView('agenttools')) {
                         switchView('agenttools');
                     }
                     loadAgentToolsChannel(channel.id);
@@ -2227,7 +2313,7 @@
                 atChannels = Array.isArray(data.channels) ? data.channels : [];
                 if (currentChannelId && !atChannels.some((c) => c.id === currentChannelId)) {
                     currentChannelId = null;
-                    if (window.location.hash === '#agenttools' && allAgents.length > 0) {
+                    if (isHashView('agenttools') && allAgents.length > 0) {
                         loadAgentTools(allAgents[0].id);
                     }
                 }
@@ -2304,7 +2390,7 @@
                 }
                 await fetchAgentChannels();
                 closeChannelCreateModal();
-                if (window.location.hash !== '#agenttools') {
+                if (!isHashView('agenttools')) {
                     switchView('agenttools');
                 }
                 loadAgentToolsChannel(data.channel.id);
@@ -2723,21 +2809,42 @@
 
             try {
                 const res = await fetch(`/api/agents/${agentToDeleteId}`, { method: 'DELETE' });
-                if (res.ok) {
-                    const data = await res.json();
-                    loadingText.textContent = 'Deleted!';
-                    loadingDesc.textContent = data.podcastDeleted ? 'Podcast API synced' : 'Local cleanup complete';
-                    setTimeout(() => {
-                        loading.classList.add('hidden');
-                        fetchAgents();
-                        agentToDeleteId = null;
-                    }, 800);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    throw new Error(data.error || 'Delete failed');
+                }
+
+                loadingText.textContent = 'Deleted!';
+                if (data.podcastDeleteStatus === 'deleted') {
+                    loadingDesc.textContent = 'Podcast API synced';
+                } else if (data.podcastDeleteStatus === 'already_absent') {
+                    loadingDesc.textContent = 'Remote Podcast agent not found';
+                } else if (data.podcastDeleteStatus === 'unsupported') {
+                    loadingDesc.textContent = 'Remote service does not support agent delete';
+                } else if (data.podcastDeleteStatus === 'failed') {
+                    loadingDesc.textContent = 'Local cleanup done (remote delete failed)';
+                } else if (data.podcastDeleteStatus === 'skipped') {
+                    loadingDesc.textContent = 'Local cleanup complete';
                 } else {
-                    throw new Error('Delete failed');
+                    loadingDesc.textContent = data.podcastDeleted ? 'Podcast API synced' : 'Local cleanup complete';
+                }
+
+                setTimeout(() => {
+                    loading.classList.add('hidden');
+                    fetchAgents();
+                    agentToDeleteId = null;
+                }, 800);
+
+                if (data.podcastDeleteStatus === 'failed') {
+                    const detail = data.podcastDeleteError ? `\n${data.podcastDeleteError}` : '';
+                    alert(`Agent deleted locally, but remote Podcast delete failed.${detail}`);
+                } else if (data.podcastDeleteStatus === 'unsupported') {
+                    const detail = data.podcastDeleteError ? `\n${data.podcastDeleteError}` : '';
+                    alert(`Agent deleted locally.\nRemote room service does not provide a delete-agent API.${detail}`);
                 }
             } catch (e) {
                 console.error(e);
-                alert('Failed to delete agent');
+                alert('Failed to delete agent: ' + e.message);
                 loading.classList.add('hidden');
                 agentToDeleteId = null;
             }
@@ -2835,7 +2942,7 @@
                     loadingDesc.textContent = `${data.name || newName} is ready`;
                 }
                 await fetchAgents();
-                if (window.location.hash !== '#agenttools') {
+                if (!isHashView('agenttools')) {
                     switchView('agenttools');
                 }
                 loadAgentTools(data.id);
@@ -2887,11 +2994,12 @@
                 checkMecoUpdateStatus();
                 
                 // Check hash for view
-                if (window.location.hash === '#playgen') {
+                const hashView = parseHashRoute().view;
+                if (hashView === 'playgen') {
                     switchView('playgen');
-                } else if (window.location.hash === '#context') {
+                } else if (hashView === 'context') {
                     switchView('context');
-                } else if (window.location.hash === '#agenttools') {
+                } else if (hashView === 'agenttools') {
                     switchView('agenttools');
                 }
             } catch (e) {
@@ -3127,39 +3235,9 @@
                 const sidebarItem = document.createElement('div');
                 sidebarItem.className = 'flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent group cursor-pointer';
                 sidebarItem.dataset.agentId = agent.id;
-                const emoji = agent.emoji || displayName.charAt(0).toUpperCase();
 
                 sidebarItem.onclick = () => {
-                    const hash = window.location.hash;
-
-                    if (hash === '#context') {
-                        const checkbox = document.querySelector(`.agent-select-cb[value="${agent.id}"]`);
-                        if (checkbox) checkbox.checked = !checkbox.checked;
-                        return;
-                    }
-
-                    if (hash === '#agenttools') {
-                        const select = document.getElementById('at-agent-select');
-                        if (select) {
-                            select.value = agent.id;
-                        }
-                        setSidebarSelectedAgent(agent.id);
-                        loadAgentTools(agent.id);
-                        return;
-                    }
-
-                    if (!hash || hash === '#' || hash === '') {
-                        window.location.href = `/edit?id=${agent.id}`;
-                        return;
-                    }
-
-                    switchView('playgen');
-                    setTimeout(() => {
-                        const avatarUrl = agent.avatarUrl || null;
-                        if (window.Playgen && window.Playgen.openChat) {
-                            window.Playgen.openChat(agent.id, displayName, emoji, avatarUrl);
-                        }
-                    }, 100);
+                    openAgentToolsChat(agent.id);
                 };
                 sidebarItem.innerHTML = `
                     <div class="relative w-8 h-8 shrink-0">
@@ -3290,7 +3368,8 @@
         const CATEGORY_LABELS = {
             technology: 'Technology', science: 'Science', economy: 'Economy',
             military: 'Military', sports: 'Sports', entertainment: 'Entertainment',
-            politics: 'Politics', society: 'Society', culture: 'Culture', history: 'History'
+            politics: 'Politics', society: 'Society', culture: 'Culture', history: 'History',
+            ai_tech: 'AI_Tech', AI_Tech: 'AI_Tech'
         };
 
         async function fetchRooms() {
@@ -3501,6 +3580,26 @@
                 select.appendChild(option);
             });
 
+            const hashTarget = getAgentToolsHashTarget();
+            if (hashTarget.type === 'channel' && hashTarget.id) {
+                const targetChannel = getChannelById(hashTarget.id);
+                if (targetChannel) {
+                    setSidebarSelectedChannel(targetChannel.id);
+                    loadAgentToolsChannel(targetChannel.id, { updateHash: false });
+                    return;
+                }
+            }
+
+            if (hashTarget.type === 'agent' && hashTarget.id) {
+                const exists = allAgents.some((agent) => agent.id === hashTarget.id);
+                if (exists) {
+                    select.value = hashTarget.id;
+                    setSidebarSelectedAgent(hashTarget.id);
+                    loadAgentTools(hashTarget.id, { updateHash: false });
+                    return;
+                }
+            }
+
             if (currentChannelId && getChannelById(currentChannelId)) {
                 setSidebarSelectedChannel(currentChannelId);
                 loadAgentToolsChannel(currentChannelId);
@@ -3645,7 +3744,7 @@
             });
         }
 
-        async function loadAgentTools(agentId) {
+        async function loadAgentTools(agentId, options = {}) {
             if (!agentId) return;
             if (currentChannelId) {
                 const oldSocket = atChannelSockets.get(currentChannelId);
@@ -3659,6 +3758,9 @@
             currentAgentToolId = agentId;
             if (previousAgentId && previousAgentId !== agentId) {
                 stopAgentToolsAudioPlayback();
+            }
+            if (options.updateHash !== false) {
+                updateAgentToolsHashSelection('agent', agentId);
             }
             setSidebarSelectedAgent(agentId);
             applyAgentToolsLayoutMode();
@@ -3904,7 +4006,7 @@
             return socket;
         }
 
-        async function loadAgentToolsChannel(channelId) {
+        async function loadAgentToolsChannel(channelId, options = {}) {
             const channel = getChannelById(channelId);
             if (!channel) return;
             const previousChannelId = currentChannelId;
@@ -3917,6 +4019,9 @@
             }
             currentChannelId = channel.id;
             currentAgentToolId = null;
+            if (options.updateHash !== false) {
+                updateAgentToolsHashSelection('channel', channel.id);
+            }
             stopAgentToolsAudioPlayback();
             setSidebarSelectedChannel(channel.id);
             applyAgentToolsLayoutMode();
@@ -6466,7 +6571,7 @@
                 autosizeAgentToolsTextarea();
             }
             window.addEventListener('resize', () => {
-                if (window.location.hash === '#agenttools' && (currentChannelId || currentAgentToolId)) {
+                if (isHashView('agenttools') && (currentChannelId || currentAgentToolId)) {
                     applyAgentToolsLayoutMode();
                     if (currentChannelId) {
                         renderAgentToolsChannelChat(currentChannelId);
@@ -7109,6 +7214,7 @@
                         <option value="society">Society</option>
                         <option value="culture">Culture</option>
                         <option value="history">History</option>
+                        <option value="ai_tech">AI_Tech</option>
                     </select>
                 </div>
             </div>

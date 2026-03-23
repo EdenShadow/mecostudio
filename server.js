@@ -5114,7 +5114,7 @@ class PodcastPusher {
     }
 
     this.ws.send(JSON.stringify(msg));
-    console.log(`[Podcast] 📡 手动${isLive ? '开播' : '下播'}命令已发送(C→S): type=${type}, room=${this.podcastRoomId}, reason=${reason}`);
+    console.log(`[Podcast] 📡 流生命周期命令已发送(C→S): type=${type}, room=${this.podcastRoomId}, reason=${reason}`);
     return true;
   }
 
@@ -5870,7 +5870,7 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
     hostRuntimeId: null,   // 主机页面运行实例ID（用于区分同页重连 vs 新页接管）
     podcastPusher: null,   // 该房间独立的 Podcast 推流连接
     pendingPodcastLiveEvent: null, // 待补发的开播/下播事件
-    pendingPodcastStreamingLifecycleEvent: null, // 待补发的 C→S 开播/下播命令（仅手动）
+    pendingPodcastStreamingLifecycleEvent: null, // 待补发的 C→S 开播/下播命令（手动或服务端关停）
     _suppressNextPodcastLiveEvent: false, // 避免服务端 stop_streaming 触发的停播回环上报
     pendingStreamingControlCommand: null, // 待补发给主机前端的开播/下播控制命令
     topicQueue: [],              // 当前麦序话题列表（从服务端拉取）
@@ -6080,12 +6080,17 @@ function listRuntimeRoomsSnapshot() {
 
 function stopActiveRoomRoundtables(options = {}) {
   const source = String(options?.source || 'pre_restart').trim() || 'pre_restart';
+  const notifyRoomServiceStop = Boolean(
+    options?.notifyRoomServiceStop ||
+    source === 'pre_restart' ||
+    source === 'shutdown'
+  );
   const activeRooms = Array.from(rooms.values()).filter((room) => room && room.channelId && room.isActive);
   const stopped = [];
 
   for (const room of activeRooms) {
     const channelId = room.channelId;
-    stopRoundTable(channelId, { source });
+    stopRoundTable(channelId, { source, notifyRoomServiceStop });
     abortOpenClawRequests((requestId, entry) => (entry.roomId || null) === channelId, 'StopBeforeRestart');
     const closedTtsSockets = closeRoomTtsSockets(channelId, 'pre_restart_stop_room');
     stopped.push({
@@ -6818,7 +6823,7 @@ function sendPodcastStreamingLifecycleEvent(room, isLive, reason = 'manual_click
 
   room.pendingPodcastStreamingLifecycleEvent = { isLive, reason, ts: Date.now() };
   reconnectPodcastPusher(room.channelId).catch((e) => {
-    console.warn(`[Podcast] ⚠️ 重连失败，待补发手动${isLive ? '开播' : '下播'}命令: ${e.message}`);
+    console.warn(`[Podcast] ⚠️ 重连失败，待补发${isLive ? '开播' : '下播'}命令: ${e.message}`);
   });
   return false;
 }
@@ -7654,7 +7659,13 @@ async function startRandomTopic(lang = 'zh', mod = null, channelId = null, optio
 // 结束圆桌讨论
 function stopRoundTable(channelId = null, options = {}) {
   const source = String(options?.source || '').trim();
+  const notifyRoomServiceStop = !!options?.notifyRoomServiceStop;
   const isManualClick = source === 'manual_click';
+  const sourceTag = source.toLowerCase();
+  const shouldSendStreamingStop = isManualClick || notifyRoomServiceStop || sourceTag === 'pre_restart' || sourceTag === 'shutdown' || sourceTag === 'sigterm' || sourceTag === 'sigint';
+  const lifecycleStopReason = isManualClick
+    ? 'manual_click_stop'
+    : (sourceTag ? `server_${sourceTag.replace(/[^a-z0-9_]+/g, '_')}_stop` : 'server_stop');
   console.log('[RoundTable] 讨论结束', channelId ? `(房间: ${channelId})` : '', source ? `(source: ${source})` : '');
 
   // 先打断前端本地播放（含已缓冲音频），确保“停房=立即停音频”
@@ -7695,9 +7706,10 @@ function stopRoundTable(channelId = null, options = {}) {
         room.podcastPusher.clearAudio();
         room.podcastPusher.playlistReset('stream_restart', true);
       }
-      // 仅手动点击下播后，发送 C→S stop_streaming
-      if (isManualClick) {
-        sendPodcastStreamingLifecycleEvent(room, false, 'manual_click_stop');
+      // 手动下播 + 服务重启/关停场景，都发送 C→S stop_streaming
+      if (shouldSendStreamingStop) {
+        const sent = sendPodcastStreamingLifecycleEvent(room, false, lifecycleStopReason);
+        console.log(`[Podcast] ${sent ? '✅' : '🕓'} 下播命令已处理: channel=${channelId}, reason=${lifecycleStopReason}`);
       }
     }
   }
