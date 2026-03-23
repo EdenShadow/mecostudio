@@ -767,6 +767,8 @@
 
     // TTS Manager 类
     var TTS_RATE_LIMIT_BACKOFF_STEPS_MS = [8000, 15000, 30000];
+    // 调试开关：关闭“失败重试/自动跳过”，用于观察真实失败形态
+    var ROUNDTABLE_DISABLE_FAILURE_RECOVERY = true;
     var ttsGlobalCooldownUntil = 0;
 
     function TTSManager(agentId) {
@@ -784,6 +786,8 @@
       this._muted = false; // 被用户打断后静音，阻止后续 TTS
       this.activeSources = 0; // 活跃播放源计数
       this.activeSrcList = []; // 活跃 AudioBufferSource 列表，用于强制停止
+      this._syncPlaybackSource = null; // 分机同步播放源（loadAndPlay）
+      this._loadPlayToken = 0; // 递增令牌：取消过期 loadAndPlay 回调
       this.endSignalSent = false; // 是否已发送 end 信号
       this.taskFinished = false; // MiniMax 已发送全部音频
       this.nearEndTimer = null; // 提前触发定时器
@@ -806,6 +810,14 @@
       this._pendingCacheChunks = [];
       this._pendingCacheComplete = false;
       this._rpmProfileFetched = false;
+      this._sendEndTimer = null;
+      this._turnStartedAt = 0;
+      this._lastTextChunkAt = 0;
+      this._lastTtsMsgAt = 0;
+      this._lastTtsEvent = '';
+      this._lastAudioChunkAt = 0;
+      this._lastStuckDiagKey = '';
+      this._lastStuckDiagAt = 0;
     }
     
     TTSManager.prototype.init = function() {
@@ -908,9 +920,14 @@
           console.warn(
             '[' + self.agentId + '] [RPM/API] reason=' + (reason || 'unknown') +
             ' | task_continue<=~' + (p.estimatedTaskContinueRpmCap || 'n/a') + '/min' +
+            ' | budget=' + (p.recommendedBudgetRpm || 'n/a') + '/min' +
             ' | real60s(global)=' + (p.realTaskContinueRpmGlobal || 0) + '/min' +
+            ' (' + (p.budgetUsageGlobalPct || 0) + '%budget)' +
             ' | real60s(this)=' + (p.realTaskContinueRpmScoped || 0) + '/min' +
+            ' (' + (p.budgetUsageScopedPct || 0) + '%budget)' +
             ' | minGap=' + (p.taskContinueMinGapMs || 'n/a') + 'ms' +
+            (p.rateLimitGuardActive ? (' | guard=' + (p.rateLimitGuardRemainingMs || 0) + 'ms') : '') +
+            ' | completeOnly=' + (!!preload.flushOnCompleteOnly) +
             ' | active=' + (active.minChars || 'n/a') + '字/' + (active.intervalMs || 'n/a') + 'ms' +
             ' | preload=' + (preload.minChars || 'n/a') + '字/' + (preload.intervalMs || 'n/a') + 'ms' +
             ' | queue=' + (p.queueDepth || 0) + '/' + (p.queueLimit || 'n/a') +
@@ -959,9 +976,16 @@
       }
       var thisWs = new WebSocket(ttsUrl);
       this.ws = thisWs;
+      function isCurrentWs() {
+        return self.ws === thisWs;
+      }
       console.log('[' + this.agentId + '] Connecting TTS WebSocket...' + (currentChannel ? ' (channel: ' + currentChannel + ')' : ''));
       
-      this.ws.onopen = function() {
+      thisWs.onopen = function() {
+        if (!isCurrentWs()) {
+          try { thisWs.close(); } catch (e) {}
+          return;
+        }
         self.isOpen = true;
         self.clearReconnectTimer();
         self._ttsRetryCount = 0;
@@ -970,7 +994,7 @@
         // 发送队列中的文本
         while (self.pendingTexts && self.pendingTexts.length > 0) {
           var t = self.pendingTexts.shift();
-          self.ws.send(JSON.stringify({type: 'text', content: t}));
+          thisWs.send(JSON.stringify({type: 'text', content: t}));
         }
         // 限流重试后重新发送 end 信号（必须在文本之后）
         if (self._needResendEnd) {
@@ -981,17 +1005,25 @@
       
       var audioChunkCount = 0;
       var self = this;
-      this.ws.onmessage = function(e) {
+      thisWs.onmessage = function(e) {
+        if (!isCurrentWs()) return;
         try {
           var d = JSON.parse(e.data);
+          self._lastTtsMsgAt = Date.now();
+          self._lastTtsEvent = d.event || ((d.data && d.data.audio) ? 'audio_chunk' : 'unknown');
           if (d.event === 'rpm_profile') {
             console.warn(
               '[' + self.agentId + '] [RPM] reason=' + (d.reason || 'unknown') +
               ' | mode=' + (d.flushMode || 'n/a') +
               ' | task_continue<=~' + (d.estimatedTaskContinueRpmCap || 'n/a') + '/min' +
+              ' | budget=' + (d.recommendedBudgetRpm || 'n/a') + '/min' +
               ' | real60s(global)=' + (d.realTaskContinueRpmGlobal || 0) + '/min' +
+              ' (' + (d.budgetUsageGlobalPct || 0) + '%budget)' +
               ' | real60s(this)=' + (d.realTaskContinueRpmScoped || 0) + '/min' +
+              ' (' + (d.budgetUsageScopedPct || 0) + '%budget)' +
               ' | minGap=' + (d.taskContinueMinGapMs || 'n/a') + 'ms' +
+              (d.rateLimitGuardActive ? (' | guard=' + (d.rateLimitGuardRemainingMs || 0) + 'ms') : '') +
+              ' | completeOnly=' + (!!d.flushOnCompleteOnly) +
               ' | flush=' + (d.textFlushMinChars || 'n/a') + '字/' + (d.textFlushIntervalMs || 'n/a') + 'ms' +
               ' | queue=' + (d.queueDepth || 0) + '/' + (d.queueLimit || 'n/a') +
               ' | cooldownLeft=' + (d.cooldownRemainingMs || 0) + 'ms'
@@ -1000,6 +1032,7 @@
           }
           if (d.data && d.data.audio) {
             audioChunkCount++;
+            self._lastAudioChunkAt = Date.now();
             if (audioChunkCount % 10 === 0) {
               console.log('[' + self.agentId + '] 已收到 ' + audioChunkCount + ' 个音频块');
             }
@@ -1039,6 +1072,9 @@
             );
 
             if (isRateLimit) {
+              if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+                console.warn('[' + self.agentId + '] TTS 被限流（调试模式：不自动重试）');
+              } else {
               var nextRetryCount = self._ttsRetryCount + 1;
               var retryIndex = Math.min(nextRetryCount - 1, TTS_RATE_LIMIT_BACKOFF_STEPS_MS.length - 1);
               var retryDelay = TTS_RATE_LIMIT_BACKOFF_STEPS_MS[retryIndex] + Math.floor(Math.random() * 1200);
@@ -1060,6 +1096,7 @@
                 self.endSignalSent = false;
                 self.scheduleReconnect(retryDelay, 'rate_limit');
                 return; // 不标记 taskFinished，不触发兜底
+              }
               }
             }
 
@@ -1084,18 +1121,33 @@
                 console.log('[' + self.agentId + '] 延后上报缓存完成：等待真实开口后再发送');
               }
             }
-            // 如果音频已经播完（activeSources=0），直接 resolve _resolveMyDone，避免卡死下一位
-            if (self._resolveMyDone && self.activeSources === 0 && (!self.audioChunks || self.audioChunks.length === 0)) {
+            // 如果音频已经播完，直接 resolve _resolveMyDone，避免卡死下一位
+            // 需同时满足：activeSources=0、srcList 为空、剩余调度时长≈0，防止计数漂移导致提前放行。
+            var failSrcCount = self.activeSrcList ? self.activeSrcList.length : 0;
+            var failRemaining = self.audioContext ? (self.nextTime - self.audioContext.currentTime) : 0;
+            if (
+              self._resolveMyDone &&
+              self.activeSources === 0 &&
+              failSrcCount === 0 &&
+              failRemaining <= 0.12 &&
+              (!self.audioChunks || self.audioChunks.length === 0)
+            ) {
               console.log('[' + self.agentId + '] ✅ 重试耗尽 + 音频已播完，resolve prevSpeakerDone');
               self._resolveMyDone();
               self._resolveMyDone = null;
             }
             if (!self.audioChunks || self.audioChunks.length === 0) {
+              if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+                console.warn('[' + self.agentId + '] task_failed 无音频（调试模式：不自动跳过）');
+                return;
+              }
               self.handleNoAudioCompletion('task_failed无音频兜底: ' + statusMsg);
               return;
             }
             if (self.audioStarted) {
-              if (AUTO_SKIP_ON_FAILURE) {
+              if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+                console.warn('[' + self.agentId + '] task_failed（调试模式：不自动跳过）');
+              } else if (AUTO_SKIP_ON_FAILURE) {
                 setTimeout(function() {
                   self.fireNearEndCallback('task_failed兜底');
                 }, 1000);
@@ -1104,8 +1156,12 @@
               }
             } else {
               // 关键修复：预准备态也必须收敛，否则“限流+未开口”会把整轮卡死在 nextPrepared。
-              console.warn('[' + self.agentId + '] task_failed 且 audioStarted=false，启动有序兜底推进');
-              self.handleNoAudioCompletion('task_failed预准备态兜底: ' + statusMsg);
+              if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+                console.warn('[' + self.agentId + '] task_failed 且 audioStarted=false（调试模式：不自动推进）');
+              } else {
+                console.warn('[' + self.agentId + '] task_failed 且 audioStarted=false，启动有序兜底推进');
+                self.handleNoAudioCompletion('task_failed预准备态兜底: ' + statusMsg);
+              }
             }
           }
           // MiniMax 全部音频已发送完毕
@@ -1115,7 +1171,11 @@
             if (self.audioChunks.length > 0) {
               self.playChunks();
             } else {
-              self.handleNoAudioCompletion('task_finished无音频兜底');
+              if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+                console.warn('[' + self.agentId + '] task_finished 无音频（调试模式：不自动跳过）');
+              } else {
+                self.handleNoAudioCompletion('task_finished无音频兜底');
+              }
             }
 
             // 主机：通知服务端TTS完成
@@ -1138,16 +1198,16 @@
         }
       };
       
-      this.ws.onerror = function(e) { 
+      thisWs.onerror = function(e) { 
+        if (!isCurrentWs()) return;
         console.error('[' + self.agentId + '] TTS WebSocket error:', e);
       };
       thisWs.onclose = function() {
+        if (!isCurrentWs()) return;
         console.log('[' + self.agentId + '] TTS WebSocket closed');
-        // 保护：如果 self.ws 已经被重试替换为新连接，不要覆盖
-        if (self.ws === thisWs) {
-          self.isOpen = false;
-          self.ws = null;
-        }
+        self._lastTtsEvent = 'ws_closed';
+        self.isOpen = false;
+        self.ws = null;
         // 兜底：等解码队列跑完，再看是否需要触发
         // 注意：只有真正开始播放的人才需要兜底，还在等待前一位的不需要
         if (!self.callbackFired && self.audioStarted) {
@@ -1157,9 +1217,14 @@
               console.log('[' + self.agentId + '] [ws.onclose 兜底] 回调已被其他路径触发，跳过');
               return;
             }
-            if (self.activeSources > 0) {
+            var srcListCount = self.activeSrcList ? self.activeSrcList.length : 0;
+            var remaining = self.audioContext ? (self.nextTime - self.audioContext.currentTime) : 0;
+            if (self.activeSources > 0 || srcListCount > 0 || remaining > 0.12) {
               // 还有音频在播放，交给 src.onended 处理
-              console.log('[' + self.agentId + '] [ws.onclose 兜底] 还有 ' + self.activeSources + ' 个音频源在播放，等 src.onended');
+              console.log(
+                '[' + self.agentId + '] [ws.onclose 兜底] 仍有播放残留，等待 src.onended | activeSources=' +
+                self.activeSources + ', srcList=' + srcListCount + ', remaining=' + remaining.toFixed(2) + 's'
+              );
             } else {
               // 没有音频在播放了，直接触发
               console.warn('[' + self.agentId + '] [ws.onclose 兜底] 无活跃音频，触发 nearEnd');
@@ -1198,7 +1263,13 @@
     TTSManager.prototype.sendEnd = function() {
       var self = this;
       this.endSignalSent = true;
-      setTimeout(function() {
+      if (this._sendEndTimer) {
+        clearTimeout(this._sendEndTimer);
+        this._sendEndTimer = null;
+      }
+      this._sendEndTimer = setTimeout(function() {
+        self._sendEndTimer = null;
+        if (!self.endSignalSent) return;
         if (self.ws && self.ws.readyState === 1) {
           console.log('[' + self.agentId + '] 发送 TTS end 信号');
           self.ws.send(JSON.stringify({type: 'end'}));
@@ -1239,6 +1310,10 @@
     // 无音频兜底：TTS 返回完成/失败但没有任何音频块时，主动收敛本轮，避免圆桌卡死
     TTSManager.prototype.handleNoAudioCompletion = function(reason) {
       if (this._muted) return;
+      if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+        console.warn('[' + this.agentId + '] ⚠️ ' + String(reason || '无音频兜底') + '（调试模式：禁用自动推进）');
+        return;
+      }
       var note = String(reason || '无音频兜底');
       var isRateLimitFailure = /rate\s*limit|rpm/i.test(note);
       if (!AUTO_SKIP_ON_FAILURE) {
@@ -1504,6 +1579,17 @@
         return;
       }
 
+      // 关键保护：如果说话锁已切到其他人，当前 agent 的迟到音频块必须丢弃，
+      // 否则会出现“两个人同时说话”。
+      if (!this.firstPlay && isSpeaking && currentSpeaker && currentSpeaker !== this.agentId) {
+        this.activeSources--;
+        if (this.activeSources < 0) this.activeSources = 0;
+        console.warn(
+          '[' + this.agentId + '] 丢弃迟到音频块：当前说话者已切换为 ' + currentSpeaker + '，避免双人重叠播报'
+        );
+        return;
+      }
+
       // 首次播放：等上一位发言人的音频自然播完
       // 注意：必须在 _waitForPrevSpeaker 之后才真正标记 audioStarted，防止提前触发下一位
       var hasWaited = false;
@@ -1606,12 +1692,26 @@
               // 通知下一位：我的音频已经播完了，你可以开始播了
               // [Fix] 必须确保文本生成也已完成（taskFinished），防止因网络卡顿导致音频中断时误判为结束
               var wsClosedOrMissing = !self.ws || self.ws.readyState !== 1;
-              if (self._resolveMyDone && (!self.audioChunks || self.audioChunks.length === 0) && (self.taskFinished || wsClosedOrMissing)) {
+              var onendedSrcCount = self.activeSrcList ? self.activeSrcList.length : 0;
+              var onendedRemaining = self.audioContext ? (self.nextTime - self.audioContext.currentTime) : 0;
+              var canResolveDone =
+                self.activeSources === 0 &&
+                onendedSrcCount === 0 &&
+                onendedRemaining <= 0.12 &&
+                (!self.audioChunks || self.audioChunks.length === 0) &&
+                (self.taskFinished || wsClosedOrMissing);
+              if (self._resolveMyDone && canResolveDone) {
                 console.log('[' + self.agentId + '] ✅ 音频全部播完，resolve prevSpeakerDone (taskFinished=' + self.taskFinished + ', wsClosed=' + wsClosedOrMissing + ')');
                 self._resolveMyDone();
                 self._resolveMyDone = null;
               } else if (self._resolveMyDone) {
-                console.log('[' + self.agentId + '] ⏳ 音频缓冲耗尽但任务/连接未结束，保持 prevSpeakerDone 锁定 (taskFinished=' + self.taskFinished + ', wsReady=' + (self.ws ? self.ws.readyState : 'null') + ')');
+                console.log(
+                  '[' + self.agentId + '] ⏳ 音频缓冲耗尽但尚未满足放行条件，保持 prevSpeakerDone 锁定 ' +
+                  '(taskFinished=' + self.taskFinished +
+                  ', wsReady=' + (self.ws ? self.ws.readyState : 'null') +
+                  ', srcList=' + onendedSrcCount +
+                  ', remaining=' + onendedRemaining.toFixed(2) + 's)'
+                );
               }
               // 兜底：如果回调从未触发（异常情况），在音频播完时强制触发避免卡死
               if (!self.callbackFired && self.audioStarted) {
@@ -1641,6 +1741,7 @@
     // 强制停止当前所有音频播放（用于用户点停止或异常）
     TTSManager.prototype.stopPlayback = function() {
       this._stopped = true; // 阻止异步解码完成后继续播放
+      this._loadPlayToken++;
       this.clearReconnectTimer();
       var remaining = this.audioContext ? (this.nextTime - this.audioContext.currentTime) : 0;
       if (this.activeSources > 0 || (this.activeSrcList && this.activeSrcList.length > 0)) {
@@ -1656,12 +1757,21 @@
         clearTimeout(this._safetyTimer);
         this._safetyTimer = null;
       }
+      if (this._sendEndTimer) {
+        clearTimeout(this._sendEndTimer);
+        this._sendEndTimer = null;
+      }
       // 停止所有正在播放的 AudioBufferSource
       if (this.activeSrcList && this.activeSrcList.length > 0) {
         this.activeSrcList.forEach(function(s) { try { s.stop(); } catch(e) {} });
         this.activeSrcList = [];
       }
+      if (this._syncPlaybackSource) {
+        try { this._syncPlaybackSource.stop(); } catch (e) {}
+        this._syncPlaybackSource = null;
+      }
       this.activeSources = 0;
+      this.isPlaying = false;
       this.showIndicator(false);
       // resolve "我说完了"，防止下一位永远等不到
       if (this._resolveMyDone) {
@@ -1673,6 +1783,7 @@
     // 从缓存加载音频并播放（用于分机同步）
     TTSManager.prototype.loadAndPlay = function(audioHex, timestamp) {
       var self = this;
+      var playbackToken = ++this._loadPlayToken;
 
       // 先停止之前的播放
       this.stopPlayback();
@@ -1693,6 +1804,16 @@
       this.audioContext.decodeAudioData(
         audioBytes.buffer,
         function(buffer) {
+          if (
+            playbackToken !== self._loadPlayToken ||
+            self._stopped ||
+            self._muted ||
+            !roundTableActive
+          ) {
+            console.log('[' + self.agentId + '] 跳过过期/停播后的 loadAndPlay 回调');
+            return;
+          }
+
           // 检查解码后的音频时长
           console.log('[Room] 音频解码成功，总时长:', buffer.duration, 's, seek位置:', timestamp, 'ms =', (timestamp / 1000).toFixed(2), 's');
 
@@ -1700,6 +1821,7 @@
           var source = self.audioContext.createBufferSource();
           source.buffer = buffer;
           source.connect(self.audioContext.destination);
+          self._syncPlaybackSource = source;
 
           // 计算起始位置（毫秒转秒）
           var startOffset = Math.max(0, timestamp / 1000);
@@ -1715,11 +1837,24 @@
           console.log('[Room] 播放音频 from', startOffset.toFixed(2), 's, 剩余时长:', duration.toFixed(2), 's');
 
           if (duration > 0) {
+            if (
+              playbackToken !== self._loadPlayToken ||
+              self._stopped ||
+              self._muted ||
+              !roundTableActive
+            ) {
+              console.log('[' + self.agentId + '] 跳过停播后的 sync 音频 start');
+              self._syncPlaybackSource = null;
+              return;
+            }
             source.start(0, startOffset);
             self.isPlaying = true;
             self.showIndicator(true);
 
             source.onended = function() {
+              if (self._syncPlaybackSource === source) {
+                self._syncPlaybackSource = null;
+              }
               self.isPlaying = false;
               self.showIndicator(false);
               console.log('[' + self.agentId + '] 缓存音频播放完成');
@@ -1831,6 +1966,7 @@
       this.ws = null;
       this.isOpen = false;
       this.audioChunks = [];
+      this._syncPlaybackSource = null;
     };
 
     TTSManager.prototype.reset = function() {
@@ -1845,6 +1981,8 @@
       this._muted = false; // reset 解除静音
       this.activeSources = 0;
       this.activeSrcList = [];
+      this._syncPlaybackSource = null;
+      this._loadPlayToken++;
       this.endSignalSent = false;
       this.taskFinished = false;
       this.callbackFired = false;
@@ -1861,6 +1999,7 @@
       this.nearEndTimer = null;
       if (this._safetyTimer) { clearTimeout(this._safetyTimer); this._safetyTimer = null; }
       if (this._noAudioRecoveryTimer) { clearTimeout(this._noAudioRecoveryTimer); this._noAudioRecoveryTimer = null; }
+      if (this._sendEndTimer) { clearTimeout(this._sendEndTimer); this._sendEndTimer = null; }
       this._allSentTexts = [];
       this._ttsRetryCount = 0;
       this._needResendEnd = false;
@@ -1868,6 +2007,13 @@
       this._speechStartedNotified = false;
       this._speechStartedRetryCount = 0;
       this._cacheCompleteSent = false;
+      this._turnStartedAt = 0;
+      this._lastTextChunkAt = 0;
+      this._lastTtsMsgAt = 0;
+      this._lastTtsEvent = '';
+      this._lastAudioChunkAt = 0;
+      this._lastStuckDiagKey = '';
+      this._lastStuckDiagAt = 0;
       streamFinalized[this.agentId] = true;
       if (this._speechStartedRetryTimer) {
         clearTimeout(this._speechStartedRetryTimer);
@@ -1919,6 +2065,19 @@
           console.warn('[Room WS] 连接被新会话接管，停止自动重连:', agentId, evt.reason || '');
           return;
         }
+        // 当前 channel 在服务端已丢失：先停本地音频并触发自动建房，避免死循环重连旧 channel
+        if (evt && evt.code === 4004) {
+          console.warn('[Room WS] 房间不存在，停止旧 channel 重连并触发恢复:', agentId, evt.reason || '');
+          nextSpeakerPending = null;
+          hardStopLocalAudioAndTTS();
+          resetRoundtableRuntime();
+          roundtableStartedAtMs = 0;
+          applyRoundTableUiState(false, { updateStatus: true, statusText: '房间已失效，正在自动重建连接...' });
+          if (currentChannel) {
+            recoverMissingRoom('ws_close_room_missing');
+          }
+          return;
+        }
         setTimeout(function() { initConnection(agentId); }, 3000);
       };
 
@@ -1943,6 +2102,151 @@
     var nextSpeakerPending = null; // 下一位发言人
     var isInterrupted = false; // 是否正在打断状态
     var AUTO_SKIP_ON_FAILURE = false; // 调试模式：失败后不自动跳过到下一位
+    var lastServerStuckDiagSignature = '';
+    var lastServerStuckDiagAt = 0;
+    var STUCK_DIAG_REPEAT_MS = 8000;
+
+    function wsStateName(state) {
+      if (state === WebSocket.CONNECTING) return 'CONNECTING';
+      if (state === WebSocket.OPEN) return 'OPEN';
+      if (state === WebSocket.CLOSING) return 'CLOSING';
+      if (state === WebSocket.CLOSED) return 'CLOSED';
+      return String(state);
+    }
+
+    function logServerStuckDiagnostics(diag, source) {
+      if (!diag) return;
+      var now = Date.now();
+      var reasons = (diag.reasons || []).map(function(item) {
+        var code = item && item.code ? item.code : 'unknown';
+        var detail = item && item.detail ? item.detail : '';
+        return detail ? (code + ':' + detail) : code;
+      });
+      var summary = diag.summary || (reasons.join(',') || 'none');
+      var signature = diag.signature || summary;
+      if (diag.isStuck) {
+        if (signature !== lastServerStuckDiagSignature || (now - lastServerStuckDiagAt) >= STUCK_DIAG_REPEAT_MS) {
+          console.warn(
+            '[STUCK_DIAG][server][' + (source || 'unknown') + '] summary=' + summary +
+            ' | reasons=' + (reasons.join(' | ') || 'none') +
+            ' | snapshot=' + JSON.stringify(diag.snapshot || {})
+          );
+          lastServerStuckDiagSignature = signature;
+          lastServerStuckDiagAt = now;
+        }
+        return;
+      }
+      if (lastServerStuckDiagSignature) {
+        console.log('[STUCK_DIAG][server] cleared');
+      }
+      lastServerStuckDiagSignature = '';
+      lastServerStuckDiagAt = 0;
+    }
+
+    function buildLocalStuckDiagnostics(agentId) {
+      var mgr = ttsManagers[agentId];
+      if (!mgr) return null;
+      if (streamFinalized[agentId] !== false) return null;
+
+      var now = Date.now();
+      var turnAgeMs = mgr._turnStartedAt ? (now - mgr._turnStartedAt) : 0;
+      var lastTextChunkAgoMs = mgr._lastTextChunkAt ? (now - mgr._lastTextChunkAt) : turnAgeMs;
+      var lastTtsMsgAgoMs = mgr._lastTtsMsgAt ? (now - mgr._lastTtsMsgAt) : -1;
+      var wsState = mgr.ws ? mgr.ws.readyState : -1;
+      var audioQueue = (mgr.audioChunks && mgr.audioChunks.length) || 0;
+      var reasons = [];
+
+      if (!connections[agentId] || !connections[agentId].connected) {
+        reasons.push('agent_ws_disconnected');
+      }
+      if (!mgr.ws) {
+        reasons.push('tts_ws_missing');
+      } else if (wsState !== WebSocket.OPEN) {
+        reasons.push('tts_ws_' + wsStateName(wsState).toLowerCase());
+      }
+      if (mgr._waitForPrevSpeaker && !mgr.audioStarted && turnAgeMs > 3000) {
+        reasons.push('waiting_prev_speaker_done');
+      }
+      if (!mgr.textComplete && turnAgeMs > 8000 && lastTextChunkAgoMs > 8000) {
+        reasons.push('llm_no_new_text_chunk');
+      }
+      if (mgr.textComplete && !mgr.audioStarted && audioQueue === 0 && turnAgeMs > 3000) {
+        reasons.push('text_done_no_audio_start');
+      }
+      if (mgr.taskFinished && !mgr.audioStarted && audioQueue === 0) {
+        reasons.push('tts_finished_without_audio');
+      }
+      if (mgr.audioStarted && !mgr.taskFinished && mgr.activeSources === 0 && audioQueue === 0 && turnAgeMs > 6000) {
+        reasons.push('audio_drained_waiting_tts_finish');
+      }
+      if (mgr.audioStarted && mgr.taskFinished && mgr.activeSources === 0 && audioQueue === 0 && !mgr.callbackFired) {
+        reasons.push('task_done_waiting_near_end_callback');
+      }
+      if (reasons.length === 0) return null;
+      if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+        reasons.push('auto_recovery_disabled');
+      }
+
+      return {
+        agentId: agentId,
+        reasons: reasons,
+        turnAgeMs: turnAgeMs,
+        lastTextChunkAgoMs: lastTextChunkAgoMs,
+        lastTtsMsgAgoMs: lastTtsMsgAgoMs,
+        lastTtsEvent: mgr._lastTtsEvent || 'none',
+        wsState: wsStateName(wsState),
+        textComplete: !!mgr.textComplete,
+        audioStarted: !!mgr.audioStarted,
+        taskFinished: !!mgr.taskFinished,
+        callbackFired: !!mgr.callbackFired,
+        activeSources: Number(mgr.activeSources || 0),
+        audioQueue: audioQueue,
+        waitingPrev: !!mgr._waitForPrevSpeaker,
+        isSpeaking: !!isSpeaking,
+        currentSpeaker: currentSpeaker || null
+      };
+    }
+
+    function logLocalStuckDiagnostics() {
+      if (!roundTableActive) return;
+      var agentIds = window.roomAgentIds || AGENT_IDS;
+      var now = Date.now();
+      for (var i = 0; i < agentIds.length; i++) {
+        var agentId = agentIds[i];
+        var mgr = ttsManagers[agentId];
+        if (!mgr) continue;
+        var diag = buildLocalStuckDiagnostics(agentId);
+        if (!diag) {
+          if (mgr._lastStuckDiagKey) {
+            console.log('[STUCK_DIAG][local][' + agentId + '] cleared');
+            mgr._lastStuckDiagKey = '';
+            mgr._lastStuckDiagAt = 0;
+          }
+          continue;
+        }
+        var signature = diag.reasons.join('|') + '|' + diag.wsState + '|' + String(diag.currentSpeaker || '');
+        if (signature !== mgr._lastStuckDiagKey || (now - mgr._lastStuckDiagAt) >= STUCK_DIAG_REPEAT_MS) {
+          console.warn(
+            '[STUCK_DIAG][local][' + agentId + '] reasons=' + diag.reasons.join('|') +
+            ' | turnAge=' + diag.turnAgeMs + 'ms' +
+            ' | ws=' + diag.wsState +
+            ' | textComplete=' + diag.textComplete +
+            ' | audioStarted=' + diag.audioStarted +
+            ' | taskFinished=' + diag.taskFinished +
+            ' | callbackFired=' + diag.callbackFired +
+            ' | activeSources=' + diag.activeSources +
+            ' | audioQueue=' + diag.audioQueue +
+            ' | lastTextChunkAgo=' + diag.lastTextChunkAgoMs + 'ms' +
+            ' | lastTtsMsgAgo=' + diag.lastTtsMsgAgoMs + 'ms' +
+            ' | lastTtsEvent=' + diag.lastTtsEvent +
+            ' | waitingPrev=' + diag.waitingPrev +
+            ' | currentSpeaker=' + (diag.currentSpeaker || 'null')
+          );
+          mgr._lastStuckDiagKey = signature;
+          mgr._lastStuckDiagAt = now;
+        }
+      }
+    }
 
     function applyRoundTableUiState(isActive, options) {
       options = options || {};
@@ -1999,10 +2303,6 @@
       }
     }
 
-    function escapeRegExp(text) {
-      return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
     function extractLastNextDirectiveName(text) {
       var source = String(text || '');
       if (!source) return null;
@@ -2024,38 +2324,6 @@
         .replace(/[ \t]+\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
-    }
-
-    // 兜底：当模型漏写 {next: "..."} 时，尝试从文本中推断“被点名回答的人”
-    function inferDesignatedNextFromSpeech(content, currentAgentId) {
-      if (!content) return null;
-      var text = String(content);
-      var agentIds = (window.roomAgentIds || AGENT_IDS || []).filter(function(id) {
-        return id && id !== currentAgentId;
-      });
-      if (agentIds.length === 0) return null;
-
-      var candidates = [];
-      for (var i = 0; i < agentIds.length; i++) {
-        var id = agentIds[i];
-        var agent = (window.roomAgents && window.roomAgents[id]) || {};
-        var fullName = String(agent.displayName || agent.name || '').trim();
-        if (!fullName) continue;
-
-        // 只识别“句首点名 + 提问句”形态，避免普通提及误判
-        var pattern = new RegExp(
-          '(^|[\\n\\r.!?。！？]\\s*)' +
-          escapeRegExp(fullName) +
-          '\\s*[,:：，]?[^\\n\\r]{0,140}[?？]',
-          'i'
-        );
-        if (pattern.test(text)) {
-          candidates.push(fullName);
-        }
-      }
-
-      if (candidates.length === 1) return candidates[0];
-      return null;
     }
 
     function handleStreamingControlMessage(data) {
@@ -2116,6 +2384,7 @@
     }
 
     function scheduleAgentStreamIdleTimeout(agentId) {
+      if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) return;
       clearAgentStreamIdleTimer(agentId);
       typingTimeouts[agentId] = setTimeout(function() {
         if (streamFinalized[agentId]) return;
@@ -2168,9 +2437,9 @@
       // 圆桌讨论：标记文本完成，检查是否可以准备下一位
       var rawSpeechContent = currentSpeechBuffers[agentId] || typingBuffers[agentId] || '';
       var speechContent = String(rawSpeechContent || '').trim();
-      var fallbackSpeechContent = '[系统兜底] 当前轮文本未完整返回，请继续下一位。';
-      if (roundTableActive) {
-        var capturedContent = speechContent || fallbackSpeechContent;
+        var fallbackSpeechContent = '[系统兜底] 当前轮文本未完整返回，请继续下一位。';
+        if (roundTableActive) {
+        var capturedContent = speechContent || (ROUNDTABLE_DISABLE_FAILURE_RECOVERY ? '' : fallbackSpeechContent);
         var capturedId = agentId;
         
         // 从 AI 回复内容中提取 {next: ...} 标记（支持各种大小写和空格格式）
@@ -2178,11 +2447,7 @@
         if (extractedDesignatedNext) {
           console.log('[' + agentId + '] 🎯 从回复内容中提取到指定发言者:', extractedDesignatedNext);
         } else {
-          var inferredNext = inferDesignatedNextFromSpeech(capturedContent, agentId);
-          if (inferredNext) {
-            extractedDesignatedNext = inferredNext;
-            console.log('[' + agentId + '] 🎯 未检测到{next}，兜底推断指定发言者:', extractedDesignatedNext);
-          }
+          console.log('[' + agentId + '] 🧭 未检测到显式 {next}，按系统麦序调度下一位');
         }
 
         // 从 AI 回复内容中提取 {changeTopic: true} 标记
@@ -2192,7 +2457,11 @@
           console.log('[' + agentId + '] 🔄 从回复内容中提取到换话题请求');
         }
         if (!speechContent) {
-          console.warn('[' + agentId + '] ⚠️ end/idle 收敛时文本为空，使用兜底内容推进麦序');
+          if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+            console.warn('[' + agentId + '] ⚠️ end/idle 收敛时文本为空（调试模式：不上兜底文本）');
+          } else {
+            console.warn('[' + agentId + '] ⚠️ end/idle 收敛时文本为空，使用兜底内容推进麦序');
+          }
         }
 
         // 保存回调函数
@@ -2204,26 +2473,27 @@
         ttsManagers[agentId].textComplete = true;
         ttsManagers[agentId].checkPrepareNext('文本完成');
 
-        // 安全兜底：30秒周期检查，如果 onNearEnd 从未触发且音频已开始播放，强制触发避免圆桌永久卡死
-        // 注意：如果 agent 还在等前一位播完（audioStarted=false），不触发，重新排期
-        (function(mgr, cId) {
-          function safetyCheck() {
-            if (mgr.callbackFired) return; // 已触发过，不需要兜底
-            if (!mgr.audioStarted) {
-              // 还没开始播放（等待前一位），不强制触发，重新排期
-              console.log('[' + cId + '] ⏰ 安全检查：audioStarted=false，尚未开始播放，重新等待30秒');
-              mgr._safetyTimer = setTimeout(safetyCheck, 30000);
-              return;
+        // 安全兜底：调试模式下禁用，避免自动推进掩盖真实失败
+        if (!ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+          (function(mgr, cId) {
+            function safetyCheck() {
+              if (mgr.callbackFired) return; // 已触发过，不需要兜底
+              if (!mgr.audioStarted) {
+                // 还没开始播放（等待前一位），不强制触发，重新排期
+                console.log('[' + cId + '] ⏰ 安全检查：audioStarted=false，尚未开始播放，重新等待30秒');
+                mgr._safetyTimer = setTimeout(safetyCheck, 30000);
+                return;
+              }
+              if (!AUTO_SKIP_ON_FAILURE) {
+                console.warn('[' + cId + '] ⏰ 安全检查命中，但按配置不自动跳过');
+                return;
+              }
+              console.error('[' + cId + '] ⏰ 30秒安全兜底触发！强制 notifySpeechEnded');
+              mgr.fireNearEndCallback('30s安全兜底');
             }
-            if (!AUTO_SKIP_ON_FAILURE) {
-              console.warn('[' + cId + '] ⏰ 安全检查命中，但按配置不自动跳过');
-              return;
-            }
-            console.error('[' + cId + '] ⏰ 30秒安全兜底触发！强制 notifySpeechEnded');
-            mgr.fireNearEndCallback('30s安全兜底');
-          }
-          mgr._safetyTimer = setTimeout(safetyCheck, 30000);
-        })(ttsManagers[agentId], agentId);
+            mgr._safetyTimer = setTimeout(safetyCheck, 30000);
+          })(ttsManagers[agentId], agentId);
+        }
       }
 
       ttsManagers[agentId].appendText('', true);
@@ -2297,6 +2567,19 @@
       if (data.type === 'speaker_prepared') {
         console.log('[Room] 下一位发言人已准备:', data.nextAgentId);
         nextSpeakerPending = data.nextAgentId;
+        return;
+      }
+
+      if (data.type === 'room_missing') {
+        console.warn('[Room] 收到 room_missing，停止本地播放并自动恢复房间');
+        nextSpeakerPending = null;
+        hardStopLocalAudioAndTTS();
+        resetRoundtableRuntime();
+        roundtableStartedAtMs = 0;
+        applyRoundTableUiState(false, { updateStatus: true, statusText: '房间已失效，正在自动重建连接...' });
+        if (currentChannel) {
+          recoverMissingRoom('ws_room_missing_message');
+        }
         return;
       }
 
@@ -2392,12 +2675,6 @@
             userInterruptTarget = null;
           }
           // 主持人消息：显示并立即触发回复
-          // 检测是否有指定下一个发言者的 JSON 标记 {next: "agentId"}（只能指定一个人）
-          let designatedNextAgent = extractLastNextDirectiveName(data.message);
-          if (designatedNextAgent) {
-            console.log('[' + agentId + '] 🎯 检测到指定下一个发言者:', designatedNextAgent);
-          }
-          
           // 过滤掉 {next: ...} 标记，用于TTS和发送给AI（但不影响GUI显示）
           const cleanMessage = stripNextDirectives(data.message);
           
@@ -2417,8 +2694,7 @@
           */
 
           ttsManagers[agentId].speechType = data.speechType || 'next';
-          ttsManagers[agentId].designatedNextAgent = designatedNextAgent; // 保存指定发言者信息
-          console.log('[' + agentId + '] 收到主持人消息 (' + (data.speechType || 'next') + ')' + (designatedNextAgent ? ', 指定下一个: ' + designatedNextAgent : '') + '，开始生成回复');
+          console.log('[' + agentId + '] 收到主持人消息 (' + (data.speechType || 'next') + ')，开始生成回复');
 
           // 标记当前发言人（用于串行控制，防止连锁触发）
           // 注意：这个不是用于滚动的，滚动使用 speaker_prepared 消息中设置的 nextSpeakerPending
@@ -2428,14 +2704,26 @@
             console.log('[RoundTable] 设置 nextSpeakerPending (首位发言人): ' + agentId);
           }
 
-          // 发送 chat 消息（带重连重试，避免卡在“准备中”）
-          sendAgentChatWithRetry(agentId, cleanMessage, 10, 800).then(function(sent) {
-            if (sent) {
-              console.log('[' + agentId + '] ✅ chat 消息已发送');
-              return;
+          // 调试模式：禁用 chat 自动重试，失败直接暴露
+          if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+            var directWs = connections[agentId] && connections[agentId].ws;
+            if (directWs && directWs.readyState === WebSocket.OPEN) {
+              directWs.send(JSON.stringify({ type: 'chat', message: cleanMessage }));
+              console.log('[' + agentId + '] ✅ chat 消息已发送（单次）');
+            } else {
+              console.error('[' + agentId + '] ❌ chat 发送失败（调试模式：不重试）');
+              addMessage(agentId, '[系统] chat 发送失败（调试模式：不重试）', 'system');
             }
-            addMessage(agentId, '[系统] 连接超时，未自动跳过，等待手动处理', 'system');
-          });
+          } else {
+            // 发送 chat 消息（带重连重试，避免卡在“准备中”）
+            sendAgentChatWithRetry(agentId, cleanMessage, 10, 800).then(function(sent) {
+              if (sent) {
+                console.log('[' + agentId + '] ✅ chat 消息已发送');
+                return;
+              }
+              addMessage(agentId, '[系统] 连接超时，未自动跳过，等待手动处理', 'system');
+            });
+          }
           break;
         case 'start':
           // 打断后忽略 start 消息（在 handleMessage 开头已处理）
@@ -2466,6 +2754,7 @@
           setLoading(agentId, true);
 
           ttsManagers[agentId].reset();
+          ttsManagers[agentId]._turnStartedAt = Date.now();
           streamFinalized[agentId] = false;
           clearAgentStreamIdleTimer(agentId);
 
@@ -2497,6 +2786,7 @@
           }
           typingBuffers[agentId] += data.content;
           currentSpeechBuffers[agentId] += data.content;
+          ttsManagers[agentId]._lastTextChunkAt = Date.now();
           updateStreamingMessage(agentId, typingBuffers[agentId]);
           ttsManagers[agentId].appendText(data.content, false);
           scheduleAgentStreamIdleTimeout(agentId);
@@ -2528,17 +2818,17 @@
             break;
           }
 
-          // fetch失败时，生成默认回复内容
-          var fallbackContent = '我没什么要说的。(I have nothing to say.)';
-          console.warn('[' + agentId + '] ⚠️ fetch 失败，使用默认内容');
+          var errMsg = (data && data.message) ? String(data.message) : 'fetch 失败';
           clearAgentStreamIdleTimer(agentId);
           streamFinalized[agentId] = true;
-
-          // 显示默认内容
-          addMessage(agentId, fallbackContent, 'error');
+          addMessage(agentId, '[推理失败] ' + errMsg, 'error');
           setLoading(agentId, false);
 
-          // 错误分支没有音频播放，必须主动收敛本轮状态，避免下一位永远等待
+          if (ROUNDTABLE_DISABLE_FAILURE_RECOVERY) {
+            console.warn('[' + agentId + '] ⚠️ 推理失败（调试模式：不自动收敛/不自动跳过）');
+            break;
+          }
+          // 非调试模式：错误分支没有音频播放，必须主动收敛本轮状态，避免下一位永远等待
           var errMgr = ttsManagers[agentId];
           errMgr.taskFinished = true;
           errMgr.callbackFired = true;
@@ -2550,7 +2840,6 @@
             isSpeaking = false;
             currentSpeaker = null;
           }
-
           if (roundTableActive) {
             console.warn('[' + agentId + '] ⚠️ error 后按配置不自动跳过下一位');
           }
@@ -2562,9 +2851,9 @@
     function notifySpeechEnded(agentId, content, designatedNextFromContent, changeTopic) {
       var mgr = ttsManagers[agentId];
       var remaining = mgr.audioContext ? (mgr.nextTime - mgr.audioContext.currentTime) : -1;
-      // 优先使用从内容中提取的指定发言者，其次使用 moderator 消息中保存的
-      var designatedNext = designatedNextFromContent || mgr.designatedNextAgent || null;
-      console.log('[' + agentId + '] ★★ notifySpeechEnded → 通知服务端 | 音频剩余=' + remaining.toFixed(1) + 's | activeSources=' + mgr.activeSources + (designatedNext ? ' | 指定下一个:' + designatedNext : '') + (changeTopic ? ' | 🔄 换话题' : ''));
+      // 只认发言内容里的显式 {next}，不再使用主持人提示词里的示例做兜底
+      var designatedNext = designatedNextFromContent || null;
+      console.log('[' + agentId + '] ★★ notifySpeechEnded → 通知服务端 | 音频剩余=' + remaining.toFixed(1) + 's | activeSources=' + mgr.activeSources + (designatedNext ? ' | 指定下一个:' + designatedNext : ' | 指定下一个:null') + (changeTopic ? ' | 🔄 换话题' : ''));
 
       var body = {
         agentId: agentId,
@@ -3127,6 +3416,7 @@
         .then(function(res) { return res.json(); })
         .then(function(data) {
           if (!data.isActive) return;
+          logServerStuckDiagnostics(data.stuckDiagnostics, 'room_state_poll');
 
           // 获取当前发言人
           var currentSpeakerId = data.currentSpeaker ? data.currentSpeaker.agentId : null;
@@ -3172,6 +3462,10 @@
         console.log('[Room] syncToSpeaker 跳过: 无 speakerData');
         return;
       }
+      if (!roundTableActive) {
+        console.log('[Room] syncToSpeaker 跳过: 当前非开播状态');
+        return;
+      }
 
       var agentId = speakerData.agentId;
       console.log('[Room] syncToSpeaker 播放:', agentId);
@@ -3183,6 +3477,10 @@
       })
       .then(function(res) { return res.json(); })
       .then(function(audioData) {
+        if (!roundTableActive) {
+          console.log('[Room] 音频返回后跳过播放: 当前已下播');
+          return;
+        }
         console.log('[Room] 音频数据:', JSON.stringify(audioData));
 
         if (audioData.error) {
@@ -3601,7 +3899,8 @@
         var mgr = ttsManagers[id];
         mgr.stopPlayback();
         mgr.audioChunks = [];
-        mgr._muted = false;
+        // 停播后先保持静音，防止晚到音频包把播放再次拉起；新一轮开播会自动解除
+        mgr._muted = true;
         if (mgr.ws) {
           try { mgr.ws.close(); } catch(e) {}
           mgr.ws = null;
@@ -3764,6 +4063,7 @@
               updateStatus: true,
               statusText: data.isActive ? '讨论中' : '已下播（房间连接保持）'
             });
+            logServerStuckDiagnostics(data.stuckDiagnostics, 'roundtable_status_boot');
             if (data.roomMissing && currentChannel) {
               console.warn('[RoundTable] 状态检测发现房间丢失，自动重建');
               recoverMissingRoom('status_boot_room_missing');
@@ -3781,6 +4081,7 @@
           fetch(pollUrl)
             .then(function(res) { return res.json(); })
             .then(function(data) {
+              logServerStuckDiagnostics(data.stuckDiagnostics, 'roundtable_status_poll');
               if (data.roomMissing && currentChannel) {
                 console.warn('[RoundTable] 轮询发现房间丢失，自动重建');
                 recoverMissingRoom('status_poll_room_missing');
@@ -3796,6 +4097,11 @@
               }
             });
         }, 2000);
+
+        // 卡住诊断：周期打印本地阻塞链路状态（低频、带去重）
+        setInterval(function() {
+          try { logLocalStuckDiagnostics(); } catch (e) {}
+        }, 3000);
 
         // 移动端滑动导航
         initMobileNavigation();

@@ -99,7 +99,7 @@
       return '1970-01-01';
     }
 
-    // 按日期优先选话题：最新一天的话题随机选一个
+    // 按日期优先选话题：优先近期，但不锁死“只选最新一天”
     pickByDatePriority(topics) {
       if (topics.length === 0) return null;
 
@@ -118,10 +118,56 @@
 
       // 日期降序排列（最新的在前）
       const sortedDates = Object.keys(dateGroups).sort().reverse();
+      if (sortedDates.length === 0) return null;
 
-      // 取最新一天的话题，随机选一个
-      const newestDayTopics = dateGroups[sortedDates[0]];
-      return newestDayTopics[Math.floor(Math.random() * newestDayTopics.length)];
+      // 仅在最近 3 天桶里加权采样，避免每次都卡在最新一天导致“来回同几条”
+      const recentDates = sortedDates.slice(0, 3);
+      const bucketWeights = [5, 3, 2];
+      const weightedBuckets = recentDates.map((dateKey, idx) => ({
+        dateKey,
+        topics: dateGroups[dateKey] || [],
+        weight: bucketWeights[idx] || 1
+      })).filter(b => b.topics.length > 0);
+      if (weightedBuckets.length === 0) return null;
+
+      const totalWeight = weightedBuckets.reduce((sum, b) => sum + b.weight, 0);
+      let r = Math.random() * totalWeight;
+      let pickedBucket = weightedBuckets[weightedBuckets.length - 1];
+      for (const bucket of weightedBuckets) {
+        r -= bucket.weight;
+        if (r <= 0) {
+          pickedBucket = bucket;
+          break;
+        }
+      }
+
+      return pickedBucket.topics[Math.floor(Math.random() * pickedBucket.topics.length)];
+    }
+
+    normalizeCategoryTag(raw) {
+      return String(raw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    }
+
+    getCategoryPreferenceSet(category) {
+      const tag = this.normalizeCategoryTag(category);
+      if (!tag) return new Set();
+      const presets = {
+        technology: ['technology', 'ai_tech', 'trending'],
+        ai_tech: ['ai_tech', 'technology', 'trending'],
+        trending: ['trending', 'ai_tech', 'technology']
+      };
+      const preferred = presets[tag] || [tag];
+      return new Set(preferred.map((v) => this.normalizeCategoryTag(v)));
+    }
+
+    isTopicInPreferredCategory(topic, preferredSet) {
+      if (!topic || !preferredSet || preferredSet.size === 0) return false;
+      const topicTag = this.normalizeCategoryTag(topic.category);
+      return topicTag ? preferredSet.has(topicTag) : false;
     }
 
     // 统一话题去重 key：url > path > title
@@ -228,14 +274,23 @@
       let selected = null;
 
       if (this.category) {
-        // 有分类：优先同分类，然后其他分类
-        const categoryLower = this.category.toLowerCase();
-        const sameCategory = available.filter(t => t.category && t.category.toLowerCase() === categoryLower);
-        const otherCategory = available.filter(t => !t.category || t.category.toLowerCase() !== categoryLower);
+        // 有分类：按“分类簇”优先（technology 会覆盖 ai_tech/trending），并保留少量跨类随机
+        const preferredSet = this.getCategoryPreferenceSet(this.category);
+        const preferredTopics = available.filter(t => this.isTopicInPreferredCategory(t, preferredSet));
+        const otherTopics = available.filter(t => !this.isTopicInPreferredCategory(t, preferredSet));
+        const crossCategoryProb = 0.22;
 
-        selected = this.pickByDatePriority(sameCategory);
-        if (!selected) {
-          selected = this.pickByDatePriority(otherCategory);
+        if (preferredTopics.length > 0 && otherTopics.length > 0) {
+          if (Math.random() < crossCategoryProb) {
+            selected = this.pickByDatePriority(otherTopics) || this.pickByDatePriority(preferredTopics);
+          } else {
+            selected = this.pickByDatePriority(preferredTopics) || this.pickByDatePriority(otherTopics);
+          }
+        } else {
+          selected = this.pickByDatePriority(preferredTopics);
+          if (!selected) {
+            selected = this.pickByDatePriority(otherTopics);
+          }
         }
       } else {
         // 无分类：所有话题按日期优先
@@ -367,12 +422,18 @@
 
       const topicTitleRaw = topicData?.title || this.currentTopic || '';
       const topicTitle = String(topicTitleRaw).trim().substring(0, 120);
+      const userQuestionRaw = topicData?.user_question || topicData?.question || '';
+      const userQuestion = String(userQuestionRaw || '').replace(/\s+/g, ' ').trim().substring(0, 180);
 
       if (this.lang === 'en') {
-        return `\n👤 **Audience Topic Context**: This topic was raised by a user whose nickname is "${nickname}"${topicTitle ? `: "${topicTitle}"` : ''}. You can respond directly to this user's topic and interact naturally.\n`;
+        return userQuestion
+          ? `\n👤 **Audience Topic Context (Priority)**: A user named "${nickname}" asked this question about the topic${topicTitle ? ` "${topicTitle}"` : ''}: "${userQuestion}".\n⚠️ **Priority instruction**: Start by directly addressing ${nickname} and answering this question first (1-2 sentences, no evasion). Then continue with your broader view of the main topic. Do not skip the user's question.\n`
+          : `\n👤 **Audience Topic Context (Priority)**: A user named "${nickname}" raised this topic${topicTitle ? `: "${topicTitle}"` : ''}.\n⚠️ **Priority instruction**: Start by addressing ${nickname} directly and respond to their topic first, then expand to the main discussion.\n`;
       }
 
-      return `\n👤 **用户话题上下文**：昵称为「${nickname}」的用户提出的话题${topicTitle ? `：「${topicTitle}」` : ''}。你可以对这位用户提出的话题做出回应，像在和ta互动一样自然表达。\n`;
+      return userQuestion
+        ? `\n👤 **用户话题上下文（优先回应）**：昵称为「${nickname}」的用户针对这个话题${topicTitle ? `：「${topicTitle}」` : ''}提出的问题是「${userQuestion}」。\n⚠️ **优先指令**：请先点名回应${nickname}并正面回答这个问题（1-2句，不要绕开问题），然后再回到主话题展开你的观点。不要只谈泛泛观点而忽略用户提问。\n`
+        : `\n👤 **用户话题上下文（优先回应）**：昵称为「${nickname}」的用户提出的话题${topicTitle ? `：「${topicTitle}」` : ''}。\n⚠️ **优先指令**：请先点名回应${nickname}并先对ta的话题做出直接回应，再继续主话题讨论。\n`;
     }
 
     // 把待讨论队列前 5 个话题（标题+提问人）注入提示词，并给出互动/切题规则
@@ -419,6 +480,20 @@
       return `- 如果消息里有 {next: "名字"} 且这个名字不是你，本轮不要抢答。\n- 如果点名的是你，先完整阅读点名者的上下文；你可以自行决定是否回应。若回应，请先直接回答点名者。\n- 如果消息里有 @名字 且这个名字不是你，本轮不要抢答。\n- 如果你被@，先读完整上下文；你可以自行决定是否回应（建议回应）。若回应，请先直接回答@你的人。`;
     }
 
+    getExpressiveTtsCueHintEn() {
+      return `🎙️ **Expressive TTS cues (optional):**
+- You may naturally include inline cues to enrich delivery: (laughs), (chuckle), (coughs), (clear-throat), (groans), (breath), (pant), (inhale), (exhale), (gasps), (sniffs), (sighs), (snorts), (burps), (lip-smacking), (humming), (hissing), (emm), (sneezes).
+- Use them sparingly (normally 0-2 per reply), at natural sentence boundaries.
+- Keep exact lowercase + parentheses format, and avoid stacking many cues together.`;
+    }
+
+    getExpressiveTtsCueHintZh() {
+      return `🎙️ **语气词（可选）**：
+- 你可以自然使用这些语气词增强口语感： (laughs)笑声、(chuckle)轻笑、(coughs)咳嗽、(clear-throat)清嗓子、(groans)呻吟、(breath)正常换气、(pant)喘气、(inhale)吸气、(exhale)呼气、(gasps)倒吸气、(sniffs)吸鼻子、(sighs)叹气、(snorts)哼、(burps)打嗝、(lip-smacking)咂嘴、(humming)哼唱、(hissing)嘶嘶声、(emm)呃、(sneezes)喷嚏。
+- 建议少量使用（通常每次回复0-2个），放在自然句子边界。
+- 格式必须严格为小写英文+括号，不要连续堆叠太多语气词。`;
+    }
+
     // 开场话题 - 首位发言者作为主持人介绍话题
     startTopic(topicInfo) {
       let topicText;
@@ -450,6 +525,7 @@
         path: topicInfo.path || null,
         created_by_nickname: topicInfo.created_by_nickname || '',
         created_by: topicInfo.created_by || '',
+        user_question: topicInfo.user_question || topicInfo.question || '',
         creator_id: topicInfo.creator_id || '',
         creator_type: topicInfo.creator_type || ''
       } : null;
@@ -475,14 +551,16 @@
 
       const message = this.lang === 'en'
         ? `**Main Topic: "${topicShort}"**
-${postContext}
 ${creatorHint}
+${postContext}
 ${queueHint}
 ${openerName}, you're moderating this roundtable discussion on the topic above. As the host, introduce this topic — set the context, explain why it matters, and frame the discussion. Once you've established the groundwork, share your own opening perspective.
 
 Remember: all subsequent speakers should stay focused on this main topic.
 
 Keep it natural and conversational. Don't overthink it.
+
+${this.getExpressiveTtsCueHintEn()}
 
 💡 **Speaker designation rules**:
 - Usually, let the system pick the next speaker.
@@ -509,14 +587,16 @@ Don't say "let me think" — just speak naturally.
 
 (English only)`
         : `**本场主话题：「${topicShort}」**
-${postContext}
 ${creatorHint}
+${postContext}
 ${queueHint}
 ${openerName}，你来主持本次圆桌讨论。作为主持人，请围绕上面的主话题——建立起讨论的基本语境，说明它的重要性，帮大家进入状态。完成主持式的开场后，再分享你自己的观点。
 
 **重要提醒**：后续所有发言者都要紧扣这个主话题展开，不要跑题。
 
 自然表达，保持对话感。不用想太多。
+
+${this.getExpressiveTtsCueHintZh()}
 
 💡 **指定发言规则**：
 - 通常让系统安排下一位发言人。
@@ -558,6 +638,7 @@ ${this.getNextProtocolHintZh()}
         coverUrl: '',
         created_by_nickname: '',
         created_by: '',
+        user_question: '',
         creator_id: '',
         creator_type: ''
       };
@@ -578,6 +659,8 @@ ${this.getNextProtocolHintZh()}
 ${queueHint}
 ${openerName}, pick a brand new topic that hasn't been covered yet — something interesting, timely, or thought-provoking. Introduce it as the moderator and share your opening take.
 
+${this.getExpressiveTtsCueHintEn()}
+
 💡 **Speaker designation rules**:
 - Usually, let the system pick the next speaker.
 - But if you want someone specific to respond, you MUST put {next: "full name"} as the very last line.
@@ -594,6 +677,8 @@ ${this.getNextProtocolHintEn()}
 
 ${queueHint}
 ${openerName}，请你自己选一个全新的、之前没聊过的话题——可以是最近的热点新闻、有趣的科技突破、社会现象，或者任何你觉得值得深入讨论的内容。作为主持人介绍这个话题，然后分享你的观点。
+
+${this.getExpressiveTtsCueHintZh()}
 
 💡 **指定发言规则**：
 - 通常让系统安排下一位发言人。
@@ -647,7 +732,7 @@ ${this.getNextProtocolHintZh()}
       // 从上一条回复中提取问下一个人的问题（在 {next: ...} 之前的内容）
       let questionToNext = '';
       // 支持中文名、英文名、带空格的名字
-      const nextMatch = lastContent.match(/\{next[:：]\s*["'"']?([^}"'"']+?)["'"']?\s*\}/i);
+      const nextMatch = lastContent.match(/\{\s*next\s*[:：]\s*["'"']?([^}"'"']+?)["'"']?\s*\}/i);
       if (nextMatch) {
         // 提取 {next: ...} 之前的内容，找到问问题的那部分
         const contentBeforeNext = lastContent.substring(0, lastContent.indexOf(nextMatch[0]));
@@ -722,13 +807,15 @@ ${this.getNextProtocolHintZh()}
 
       const message = this.lang === 'en'
         ? `${newRoundPrefix}**Main Topic: "${topicShort}"**
-${postPathHint}
 ${creatorHint}
+${postPathHint}
 ${queueHint}
 ${roundHistoryText ? roundHistoryText + '\n\n' : ''}${nextName}, ${lastName} just shared: "${lastSummary}".
 ${questionToNextHint ? questionToNextHint + '\n' : ''}
 Now please respond to ${lastName}'s point above. Share your perspective on the main topic.
 ${shortHintEn}
+
+${this.getExpressiveTtsCueHintEn()}
 
 💡 **Speaker designation rules**:
 - Usually, let the system pick the next speaker.
@@ -752,14 +839,16 @@ Don't say "let me think" — just respond.
 
 (English only)`
         : `${newRoundPrefix}**本场主话题：「${topicShort}」**
-${postPathHint}
 ${creatorHint}
+${postPathHint}
 ${queueHint}
 ${roundHistoryText ? roundHistoryText + '\n\n' : ''}${nextName}，${lastName}刚说了：「${lastSummary}」。
 
 ${questionToNextHint ? questionToNextHint + '\n' : ''}
 请直接回应${lastName}上面的观点，围绕主话题分享你的看法。
 ${shortHintZh}
+
+${this.getExpressiveTtsCueHintZh()}
 
 💡 **指定发言规则**：
 - 通常让系统安排下一位发言人。
@@ -848,17 +937,26 @@ ${exampleName}，你对这个问题有什么看法？
 
       // 全员已问过 → 一轮结束，启动过渡环节（同时清空本轮历史）
       if (this.askedSet.size >= this.allAgents.length) {
+        console.log(
+          `[Moderator] 🧭 调度原因=all_spoken_transition | askedSet=${Array.from(this.askedSet).join(',')} | allAgents=${this.allAgents.join(',')}`
+        );
         console.log('[Moderator] 全员已发言，准备启动换话题过渡，清空 roundHistory');
         this.roundHistory = [];
         return this.startTransition(agentId, content);
       }
 
+      const unasked = this.allAgents.filter(a => !this.askedSet.has(a));
+      console.log(
+        `[Moderator] 🧭 调度原因=normal_round_robin | justSpoke=${agentId} | askedSet=${Array.from(this.askedSet).join(',')} | unasked=${unasked.join(',')}`
+      );
       const nextAgent = this.pickRandomUnasked();
       if (!nextAgent) {
+        console.log('[Moderator] 🧭 调度原因=no_unasked_fallback_transition');
         return this.startTransition(agentId, content);
       }
 
       this.askedSet.add(nextAgent);
+      console.log(`[Moderator] 🎯 系统选择下一位: ${nextAgent} | askedSet(after)=${Array.from(this.askedSet).join(',')}`);
 
       // 构建下一位的消息
       const result = this.buildNextMessage(agentId, content, nextAgent);
@@ -918,9 +1016,10 @@ ${exampleName}，你对这个问题有什么看法？
           path: topicInfo.path || null,
           created_by_nickname: topicInfo.created_by_nickname || '',
           created_by: topicInfo.created_by || '',
+          user_question: topicInfo.user_question || topicInfo.question || '',
           creator_id: topicInfo.creator_id || '',
           creator_type: topicInfo.creator_type || ''
-        } : { title: newTopic, postData: null, coverUrl: '', created_by_nickname: '', created_by: '', creator_id: '', creator_type: '' },
+        } : { title: newTopic, postData: null, coverUrl: '', created_by_nickname: '', created_by: '', user_question: '', creator_id: '', creator_type: '' },
         opener: agentA,  // 最后发言的人作为新话题的开场者
         lastAgentId,
         lastContent,
@@ -967,6 +1066,7 @@ ${exampleName}，你对这个问题有什么看法？
           coverUrl: '',
           created_by_nickname: '',
           created_by: '',
+          user_question: '',
           creator_id: '',
           creator_type: ''
         };
@@ -1010,8 +1110,8 @@ ${exampleName}，你对这个问题有什么看法？
               ? `\n${changeTopicByName} just bailed on the "${oldTopicShort}" discussion — clearly wasn't their cup of tea! Start with a brief, playful comment about them cutting the topic short (1 sentence — tease them, don't lecture). Then move on.\n`
               : '';
             return `**New Main Topic: "${newTopicShort}"**
-${postContext}
 ${creatorHint}
+${postContext}
 ${queueHint}
 ${agentName}, you're bridging from "${oldTopicShort}" to the new topic above.
 ${enChangeTopicHint}
@@ -1021,6 +1121,8 @@ ${enChangeTopicHint}
 3. Share your own take to kick things off.
 
 Keep it natural and conversational. 4-5 sentences total.
+
+${this.getExpressiveTtsCueHintEn()}
 
 ⚠️ **Do NOT use {changeTopic: true}** — you are already introducing a new topic!
 
@@ -1038,8 +1140,8 @@ ${this.getNextProtocolHintEn()}
               ? `\n${changeTopicByName}刚才直接结束了「${oldTopicShort}」的讨论——看来这个话题不太对ta的胃口！先用一句话轻松调侃一下ta结束话题的举动（幽默就好，别说教），然后继续。\n`
               : '';
             return `**新的主话题：「${newTopicShort}」**
-${postContext}
 ${creatorHint}
+${postContext}
 ${queueHint}
 ${agentName}，你来主持话题过渡，从「${oldTopicShort}」切换到上面的新话题。
 ${zhChangeTopicHint}
@@ -1049,6 +1151,8 @@ ${zhChangeTopicHint}
 3. 分享你自己的看法，抛砖引玉。
 
 保持自然流畅，像聊天一样过渡。总共4-5句话。
+
+${this.getExpressiveTtsCueHintZh()}
 
 ⚠️ **不要使用 {changeTopic: true}** —— 你已经在引入新话题了！
 
@@ -1080,6 +1184,7 @@ ${this.getNextProtocolHintZh()}
         coverUrl: '',
         created_by_nickname: '',
         created_by: '',
+        user_question: '',
         creator_id: '',
         creator_type: 'user'
       }; // 用户输入的话题
@@ -1122,6 +1227,8 @@ Remember: all subsequent speakers should stay focused on this main topic.
 
 Keep it natural and conversational. Don't overthink it.
 
+${this.getExpressiveTtsCueHintEn()}
+
 💡 **Speaker designation rules**:
 - Usually, let the system pick the next speaker.
 - But if you want someone specific to respond, you MUST put {next: "full name"} as the very last line.
@@ -1148,6 +1255,8 @@ ${nextName}，你来主持本次圆桌讨论。作为主持人，请围绕上面
 **重要提醒**：后续所有发言者都要紧扣这个主话题展开，不要跑题。
 
 自然表达，保持对话感。不用想太多。
+
+${this.getExpressiveTtsCueHintZh()}
 
 💡 **指定发言规则**：
 - 通常让系统安排下一位发言人。
@@ -1187,6 +1296,7 @@ ${exampleName}，你对这个问题有什么看法？
           coverUrl: '',
           created_by_nickname: '',
           created_by: '',
+          user_question: '',
           creator_id: '',
           creator_type: ''
         };
@@ -1219,6 +1329,9 @@ ${exampleName}，你对这个问题有什么看法？
       
       // 尝试解析指定 ID（可能是 ID 也可能是名字）
       const resolvedId = this.resolveAgentId(designatedId);
+      console.log(
+        `[Moderator] 🧭 调度原因=explicit_next | raw=${designatedId} | resolved=${resolvedId || 'null'} | askedSet=${Array.from(this.askedSet).join(',')}`
+      );
 
       // 如果指定的发言者不在 allAgents 中，回退到随机选择
       if (!resolvedId || !this.allAgents.includes(resolvedId)) {
@@ -1263,6 +1376,7 @@ ${exampleName}，你对这个问题有什么看法？
             ? `\n📂 **Reference**: You can browse \`${this.currentTopicPostPath}\` for the original post details.\n`
             : `\n📂 **参考资料**：你可以浏览 \`${this.currentTopicPostPath}\` 了解这个话题的详情。\n`)
         : '';
+      const creatorHint = this.buildCreatedByNicknameHint(this.currentTopicData);
       const queueHint = this.buildPendingQueueHint();
 
       // 提取问下一个人的问题 - 匹配多种名字格式
@@ -1281,7 +1395,7 @@ ${exampleName}，你对这个问题有什么看法？
       ].filter((v, i, a) => v && v.length > 1 && a.indexOf(v) === i); // 去重、过滤无效值和单字母
 
       // 增加中文全角冒号和引号的支持
-      const nextMatch = lastContent.match(/\{next[:：]\s*["'“‘]?([^}"'”’]+)["'”’]?\s*\}/i);
+      const nextMatch = lastContent.match(/\{\s*next\s*[:：]\s*["'“‘]?([^}"'”’]+)["'”’]?\s*\}/i);
       console.log(`[Moderator] 🔍 提取问题 | lastContent长度=${lastContent.length} | nextMatch=${nextMatch ? nextMatch[0] : 'null'} | nameVariations=${nameVariations.join(',')}`);
       if (nextMatch) {
         const nextTagIndex = lastContent.indexOf(nextMatch[0]);
@@ -1360,6 +1474,7 @@ ${exampleName}，你对这个问题有什么看法？
         // 第3次指定：回到主话题，不再指定任何人
         message = this.lang === 'en'
           ? `**Main Topic: "${topicShort}"**
+${creatorHint}
 ${postPathHint}
 ${queueHint}
 ${roundHistoryText ? roundHistoryText + '\n\n' : ''}${displayNextName}, ${displayLastName} just called on you specifically.${designatedQuestionHint}
@@ -1370,6 +1485,8 @@ Here's what they said:
 
 ⚠️ **You MUST answer ${displayLastName}'s question first** — this is the most important thing. Respond directly to their question above with your perspective. After answering, you may continue discussing the main topic. Do not ask anyone else or designate the next speaker — let the system handle it.
 
+${this.getExpressiveTtsCueHintEn()}
+
 🔄 **Topic change option**: If you want to change the topic, answer the question in 1-2 sentences MAX, then say you'd rather move on. Do NOT write a detailed response. Add {changeTopic: true} at the end.
 - ❌ WRONG: Writing paragraphs of analysis and then adding {changeTopic: true}.
 
@@ -1377,6 +1494,7 @@ Here's what they said:
 
 (English only)`
           : `**本场主话题：「${topicShort}」**
+${creatorHint}
 ${postPathHint}
 ${queueHint}
 ${roundHistoryText ? roundHistoryText + '\n\n' : ''}${displayNextName}，${displayLastName}刚才特别点名了你。${designatedQuestionHint}
@@ -1386,6 +1504,8 @@ ${displayLastName}的原话：
 「${contextContent}」
 
 ⚠️ **你必须先回答${displayLastName}的问题**，这是最重要的。请直接针对上面的问题给出你的回应和观点。回答完问题之后，可以继续围绕主话题展开。不要再反问任何人，也不要指定下一位发言者。让系统来安排接下来谁发言。
+
+${this.getExpressiveTtsCueHintZh()}
 
 🔄 **换话题选项**：如果你想换话题，用1-2句话简短回答问题就好，然后说想聊别的。不要写长篇大论。在末尾加上 {changeTopic: true}。
 - ❌ 错误示范：写了好几段分析然后加 {changeTopic: true}。
@@ -1401,6 +1521,7 @@ ${displayLastName}的原话：
         // 正常情况：允许继续指定
         message = this.lang === 'en'
           ? `**Main Topic: "${topicShort}"**
+${creatorHint}
 ${postPathHint}
 ${queueHint}
 ${roundHistoryText ? roundHistoryText + '\n\n' : ''}${displayNextName}, ${displayLastName} just called on you specifically.${designatedQuestionHint}
@@ -1410,6 +1531,8 @@ Here's what they said:
 "${contextContent}"
 
 ⚠️ **You MUST answer ${displayLastName}'s question first** — this is the most important thing. Respond directly to their question with your perspective. After answering, you may continue discussing the main topic.
+
+${this.getExpressiveTtsCueHintEn()}
 
 💡 **Speaker designation rules**:
 - Usually let the system pick the next speaker.
@@ -1430,6 +1553,7 @@ ${exampleName}, what is your view on this question?
 
 (English only)`
           : `**本场主话题：「${topicShort}」**
+${creatorHint}
 ${postPathHint}
 ${queueHint}
 ${roundHistoryText ? roundHistoryText + '\n\n' : ''}${displayNextName}，${displayLastName}刚才特别点名了你。${designatedQuestionHint}
@@ -1439,6 +1563,8 @@ ${displayLastName}的原话：
 「${contextContent}」
 
 ⚠️ **你必须先回答${displayLastName}的问题**，这是最重要的。请直接针对上面的问题给出你的回应和观点。回答完之后可以围绕主话题继续展开。
+
+${this.getExpressiveTtsCueHintZh()}
 
 💡 **指定发言规则**：
 - 通常让系统安排下一位。但如果你想指定某人回复，**必须**在最后一行写 {next: "名字"}，使用完整名字。
