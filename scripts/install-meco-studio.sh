@@ -484,6 +484,10 @@ ensure_hot_topics_skill() {
   log "Installed hot-topics skill to $hot_topics_target"
 }
 
+collect_hot_topics_categories() {
+  printf '%s\n' "${HOT_TOPICS_CATEGORIES[@]}"
+}
+
 ensure_hot_topics_knowledge_base() {
   local hot_topics_root="$HOT_TOPICS_ROOT"
   local kb_root
@@ -497,15 +501,22 @@ ensure_hot_topics_knowledge_base() {
     log "Created knowledge base root: $hot_topics_root"
   fi
 
-  local category_dir
-  for category in "${HOT_TOPICS_CATEGORIES[@]}"; do
+  local category_dir category
+  local total_count=0
+  local created_count=0
+  while IFS= read -r category; do
+    [[ -n "$category" ]] || continue
+    total_count=$((total_count + 1))
     category_dir="$hot_topics_root/$category"
     if [[ -d "$category_dir" ]]; then
       continue
     fi
     mkdir -p "$category_dir"
+    created_count=$((created_count + 1))
     log "Created category folder: $category_dir"
-  done
+  done < <(collect_hot_topics_categories)
+
+  log "Ensured hot-topics categories under $hot_topics_root (total=$total_count, created=$created_count)"
 }
 
 prepare_repo() {
@@ -940,6 +951,7 @@ main() {
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets
   ensure_hot_topics_skill
+  ensure_hot_topics_knowledge_base
   install_skill_runtime_dependencies
   configure_kimi_api_key "$effective_kimi_key"
   configure_meco_runtime_settings "$effective_kimi_key" "$effective_model_key"
