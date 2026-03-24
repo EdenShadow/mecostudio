@@ -715,6 +715,74 @@ merge_secret_json_preserve_existing() {
   ' "$old_file" "$new_file"
 }
 
+sync_openclaw_skill_switches_from_manifest() {
+  local manifest_path="$1"
+  local openclaw_config="$OPENCLAW_ROOT/openclaw.json"
+  [[ -f "$manifest_path" ]] || return 0
+
+  mkdir -p "$OPENCLAW_ROOT"
+  local summary
+  summary="$(node -e '
+    const fs = require("fs");
+    const manifestPath = process.argv[1];
+    const openclawConfigPath = process.argv[2];
+
+    let manifest = {};
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8") || "{}");
+    } catch (_) {
+      process.exit(0);
+    }
+
+    const skills = (((manifest || {}).skills || {}).openclaw);
+    if (!Array.isArray(skills) || skills.length === 0) {
+      process.exit(0);
+    }
+
+    const stateMap = (((manifest || {}).skills || {}).state);
+    const stateObj = stateMap && typeof stateMap === "object" ? stateMap : {};
+
+    let conf = {};
+    if (fs.existsSync(openclawConfigPath)) {
+      try {
+        conf = JSON.parse(fs.readFileSync(openclawConfigPath, "utf8") || "{}");
+      } catch (_) {
+        conf = {};
+      }
+    }
+
+    if (!conf.skills || typeof conf.skills !== "object") conf.skills = {};
+    if (!conf.skills.entries || typeof conf.skills.entries !== "object") conf.skills.entries = {};
+
+    let changed = 0;
+    let defaultOn = 0;
+    for (const rawName of skills) {
+      const skillName = String(rawName || "").trim();
+      if (!skillName) continue;
+      const knownState = Object.prototype.hasOwnProperty.call(stateObj, skillName) && typeof stateObj[skillName] === "boolean";
+      const enabled = knownState ? !!stateObj[skillName] : true;
+      if (!knownState) defaultOn++;
+
+      if (!conf.skills.entries[skillName] || typeof conf.skills.entries[skillName] !== "object") {
+        conf.skills.entries[skillName] = {};
+      }
+      if (conf.skills.entries[skillName].enabled !== enabled) {
+        conf.skills.entries[skillName].enabled = enabled;
+        changed++;
+      } else {
+        conf.skills.entries[skillName].enabled = enabled;
+      }
+    }
+
+    fs.writeFileSync(openclawConfigPath, JSON.stringify(conf, null, 2) + "\n");
+    process.stdout.write(`Synced OpenClaw skill switches: total=${skills.length}, changed=${changed}, defaultOn=${defaultOn}`);
+  ' "$manifest_path" "$openclaw_config" 2>/dev/null || true)"
+
+  if [[ -n "$summary" ]]; then
+    log "$summary"
+  fi
+}
+
 apply_bootstrap_assets() {
   local bootstrap_dir="$MECO_INSTALL_DIR/bootstrap/openclaw"
   local manifest="$bootstrap_dir/manifest.json"
@@ -831,6 +899,8 @@ apply_bootstrap_assets() {
       log "Synced OpenClaw skill: $skill_name"
     done
   fi
+
+  sync_openclaw_skill_switches_from_manifest "$manifest"
 
   local skills_config_dir="$bootstrap_dir/skills/config"
   if [[ -d "$skills_config_dir" ]]; then

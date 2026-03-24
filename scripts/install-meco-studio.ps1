@@ -476,6 +476,83 @@ function Ensure-HotTopicsSkill {
   Write-Log "Installed hot-topics skill to $hotTopicsTarget"
 }
 
+function Sync-OpenclawSkillSwitchesFromManifest {
+  $manifestPath = Join-Path $MecoInstallDir 'bootstrap\openclaw\manifest.json'
+  if (-not (Test-Path $manifestPath)) {
+    return
+  }
+
+  $manifest = $null
+  try {
+    $manifest = Get-Content -Raw -Path $manifestPath | ConvertFrom-Json -AsHashtable
+  }
+  catch {
+    return
+  }
+
+  if ($null -eq $manifest -or -not $manifest.ContainsKey('skills')) {
+    return
+  }
+
+  $openclawSkills = @()
+  if ($manifest.skills -is [hashtable] -and $manifest.skills.ContainsKey('openclaw') -and $manifest.skills.openclaw -is [System.Collections.IEnumerable]) {
+    $openclawSkills = @($manifest.skills.openclaw)
+  }
+  if ($openclawSkills.Count -eq 0) {
+    return
+  }
+
+  $stateMap = @{}
+  if ($manifest.skills -is [hashtable] -and $manifest.skills.ContainsKey('state') -and $manifest.skills.state -is [hashtable]) {
+    $stateMap = $manifest.skills.state
+  }
+
+  New-Item -ItemType Directory -Force -Path $OpenclawRoot | Out-Null
+  $openclawConfigPath = Join-Path $OpenclawRoot 'openclaw.json'
+  $conf = @{}
+  if (Test-Path $openclawConfigPath) {
+    try {
+      $conf = Get-Content -Raw -Path $openclawConfigPath | ConvertFrom-Json -AsHashtable
+    }
+    catch {
+      $conf = @{}
+    }
+  }
+
+  if (-not $conf.ContainsKey('skills') -or $null -eq $conf.skills) { $conf.skills = @{} }
+  if (-not $conf.skills.ContainsKey('entries') -or $null -eq $conf.skills.entries) { $conf.skills.entries = @{} }
+
+  $changed = 0
+  $defaultOn = 0
+  foreach ($rawSkill in $openclawSkills) {
+    $skill = [string]$rawSkill
+    if ([string]::IsNullOrWhiteSpace($skill)) {
+      continue
+    }
+
+    $enabled = $true
+    if ($stateMap.ContainsKey($skill) -and $stateMap[$skill] -is [bool]) {
+      $enabled = [bool]$stateMap[$skill]
+    }
+    else {
+      $defaultOn++
+    }
+
+    if (-not $conf.skills.entries.ContainsKey($skill) -or $null -eq $conf.skills.entries[$skill]) {
+      $conf.skills.entries[$skill] = @{}
+    }
+
+    if (-not $conf.skills.entries[$skill].ContainsKey('enabled') -or [bool]$conf.skills.entries[$skill].enabled -ne $enabled) {
+      $changed++
+    }
+    $conf.skills.entries[$skill].enabled = $enabled
+  }
+
+  $json = $conf | ConvertTo-Json -Depth 20
+  Set-Content -Path $openclawConfigPath -Value $json -Encoding UTF8
+  Write-Log "Synced OpenClaw skill switches: total=$($openclawSkills.Count), changed=$changed, defaultOn=$defaultOn"
+}
+
 function Ensure-HotTopicsKnowledgeBase {
   $kbRoot = Split-Path -Parent $HotTopicsRoot
   New-Item -ItemType Directory -Force -Path $kbRoot | Out-Null
@@ -623,6 +700,7 @@ function Main {
   Install-NpmDependencies
   Ensure-HotTopicsKnowledgeBase
   Ensure-HotTopicsSkill
+  Sync-OpenclawSkillSwitchesFromManifest
   Ensure-HotTopicsKnowledgeBase
   Install-SkillRuntimeDependencies
   Configure-KimiApiKey -KimiApiKey $MecoKimiCodingApiKey

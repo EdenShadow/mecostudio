@@ -447,6 +447,7 @@ main() {
     const fs = require("fs");
     const path = require("path");
     const bootstrapDir = process.argv[1];
+    const openclawConfigPath = process.argv[2];
     const tsvPath = path.join(bootstrapDir, ".agents.tsv");
 
     const agents = [];
@@ -474,13 +475,32 @@ main() {
         .sort();
     };
 
+    let openclawConf = {};
+    if (openclawConfigPath && fs.existsSync(openclawConfigPath)) {
+      try {
+        openclawConf = JSON.parse(fs.readFileSync(openclawConfigPath, "utf8") || "{}");
+      } catch (_) {
+        openclawConf = {};
+      }
+    }
+
+    const openclawSkills = listDirs(openclawSkillsDir);
+    const skillEntries = ((((openclawConf || {}).skills || {}).entries) || {});
+    const skillState = {};
+    for (const skillName of openclawSkills) {
+      const entry = skillEntries && typeof skillEntries === "object" ? skillEntries[skillName] : null;
+      const enabled = !!(entry && typeof entry === "object" && typeof entry.enabled === "boolean" ? entry.enabled : true);
+      skillState[skillName] = enabled;
+    }
+
     const manifest = {
       version: 1,
       createdAt: new Date().toISOString(),
       agents,
       skills: {
-        openclaw: listDirs(openclawSkillsDir),
-        config: listDirs(configSkillsDir)
+        openclaw: openclawSkills,
+        config: listDirs(configSkillsDir),
+        state: skillState
       },
       knowledgeRuleFolders: listDirs(knowledgeRuleDir)
     };
@@ -489,7 +509,7 @@ main() {
       path.join(bootstrapDir, "manifest.json"),
       JSON.stringify(manifest, null, 2) + "\n"
     );
-  ' "$BOOTSTRAP_DIR"
+  ' "$BOOTSTRAP_DIR" "$openclaw_config"
 
   sanitize_bootstrap_tree "$BOOTSTRAP_DIR"
 

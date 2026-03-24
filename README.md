@@ -58,6 +58,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 - 运行权限预检脚本（目录读写 + 网络连通 + OpenClaw 可用性）
 - 安装 npm 依赖并同步初始化 agents/skills（幂等）
 - bootstrap 同步为增量覆盖：只覆盖同名、补齐缺失，不删除本机自建智能体/skills
+- 同步 OpenClaw skills 开关状态（从 bootstrap manifest 读取；缺失状态默认开启）
 - 自动安装 skills 运行依赖：
   - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
   - Node：自动扫描 OpenClaw/config skills 下 `package.json` 并安装

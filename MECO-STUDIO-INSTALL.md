@@ -38,6 +38,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 - 安装 npm 依赖
 - 同步 bootstrap agents/skills/knowledge-rule-folders（幂等，不重复注册）
 - 同步策略为增量覆盖：仅覆盖同名文件 + 新增缺失文件，不删除本机自建智能体/skills/知识库目录
+- 同步 OpenClaw skills 开关状态（从 bootstrap manifest 读取；缺失状态默认开启）
 - 自动安装 skills 依赖：
   - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
   - Node：自动扫描 OpenClaw/config skills 的 `package.json` 并安装

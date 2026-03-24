@@ -61,7 +61,20 @@
       "hot-topics",
       "notebooklm-mcp-cli",
       "tikhub-tiktok"
-    ]
+    ],
+    "state": {
+      "doc-to-md": true,
+      "feishu-send-media": true,
+      "feishu-upload": true,
+      "hot-topics": true,
+      "kimi-search": true,
+      "media-downloader": true,
+      "persona-manager": true,
+      "secret-notes": true,
+      "tikhub-api": true,
+      "twitter-scraper": true,
+      "x-grok": true
+    }
   },
   "knowledgeRuleFolders": [
     "1773841227413_8c4nvu_Pentagon_headhunting_Goldman",
