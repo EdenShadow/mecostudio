@@ -8,7 +8,7 @@
     <script src="lib/js/three.min.js"></script>
     <script src="lib/js/OrbitControls.js"></script>
     <script src="js/playgen.js"></script>
-    <script src="js/remote-control-dock.js?v=20260325g"></script>
+    <script src="js/remote-control-dock.js?v=20260325h"></script>
     <link href="lib/css/inter.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-round.css" rel="stylesheet"/>
@@ -520,14 +520,14 @@
         }
         #app-sidebar .meco-sidebar-avatar-wrap .js-busy-badge {
             left: auto;
-            right: 1px;
-            bottom: 2px;
+            right: -1px;
+            bottom: 0;
             transform: none;
         }
         #app-sidebar.sidebar-compact .meco-sidebar-avatar-wrap .js-busy-badge {
             left: auto;
-            right: 1px;
-            bottom: 2px;
+            right: -1px;
+            bottom: 0;
             transform: none;
         }
         #app-sidebar.sidebar-compact .meco-sidebar-empty {
@@ -539,13 +539,16 @@
             background: transparent !important;
             border-radius: 0.65rem;
             transition: transform 190ms ease, color 150ms ease;
-            transform: translateX(0);
+            transform: translateX(2px);
         }
         #sidebar-toggle-btn:hover,
         #sidebar-toggle-btn:focus-visible {
             background: transparent !important;
         }
         #sidebar-toggle-btn.meco-sidebar-toggle-shift {
+            transform: translateX(-3px);
+        }
+        body.meco-window-mode #sidebar-toggle-btn.meco-sidebar-toggle-shift {
             transform: translateX(-5px);
         }
         @keyframes remoteDockAddPulse {
@@ -562,31 +565,35 @@
         }
         #remote-dock-add-btn.remote-dock-add-btn {
             position: relative;
-            width: 2.35rem;
-            height: 2.35rem;
-            min-width: 2.35rem;
-            min-height: 2.35rem;
+            width: 2.4rem;
+            height: 2.4rem;
+            min-width: 2.4rem;
+            min-height: 2.4rem;
             border-radius: 9999px;
-            border: 1px solid rgba(192, 132, 252, 0.46);
-            color: #f5f3ff;
-            background:
-                radial-gradient(70% 70% at 32% 28%, rgba(255,255,255,0.28), rgba(255,255,255,0) 62%),
-                linear-gradient(145deg, rgba(192,132,252,0.95), rgba(124,58,237,0.86));
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(176, 188, 214, 0.82);
+            background: linear-gradient(152deg, rgba(18, 24, 38, 0.96), rgba(9, 13, 22, 0.98));
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            transition: transform 170ms ease, filter 170ms ease, border-color 170ms ease;
-            animation: remoteDockAddPulse 2.25s ease-in-out infinite;
+            transition: transform 190ms ease, filter 190ms ease, border-color 190ms ease, box-shadow 190ms ease, background 190ms ease;
+            animation: none;
             overflow: hidden;
+            box-shadow:
+                0 6px 14px rgba(3, 6, 12, 0.5),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08),
+                inset 0 -6px 12px rgba(6, 10, 19, 0.5);
         }
         #remote-dock-add-btn.remote-dock-add-btn::before {
             content: '';
             position: absolute;
-            inset: 1px;
+            inset: 0;
             border-radius: inherit;
-            border: 1px dashed rgba(216, 180, 254, 0.5);
-            opacity: 0.95;
-            animation: remoteDockAddSpin 6s linear infinite;
+            background: none;
+            opacity: 0;
+            animation: none;
             pointer-events: none;
         }
         #remote-dock-add-btn.remote-dock-add-btn::after {
@@ -594,26 +601,105 @@
             position: absolute;
             inset: 2px;
             border-radius: inherit;
-            background: linear-gradient(165deg, rgba(255,255,255,0.18), rgba(255,255,255,0.02));
+            background: none;
             pointer-events: none;
         }
         #remote-dock-add-btn.remote-dock-add-btn .remote-dock-add-icon {
             position: relative;
             z-index: 1;
-            width: 1rem;
-            height: 1rem;
-            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+            width: 1.02rem;
+            height: 1.02rem;
+            filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.28));
             transition: transform 180ms ease;
         }
         #remote-dock-add-btn.remote-dock-add-btn:hover,
         #remote-dock-add-btn.remote-dock-add-btn:focus-visible {
-            transform: translateY(-1px) scale(1.04);
-            filter: saturate(1.1) brightness(1.07);
-            border-color: rgba(233, 213, 255, 0.95);
+            transform: translateY(-1px) scale(1.015);
+            filter: saturate(1.01) brightness(1.03);
+            border-color: rgba(175, 188, 213, 0.26);
+            background: linear-gradient(152deg, rgba(21, 28, 43, 0.96), rgba(11, 16, 27, 0.98));
+            animation: none;
+            box-shadow:
+                0 8px 18px rgba(4, 8, 15, 0.54),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1),
+                inset 0 -6px 12px rgba(8, 13, 22, 0.55);
+        }
+        #remote-dock-add-btn.remote-dock-add-btn:hover::before,
+        #remote-dock-add-btn.remote-dock-add-btn:focus-visible::before {
+            opacity: 0.32;
+            animation: none;
         }
         #remote-dock-add-btn.remote-dock-add-btn:hover .remote-dock-add-icon,
         #remote-dock-add-btn.remote-dock-add-btn:focus-visible .remote-dock-add-icon {
             transform: rotate(90deg);
+        }
+        #remote-dock-focus-mode-btn {
+            width: 2.18rem;
+            height: 2.05rem;
+            min-width: 2.18rem;
+            min-height: 2.05rem;
+            border-radius: 0.74rem;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            background: linear-gradient(160deg, rgba(30, 35, 48, 0.9), rgba(17, 20, 29, 0.94));
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: border-color 170ms ease, background 170ms ease, box-shadow 170ms ease, transform 170ms ease, filter 170ms ease;
+            box-shadow: 0 6px 14px rgba(6, 8, 14, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.13);
+            overflow: hidden;
+        }
+        #remote-dock-focus-mode-btn .focus-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 170ms ease, opacity 170ms ease, transform 170ms ease;
+        }
+        #remote-dock-focus-mode-btn .focus-icon svg {
+            width: 15px;
+            height: 15px;
+            display: block;
+        }
+        #remote-dock-focus-mode-btn .focus-icon-on {
+            display: none;
+            color: #b8c3d8;
+        }
+        #remote-dock-focus-mode-btn .focus-icon-off {
+            color: #6b7486;
+        }
+        #remote-dock-focus-mode-btn:hover,
+        #remote-dock-focus-mode-btn:focus-visible {
+            border-color: rgba(255, 255, 255, 0.36);
+            background: linear-gradient(160deg, rgba(34, 39, 54, 0.94), rgba(21, 24, 34, 0.96));
+            box-shadow: 0 8px 18px rgba(7, 10, 18, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+            transform: translateY(-1px);
+            filter: brightness(1.05);
+        }
+        #remote-dock-focus-mode-btn[data-enabled="1"] {
+            border-color: rgba(255, 255, 255, 0.22);
+            background: linear-gradient(160deg, rgba(30, 35, 48, 0.9), rgba(17, 20, 29, 0.94));
+            box-shadow: 0 6px 14px rgba(6, 8, 14, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.13);
+        }
+        #remote-dock-focus-mode-btn[data-enabled="1"] .focus-icon-on {
+            display: inline-flex;
+        }
+        #remote-dock-focus-mode-btn[data-enabled="1"] .focus-icon-off {
+            display: none;
+        }
+        #remote-workspace-dim-overlay {
+            position: fixed;
+            left: 0;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            z-index: 25;
+            background: #09090b;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 190ms ease;
+        }
+        #remote-workspace-dim-overlay.is-active {
+            opacity: 1;
+            pointer-events: auto;
         }
         #remote-dock-scroll {
             flex: 1 1 auto;
@@ -1073,6 +1159,21 @@
         let mecoHeaderSearchExpanded = false;
         let mecoSidebarTooltipEl = null;
         let mecoSidebarTooltipTarget = null;
+
+        function isMecoWindowMode() {
+            if (window.self !== window.top) return true;
+            try {
+                const u = new URL(window.location.href);
+                return u.searchParams.get('meco_window') === '1' || u.searchParams.get('mecoEmbed') === '1';
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function applySidebarToggleModeClass() {
+            if (!document.body) return;
+            document.body.classList.toggle('meco-window-mode', isMecoWindowMode());
+        }
 
         function isSidebarNarrowViewport() {
             return window.innerWidth < MECO_SIDEBAR_AUTO_COLLAPSE_WIDTH;
@@ -7277,6 +7378,7 @@
             } catch (_) {
                 mecoUpdateLastFinishedTaskId = '';
             }
+            applySidebarToggleModeClass();
             loadAgentToolsSoundPref();
             loadAgentToolsChannelRuleModePref();
             loadAgentToolsImmersivePref();
@@ -8014,7 +8116,7 @@
 </div>
 
 <!-- Remote Control Dock -->
-<div id="remote-dock" class="relative z-20 shrink-0 w-full">
+<div id="remote-dock" class="relative z-30 shrink-0 w-full">
     <div class="glass-panel rounded-none border-x-0 border-b-0 border-t border-white/10 shadow-none px-3 py-2 w-full">
         <div class="flex items-center gap-2">
             <button id="remote-dock-add-btn"
@@ -8029,6 +8131,27 @@
             <div id="remote-dock-scroll">
                 <div id="remote-dock-tabs" class="flex items-center gap-2 min-h-[36px] w-max min-w-full pr-1"></div>
             </div>
+            <button id="remote-dock-focus-mode-btn"
+                    type="button"
+                    title="子窗口专注模式"
+                    aria-label="子窗口专注模式"
+                    aria-pressed="true"
+                    data-enabled="1">
+                <span class="focus-icon focus-icon-on" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none">
+                        <rect x="2.6" y="9.2" width="7" height="5.6" rx="1.4" fill="currentColor"/>
+                        <path d="M9.6 8L14.6 6.7V17.3L9.6 16V8Z" fill="currentColor"/>
+                        <path d="M14.6 7.8L21.4 5.2V18.8L14.6 16.2V7.8Z" fill="currentColor" fill-opacity="0.58"/>
+                    </svg>
+                </span>
+                <span class="focus-icon focus-icon-off" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none">
+                        <rect x="2.6" y="9.2" width="7" height="5.6" rx="1.4" fill="currentColor"/>
+                        <path d="M9.6 8L14.6 6.7V17.3L9.6 16V8Z" fill="currentColor"/>
+                        <path d="M14.6 7.8L21.4 5.2V18.8L14.6 16.2V7.8Z" fill="currentColor" fill-opacity="0.58"/>
+                    </svg>
+                </span>
+            </button>
         </div>
     </div>
 </div>

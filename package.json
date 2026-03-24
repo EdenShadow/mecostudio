@@ -1,6 +1,6 @@
 {
   "name": "meco-studio",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Meco Studio - AI Agent Management Platform with OpenClaw Web",
   "main": "server.js",
   "scripts": {

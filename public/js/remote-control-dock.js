@@ -46,12 +46,14 @@
       rustdeskId: '',
       password: '',
       bindingId: ''
-    }
+    },
+    dockFocusModeEnabled: true
   };
 
   const els = {};
   const REMOTE_CF_FORM_CACHE_KEY = 'meco.remote.cloudflareForm.v1';
   const REMOTE_LOCAL_PROFILE_CACHE_KEY = 'meco.remote.localProfile.v1';
+  const REMOTE_DOCK_FOCUS_MODE_KEY = 'meco.remote.dockFocusMode.v1';
 
   function q(id) {
     return document.getElementById(id);
@@ -177,6 +179,11 @@
       legacyViewer.classList.add('hidden');
       legacyViewer.style.display = 'none';
     }
+    const workspaceOverlay = q('remote-workspace-dim-overlay');
+    if (workspaceOverlay) {
+      workspaceOverlay.classList.remove('is-active');
+      workspaceOverlay.style.display = 'none';
+    }
   }
 
   function clearRemoteRouteFromUrl() {
@@ -237,6 +244,23 @@
         password: toSafeString(profile.password),
         bindingId: toSafeString(profile.bindingId)
       }));
+    } catch (_) {}
+  }
+
+  function readDockFocusModePref() {
+    try {
+      const raw = toSafeString(localStorage.getItem(REMOTE_DOCK_FOCUS_MODE_KEY));
+      if (!raw) return true;
+      if (raw === '0' || raw.toLowerCase() === 'false' || raw.toLowerCase() === 'off') return false;
+      return true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  function writeDockFocusModePref(enabled) {
+    try {
+      localStorage.setItem(REMOTE_DOCK_FOCUS_MODE_KEY, enabled ? '1' : '0');
     } catch (_) {}
   }
 
@@ -1331,6 +1355,31 @@
     }
   }
 
+  function forceLoopbackHttpUrl(rawUrl) {
+    const text = toSafeString(rawUrl);
+    if (!text) return '';
+    try {
+      const candidate = new URL(text, window.location.origin);
+      if (!/^https?:$/i.test(candidate.protocol)) return text;
+      candidate.hostname = '127.0.0.1';
+      return candidate.toString();
+    } catch (_) {
+      return text;
+    }
+  }
+
+  function buildLocalLoopbackRouteUrl(device) {
+    try {
+      const current = new URL(window.location.href);
+      const route = normalizeRoutePath(device && device.routePath);
+      if (!route || route === '/') return '';
+      const port = current.port ? `:${current.port}` : '';
+      return `${current.protocol}//127.0.0.1${port}${route}`;
+    } catch (_) {
+      return '';
+    }
+  }
+
   function canEmbedRustDeskWebUrl(rawUrl) {
     const text = toSafeString(rawUrl);
     if (!text) return false;
@@ -1382,6 +1431,57 @@
     };
   }
 
+  function getVisibleSessionCount() {
+    return Array.from(state.sessions.values()).filter((session) => !!session && !session.minimized).length;
+  }
+
+  function ensureWorkspaceDimOverlay() {
+    if (els.workspaceDimOverlay && document.body.contains(els.workspaceDimOverlay)) return els.workspaceDimOverlay;
+    const overlay = document.createElement('div');
+    overlay.id = 'remote-workspace-dim-overlay';
+    overlay.className = '';
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(overlay);
+    els.workspaceDimOverlay = overlay;
+    return overlay;
+  }
+
+  function updateWorkspaceDimOverlayBounds() {
+    const overlay = ensureWorkspaceDimOverlay();
+    const ws = getWindowWorkspaceBounds();
+    overlay.style.left = '0px';
+    overlay.style.right = '0px';
+    overlay.style.top = '0px';
+    overlay.style.bottom = `${ws.reserveBottom}px`;
+  }
+
+  function updateDockFocusToggleButton() {
+    if (!els.focusModeBtn) return;
+    const enabled = !!state.dockFocusModeEnabled;
+    els.focusModeBtn.dataset.enabled = enabled ? '1' : '0';
+    els.focusModeBtn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    els.focusModeBtn.title = enabled ? '子窗口专注模式：开（手电筒亮）' : '子窗口专注模式：关（手电筒灭）';
+  }
+
+  function updateWorkspaceFocusMode() {
+    const overlay = ensureWorkspaceDimOverlay();
+    updateWorkspaceDimOverlayBounds();
+    const enabled = !!state.dockFocusModeEnabled;
+    const hasSession = getVisibleSessionCount() > 0;
+    const active = enabled && hasSession;
+    overlay.classList.toggle('is-active', active);
+    updateDockFocusToggleButton();
+  }
+
+  function setDockFocusModeEnabled(enabled, options = {}) {
+    const next = !!enabled;
+    state.dockFocusModeEnabled = next;
+    if (!(options && options.silent)) {
+      writeDockFocusModePref(next);
+    }
+    updateWorkspaceFocusMode();
+  }
+
   function clampRectToWorkspace(rect = {}) {
     const ws = getWindowWorkspaceBounds();
     const safeWidth = Math.max(WINDOW_MIN_WIDTH, Math.round(Number(rect.width) || WINDOW_MIN_WIDTH));
@@ -1396,12 +1496,19 @@
   }
 
   function updateWindowLayerBounds() {
-    if (!els.windowLayer || !document.body.contains(els.windowLayer)) return;
     const ws = getWindowWorkspaceBounds();
-    els.windowLayer.style.left = '0px';
-    els.windowLayer.style.top = '0px';
-    els.windowLayer.style.right = '0px';
-    els.windowLayer.style.bottom = `${ws.reserveBottom}px`;
+    if (els.windowLayer && document.body.contains(els.windowLayer)) {
+      els.windowLayer.style.left = '0px';
+      els.windowLayer.style.top = '0px';
+      els.windowLayer.style.right = '0px';
+      els.windowLayer.style.bottom = `${ws.reserveBottom}px`;
+    }
+    if (els.workspaceDimOverlay && document.body.contains(els.workspaceDimOverlay)) {
+      els.workspaceDimOverlay.style.left = '0px';
+      els.workspaceDimOverlay.style.top = '0px';
+      els.workspaceDimOverlay.style.right = '0px';
+      els.workspaceDimOverlay.style.bottom = `${ws.reserveBottom}px`;
+    }
   }
 
   function ensureWindowLayer() {
@@ -1507,6 +1614,7 @@
     }
     renderDockTabs();
     renderBindDeviceList();
+    updateWorkspaceFocusMode();
   }
 
   function renderViewerTabs() {
@@ -1668,6 +1776,7 @@
     bringSessionToFront(session);
     renderDockTabs();
     renderBindDeviceList();
+    updateWorkspaceFocusMode();
   }
 
   function closeSession(sessionId) {
@@ -1694,6 +1803,7 @@
     }
     renderDockTabs();
     renderBindDeviceList();
+    updateWorkspaceFocusMode();
   }
 
   function closeSessionsByDevice(deviceId) {
@@ -1849,6 +1959,7 @@
     bringSessionToFront(session);
     renderDockTabs();
     renderBindDeviceList();
+    updateWorkspaceFocusMode();
     return session;
   }
 
@@ -1863,12 +1974,43 @@
 
   async function resolveWebLaunch(device) {
     const deviceId = toSafeString(device && device.id);
-    const lanReachable = await probeLanReachable(device && device.lanUrl);
-    if (lanReachable && toSafeString(device && device.lanUrl)) {
+    const localDevice = isLocalDevice(device);
+    if (localDevice) {
       try {
         const body = await resolveRemoteLaunch(deviceId, { preferLan: true, lanReachable: true, forceMode: 'lan' });
         const launch = body && body.launch ? body.launch : {};
         if (toSafeString(launch.url)) {
+          return {
+            ...launch,
+            mode: 'lan',
+            sessionMode: 'web',
+            url: normalizeAndEmbedWebUrl(forceLoopbackHttpUrl(launch.url))
+          };
+        }
+      } catch (_) {}
+      const fallback = buildLocalLoopbackRouteUrl(device);
+      if (fallback) {
+        return {
+          mode: 'lan',
+          sessionMode: 'web',
+          url: normalizeAndEmbedWebUrl(fallback),
+          fallbackUrl: ''
+        };
+      }
+      throw new Error('本机设备没有可用的局域网地址');
+    }
+
+    const hasLanUrl = !!toSafeString(device && device.lanUrl);
+    const lanReachable = hasLanUrl ? await probeLanReachable(device && device.lanUrl) : false;
+    if (hasLanUrl) {
+      try {
+        const body = await resolveRemoteLaunch(deviceId, { preferLan: true, lanReachable: true, forceMode: 'lan' });
+        const launch = body && body.launch ? body.launch : {};
+        if (toSafeString(launch.url)) {
+          const directLanReachable = isSameOriginHttpUrl(launch.url) || await probeLanReachable(launch.url);
+          if (!directLanReachable && !lanReachable) {
+            throw new Error('lan_unreachable');
+          }
           return { ...launch, sessionMode: 'web', url: normalizeAndEmbedWebUrl(launch.url) };
         }
       } catch (_) {}
@@ -2170,6 +2312,11 @@
     if (els.addBtn) {
       els.addBtn.addEventListener('click', openBindModal);
     }
+    if (els.focusModeBtn) {
+      els.focusModeBtn.addEventListener('click', () => {
+        setDockFocusModeEnabled(!state.dockFocusModeEnabled);
+      });
+    }
     if (els.bindCloseBtn) {
       els.bindCloseBtn.addEventListener('click', closeBindModal);
     }
@@ -2293,6 +2440,7 @@
     window.addEventListener('blur', stopDragging);
     window.addEventListener('resize', () => {
       updateWindowLayerBounds();
+      updateWorkspaceFocusMode();
       Array.from(state.sessions.values()).forEach((session) => {
         if (!session || !session.el) return;
         if (session.fullscreen) {
@@ -2319,6 +2467,7 @@
 
   function initElements() {
     els.addBtn = q('remote-dock-add-btn');
+    els.focusModeBtn = q('remote-dock-focus-mode-btn');
     els.dockTabs = q('remote-dock-tabs');
 
     els.bindModal = q('remote-bind-modal');
@@ -2370,6 +2519,9 @@
     }
     initElements();
     if (!els.dockTabs) return;
+    state.dockFocusModeEnabled = readDockFocusModePref();
+    ensureWorkspaceDimOverlay();
+    updateWorkspaceFocusMode();
     state.localProfile = readLocalProfileCache();
     applyLocalProfileToForm({ keepUserInput: false });
     setBindTab('import');
