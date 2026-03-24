@@ -25,7 +25,13 @@ const DEFAULT_SETTINGS = Object.freeze({
   ossAccessKeySecret: '',
   kimiCliCommand: 'kimi',
   hotTopicsKbPath: path.join(os.homedir(), 'Documents/知识库/热门话题'),
-  openaiApiKey: ''
+  openaiApiKey: '',
+  cloudflarePublicHost: '',
+  cloudflarePathPrefix: '',
+  cloudflareTunnelToken: '',
+  rustdeskWebBaseUrl: '/rustdesk-web/',
+  rustdeskSchemeAuthority: 'connect',
+  rustdeskPreferredRendezvous: '127.0.0.1:21116,127.0.0.1:21118'
 });
 
 const SETTINGS_FIELDS = Object.freeze(Object.keys(DEFAULT_SETTINGS));
@@ -55,12 +61,27 @@ const ENV_MAP = Object.freeze({
   ossAccessKeySecret: 'MECO_OSS_ACCESS_KEY_SECRET',
   kimiCliCommand: 'MECO_KIMI_CLI_COMMAND',
   hotTopicsKbPath: 'HOT_TOPICS_KB_PATH',
-  openaiApiKey: 'OPENAI_API_KEY'
+  openaiApiKey: 'OPENAI_API_KEY',
+  cloudflarePublicHost: 'MECO_CLOUDFLARE_PUBLIC_HOST',
+  cloudflarePathPrefix: 'MECO_CLOUDFLARE_PATH_PREFIX',
+  cloudflareTunnelToken: 'MECO_CLOUDFLARE_TUNNEL_TOKEN',
+  rustdeskWebBaseUrl: 'MECO_RUSTDESK_WEB_BASE_URL',
+  rustdeskSchemeAuthority: 'MECO_RUSTDESK_SCHEME_AUTHORITY',
+  rustdeskPreferredRendezvous: 'MECO_RUSTDESK_PREFERRED_RENDEZVOUS'
 });
 
 function toSafeString(value) {
   if (value === null || value === undefined) return '';
   return String(value).trim();
+}
+
+function normalizeRustDeskSchemeAuthority(value) {
+  const raw = toSafeString(value).toLowerCase();
+  if (!raw) return 'connect';
+  if (['connect', 'play', 'file-transfer', 'port-forward', 'rdp'].includes(raw)) {
+    return raw;
+  }
+  return 'connect';
 }
 
 function loadSettingsFile() {
@@ -196,8 +217,11 @@ function loadSettings() {
   if (!toSafeString(merged.openclawModelApiKey) && toSafeString(merged.kimiApiKey)) {
     merged.openclawModelApiKey = toSafeString(merged.kimiApiKey);
   }
+  merged.rustdeskSchemeAuthority = normalizeRustDeskSchemeAuthority(merged.rustdeskSchemeAuthority);
 
-  return applyEnvOverrides(merged);
+  const envApplied = applyEnvOverrides(merged);
+  envApplied.rustdeskSchemeAuthority = normalizeRustDeskSchemeAuthority(envApplied.rustdeskSchemeAuthority);
+  return envApplied;
 }
 
 function getSettings() {
@@ -209,7 +233,11 @@ function sanitizeIncoming(update = {}) {
   if (!update || typeof update !== 'object') return next;
   for (const field of PERSISTED_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(update, field)) continue;
-    next[field] = toSafeString(update[field]);
+    if (field === 'rustdeskSchemeAuthority') {
+      next[field] = normalizeRustDeskSchemeAuthority(update[field]);
+    } else {
+      next[field] = toSafeString(update[field]);
+    }
   }
   return next;
 }
@@ -251,7 +279,8 @@ function getMaskedSettings() {
     kimiApiKey: maskSecret(current.kimiApiKey),
     ossAccessKeyId: maskSecret(current.ossAccessKeyId),
     ossAccessKeySecret: maskSecret(current.ossAccessKeySecret),
-    openaiApiKey: maskSecret(current.openaiApiKey)
+    openaiApiKey: maskSecret(current.openaiApiKey),
+    cloudflareTunnelToken: maskSecret(current.cloudflareTunnelToken)
   };
 }
 

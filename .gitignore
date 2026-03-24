@@ -8,10 +8,13 @@ temp_uploads/
 data/app-settings.json
 .kimi-queue-cache.json
 .roundtable-topic-memory.json
+.roundtable-topic-memory.rooms.json
 data/room-covers/
 data/rooms.json
+data/remote-devices.json
 data/.DS_Store
 data/agents/.DS_Store
+.meco-studio.pid
 
 # 调试/临时脚本
 debug-openclaw.js

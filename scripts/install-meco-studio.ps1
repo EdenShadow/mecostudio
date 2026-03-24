@@ -39,6 +39,27 @@ $OpenclawRoot = Get-EnvOrDefault -Name 'OPENCLAW_ROOT' -Default (Join-Path $env:
 $ConfigSkillsRoot = Get-EnvOrDefault -Name 'CONFIG_SKILLS_ROOT' -Default (Join-Path $env:USERPROFILE '.config\agents\skills')
 $HotTopicsRoot = Get-EnvOrDefault -Name 'HOT_TOPICS_ROOT' -Default (Join-Path $env:USERPROFILE 'Documents\知识库\热门话题')
 
+# Remote control defaults (hardcoded deployment preset; can be overridden by env)
+$MecoCloudflarePublicHost = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_PUBLIC_HOST' -Default 'https://mecoclaw.com'
+$MecoCloudflarePathPrefix = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_PATH_PREFIX' -Default ''
+$MecoCloudflareTunnelToken = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_TUNNEL_TOKEN' -Default 'eyJhIjoiNzMyNGQ3ZjU3MGY5MzBlMjRjODRlYTY2ZmNkM2IwYjUiLCJ0IjoiYTk1OTZiMDgtNDZjOC00NmRlLWIzZGYtN2NjYjQ4OTJhM2NkIiwicyI6Ik5EWmlaREV4TjJFdFpXRXdNeTAwWlRNNExXSTJZakF0TWpFek5HRmlNVEl4WXpCaiJ9'
+$MecoRustdeskWebBaseUrl = Get-EnvOrDefault -Name 'MECO_RUSTDESK_WEB_BASE_URL' -Default 'https://rustdesk.com/web/'
+$MecoAutoInstallCloudflared = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_CLOUDFLARED' -Default '1'
+$MecoAutoInstallMeshcentral = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_MESHCENTRAL' -Default '0'
+$MecoMeshNodeBin = Get-EnvOrDefault -Name 'MECO_MESH_NODE_BIN' -Default ''
+$MecoMeshcentralCert = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_CERT' -Default 'mecoclaw.com'
+$MecoMeshcentralPort = [int](Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_PORT' -Default '4470')
+$MecoMeshcentralAliasPort = [int](Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_ALIAS_PORT' -Default '443')
+$MecoMeshcentralMpsPort = [int](Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_MPS_PORT' -Default '44430')
+$MecoMeshcentralMpsAliasPort = [int](Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_MPS_ALIAS_PORT' -Default '4433')
+$MecoMeshcentralAdminUser = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_ADMIN_USER' -Default 'eden_admin'
+$MecoMeshcentralAdminPass = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_ADMIN_PASS' -Default 'EdenMesh@2026!'
+$MecoMeshcentralAdminEmail = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_ADMIN_EMAIL' -Default 'admin@mecoclaw.local'
+$MecoMeshcentralAdminName = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_ADMIN_NAME' -Default 'Eden Admin'
+$MecoMeshcentralLoginToken = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_LOGIN_TOKEN' -Default ''
+$MecoMeshcentralDomainPath = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_DOMAIN_PATH' -Default ''
+$script:MeshcentralLoginTokenRuntime = ''
+
 $HotTopicsCategories = @(
   'AI_Tech',
   'Entertainment',
@@ -221,6 +242,244 @@ function Ensure-KimiCli {
   Write-Warn 'Kimi CLI command not found on Windows. Please install Kimi CLI manually if you need local kimi command support.'
 }
 
+function Ensure-Cloudflared {
+  if ($MecoAutoInstallCloudflared -ne '1') {
+    Write-Log "Skip cloudflared install (MECO_AUTO_INSTALL_CLOUDFLARED=$MecoAutoInstallCloudflared)"
+    return
+  }
+  if (Test-Cmd 'cloudflared') {
+    Write-Log 'cloudflared already installed'
+    return
+  }
+  if (-not (Install-WithWinget -PackageId 'Cloudflare.cloudflared' -Label 'cloudflared')) {
+    Write-Warn 'cloudflared install failed, please install manually if needed'
+  }
+  if (-not (Test-Cmd 'cloudflared')) {
+    Write-Warn 'cloudflared command still not found in PATH'
+  }
+}
+
+function Resolve-MeshNodeBin {
+  if (-not [string]::IsNullOrWhiteSpace($MecoMeshNodeBin) -and (Test-Path $MecoMeshNodeBin)) {
+    return $MecoMeshNodeBin
+  }
+  if (Test-Cmd 'node') {
+    return 'node'
+  }
+  Throw-Fail 'node binary not found for meshcentral runtime'
+}
+
+function Patch-MeshcentralInstallmodulesCompat {
+  param([Parameter(Mandatory = $true)][string]$FilePath)
+  if (-not (Test-Path $FilePath)) { return }
+  $raw = Get-Content -Raw -Path $FilePath
+  if ($raw -match 'require\.resolve\(moduleName\)') { return }
+  if ($raw -notmatch "modulePath = ex\.stack\.split\(' '\)\.pop\(\)\.slice\(1,-3\)") {
+    Write-Warn "meshcentral compat patch skipped (pattern not found): $FilePath"
+    return
+  }
+
+  $replacement = @"
+const msg = '' + ex;
+                            const m = msg.match(/in\s+([^\s]+package\.json)/i);
+                            if (m && m[1]) {
+                                modulePath = m[1].replace(/^['"]+|['".,]+$/g, '');
+                            }
+                            if (modulePath == null) {
+                                try {
+                                    var resolvedModulePath = require.resolve(moduleName);
+                                    var probe = require('path').dirname(resolvedModulePath);
+                                    for (var pcount = 0; pcount < 6; pcount++) {
+                                        var pp = require('path').join(probe, 'package.json');
+                                        if (require('fs').existsSync(pp)) {
+                                            try {
+                                                var pj = JSON.parse(require('fs').readFileSync(pp, 'utf8'));
+                                                if (pj && (pj.name == moduleName)) { modulePath = pp; break; }
+                                            } catch (ex2) { }
+                                        }
+                                        var up = require('path').dirname(probe);
+                                        if (up == probe) break;
+                                        probe = up;
+                                    }
+                                } catch (ex3) { }
+                            }
+"@
+  $next = $raw.Replace("modulePath = ex.stack.split(' ').pop().slice(1,-3)", $replacement)
+  Set-Content -Path $FilePath -Value $next -Encoding UTF8
+  Write-Log "Patched meshcentral module-compat guard: $FilePath"
+}
+
+function Get-RandomHex {
+  param([int]$Bytes = 24)
+  $arr = New-Object byte[] $Bytes
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $rng.GetBytes($arr)
+  }
+  finally {
+    $rng.Dispose()
+  }
+  return (($arr | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+function Write-MeshcentralConfig {
+  param([Parameter(Mandatory = $true)][string]$ConfigPath)
+
+  $current = @{}
+  if (Test-Path $ConfigPath) {
+    try { $current = Get-Content -Raw -Path $ConfigPath | ConvertFrom-Json -AsHashtable } catch { $current = @{} }
+  }
+  if (-not $current.ContainsKey('settings') -or $null -eq $current.settings) { $current.settings = @{} }
+  if (-not $current.ContainsKey('domains') -or $null -eq $current.domains) { $current.domains = @{} }
+  if (-not $current.domains.ContainsKey('') -or $null -eq $current.domains['']) { $current.domains[''] = @{} }
+
+  $settings = $current.settings
+  $settings.cert = $MecoMeshcentralCert
+  $settings.WANonly = $true
+  $settings.port = $MecoMeshcentralPort
+  $settings.portBind = '127.0.0.1'
+  $settings.aliasPort = $MecoMeshcentralAliasPort
+  $settings.redirPort = 0
+  $settings.redirAliasPort = 80
+  $settings.tlsOffload = '127.0.0.1,::1'
+  $settings.trustedProxy = '127.0.0.1,::1'
+  $settings.allowFraming = $true
+  if (-not $settings.ContainsKey('sessionKey') -or [string]::IsNullOrWhiteSpace([string]$settings.sessionKey)) { $settings.sessionKey = Get-RandomHex -Bytes 24 }
+  if (-not $settings.ContainsKey('dbEncryptKey') -or [string]::IsNullOrWhiteSpace([string]$settings.dbEncryptKey)) { $settings.dbEncryptKey = Get-RandomHex -Bytes 24 }
+  $settings.mpsPort = $MecoMeshcentralMpsPort
+  $settings.mpsPortBind = '127.0.0.1'
+  $settings.mpsAliasPort = $MecoMeshcentralMpsAliasPort
+
+  $domain = $current.domains['']
+  if (-not $domain.ContainsKey('title')) { $domain.title = 'Meco Mesh' }
+  if (-not $domain.ContainsKey('title2')) { $domain.title2 = 'MeshCentral' }
+  $domain.newAccounts = $true
+  $domain.minify = $true
+  $certHost = [string]$MecoMeshcentralCert
+  $certHost = $certHost -replace '^\s*https?://', ''
+  $certHost = ($certHost -split '/')[0]
+  $certHost = ($certHost -split ':')[0]
+  $certHost = $certHost.Trim().ToLowerInvariant()
+  $allowedOrigins = @()
+  foreach ($h in @($certHost, '127.0.0.1', 'localhost')) {
+    if (-not [string]::IsNullOrWhiteSpace($h) -and -not ($allowedOrigins -contains $h)) {
+      $allowedOrigins += $h
+    }
+  }
+  $domain.allowedorigin = ($allowedOrigins -join ',')
+
+  $dir = Split-Path -Parent $ConfigPath
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $json = $current | ConvertTo-Json -Depth 20
+  Set-Content -Path $ConfigPath -Value $json -Encoding UTF8
+}
+
+function Ensure-MeshcentralRuntime {
+  Write-Log 'MeshCentral support removed; skip meshcentral runtime install.'
+  return
+  if ($MecoAutoInstallMeshcentral -ne '1') {
+    Write-Log "Skip meshcentral install (MECO_AUTO_INSTALL_MESHCENTRAL=$MecoAutoInstallMeshcentral)"
+    return
+  }
+
+  $nodeBin = Resolve-MeshNodeBin
+  $mcDir = Join-Path $MecoInstallDir 'meshcentral'
+  New-Item -ItemType Directory -Force -Path $mcDir | Out-Null
+
+  $pkgJson = Join-Path $mcDir 'package.json'
+  if (-not (Test-Path $pkgJson)) {
+    Invoke-Checked -FilePath 'npm' -Arguments @('init', '-y') -WorkingDirectory $mcDir
+  }
+
+  Write-Log 'Installing meshcentral runtime dependencies...'
+  Invoke-Checked -FilePath 'npm' -Arguments @('install', '--no-fund', '--no-audit', '--omit=optional', 'meshcentral', 'ua-client-hints-js@0.1.2') -WorkingDirectory $mcDir -IgnoreExitCode
+  $mcModuleDir = Join-Path $mcDir 'node_modules\meshcentral'
+  if (Test-Path $mcModuleDir) {
+    Invoke-Checked -FilePath 'npm' -Arguments @('install', '--no-fund', '--no-audit', '--omit=optional', 'ua-client-hints-js@0.1.2') -WorkingDirectory $mcModuleDir -IgnoreExitCode
+    Patch-MeshcentralInstallmodulesCompat -FilePath (Join-Path $mcModuleDir 'meshcentral.js')
+  }
+
+  $configPath = Join-Path $mcDir 'meshcentral-data\config.json'
+  Write-MeshcentralConfig -ConfigPath $configPath
+
+  $meshNodeProcs = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue
+  foreach ($proc in $meshNodeProcs) {
+    if ($null -eq $proc.CommandLine) { continue }
+    if ($proc.CommandLine -like "*$mcDir*node_modules*meshcentral*--configfile*config.json*") {
+      try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+    }
+  }
+
+  Push-Location $mcDir
+  try {
+    $createOut = (& $nodeBin 'node_modules/meshcentral' '--configfile' 'config.json' '--createaccount' $MecoMeshcentralAdminUser '--pass' $MecoMeshcentralAdminPass '--email' $MecoMeshcentralAdminEmail '--name' $MecoMeshcentralAdminName 2>&1 | Out-String)
+    if ($createOut -match 'Done\.' -or $createOut -match 'User already exists\.') {
+      Write-Log "MeshCentral admin account ready: $MecoMeshcentralAdminUser"
+    }
+    else {
+      Write-Warn "MeshCentral createaccount output: $($createOut.Trim())"
+    }
+
+    $adminOut = (& $nodeBin 'node_modules/meshcentral' '--configfile' 'config.json' '--adminaccount' $MecoMeshcentralAdminUser 2>&1 | Out-String)
+    if ($adminOut -match 'Done\.') {
+      Write-Log "MeshCentral admin privilege ensured: $MecoMeshcentralAdminUser"
+    }
+    else {
+      Write-Warn "MeshCentral adminaccount output: $($adminOut.Trim())"
+    }
+
+    $tokenOut = (& $nodeBin 'node_modules/meshcentral' '--configfile' 'config.json' '--logintoken' "user//$MecoMeshcentralAdminUser" 2>&1 | Out-String)
+    $lastLine = (($tokenOut -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Last 1)
+    if ($lastLine -and $lastLine -match '^[A-Za-z0-9._~=-]{32,}$') {
+      $script:MeshcentralLoginTokenRuntime = $lastLine.Trim()
+      Write-Log "MeshCentral login token generated for $MecoMeshcentralAdminUser"
+    }
+    else {
+      Write-Warn 'MeshCentral logintoken generation did not return a valid token'
+    }
+  }
+  finally {
+    Pop-Location
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($script:MeshcentralLoginTokenRuntime)) {
+    $secretDir = Join-Path $env:USERPROFILE '.meco-studio'
+    New-Item -ItemType Directory -Force -Path $secretDir | Out-Null
+    $secretPath = Join-Path $secretDir 'meshcentral-bootstrap.json'
+    $payload = @{
+      updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+      meshcentralAdminUser = $MecoMeshcentralAdminUser
+      meshcentralAdminPass = $MecoMeshcentralAdminPass
+      meshcentralLoginToken = $script:MeshcentralLoginTokenRuntime
+    } | ConvertTo-Json -Depth 8
+    Set-Content -Path $secretPath -Value $payload -Encoding UTF8
+    Write-Log "Stored Mesh bootstrap secret locally: $secretPath"
+  }
+
+  $stdout = Join-Path $mcDir 'meshcentral.log'
+  $stderr = Join-Path $mcDir 'meshcentral.err.log'
+  $proc = Start-Process -FilePath $nodeBin -ArgumentList @('node_modules/meshcentral', '--configfile', 'config.json') -WorkingDirectory $mcDir -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+  $healthy = $false
+  for ($i = 0; $i -lt 18; $i++) {
+    try {
+      $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$MecoMeshcentralPort/" -TimeoutSec 3
+      if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
+        $healthy = $true
+        break
+      }
+    }
+    catch {
+      Start-Sleep -Seconds 1
+    }
+  }
+  if ($healthy) {
+    Write-Log "MeshCentral started. pid=$($proc.Id), url=http://127.0.0.1:$MecoMeshcentralPort"
+  }
+  else {
+    Write-Warn "MeshCentral process started but healthcheck failed, check $stdout / $stderr"
+  }
+}
+
 function Configure-OpenclawKimiAuth {
   param([string]$OpenclawModelApiKey)
 
@@ -376,6 +635,11 @@ function Configure-MecoRuntimeSettings {
     ossBucket = $MecoOssBucket
     ossAccessKeyId = $MecoOssAccessKeyId
     ossAccessKeySecret = $MecoOssAccessKeySecret
+    cloudflarePublicHost = $MecoCloudflarePublicHost
+    cloudflarePathPrefix = $MecoCloudflarePathPrefix
+    cloudflareTunnelToken = $MecoCloudflareTunnelToken
+    rustdeskWebBaseUrl = $MecoRustdeskWebBaseUrl
+    rustdeskSchemeAuthority = 'connect'
   }
 
   foreach ($key in $patch.Keys) {
@@ -698,6 +962,7 @@ function Main {
   Prepare-Repo
   Ensure-KimiCli
   Install-NpmDependencies
+  Ensure-Cloudflared
   Ensure-HotTopicsKnowledgeBase
   Ensure-HotTopicsSkill
   Sync-OpenclawSkillSwitchesFromManifest

@@ -8,6 +8,7 @@
     <script src="lib/js/three.min.js"></script>
     <script src="lib/js/OrbitControls.js"></script>
     <script src="js/playgen.js"></script>
+    <script src="js/remote-control-dock.js?v=20260325g"></script>
     <link href="lib/css/inter.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-round.css" rel="stylesheet"/>
@@ -71,6 +72,56 @@
         .glass-card:hover {
             border-color: rgba(192, 132, 252, 0.3);
             background: linear-gradient(145deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
+        }
+        @media (max-width: 1180px) {
+            #dashboard-view #agent-grid {
+                gap: 0.9rem !important;
+                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            }
+            #dashboard-view #agent-grid > button,
+            #dashboard-view #agent-grid .glass-card {
+                height: 300px !important;
+                border-radius: 1rem !important;
+            }
+            #dashboard-view #agent-grid > button {
+                padding: 0.8rem 0.55rem !important;
+            }
+            #dashboard-view #agent-grid > button > .w-20.h-20 {
+                width: 3rem !important;
+                height: 3rem !important;
+                margin-bottom: 0.55rem !important;
+                border-radius: 0.8rem !important;
+            }
+            #dashboard-view #agent-grid > button > .w-20.h-20 .material-icons-round {
+                font-size: 1.7rem !important;
+            }
+            #dashboard-view #agent-grid > button h3 {
+                font-size: 0.95rem !important;
+                line-height: 1.2 !important;
+            }
+            #dashboard-view #agent-grid > button p {
+                font-size: 0.72rem !important;
+                line-height: 1.2 !important;
+                margin-top: 0.3rem !important;
+            }
+            #dashboard-view #agent-grid .glass-card > .relative.h-56 {
+                height: 9.8rem !important;
+            }
+            #dashboard-view #agent-grid .glass-card > .p-6 {
+                padding: 0.82rem !important;
+            }
+            #dashboard-view #agent-grid .glass-card h3 {
+                font-size: 0.98rem !important;
+                line-height: 1.2 !important;
+            }
+            #dashboard-view #agent-grid .glass-card p {
+                font-size: 0.72rem !important;
+                line-height: 1.28 !important;
+                margin-bottom: 0.6rem !important;
+            }
+            #dashboard-view #agent-grid .glass-card .pt-4 {
+                padding-top: 0.45rem !important;
+            }
         }
         @keyframes float {
             0% { transform: translate(0px, 0px) scale(1); }
@@ -207,12 +258,12 @@
         .channel-mention-input {
             white-space: pre-wrap;
             word-break: break-word;
-            line-height: 24px;
+            line-height: 21px;
             box-sizing: border-box;
-            padding-top: 16px;
-            padding-bottom: 16px;
-            min-height: 56px;
-            max-height: 104px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            min-height: 48px;
+            max-height: 96px;
             overflow-y: auto;
             outline: none;
         }
@@ -250,6 +301,476 @@
             color: #ffffff;
             border-color: rgba(255, 255, 255, 0.24);
         }
+        #context-fab {
+            bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+        }
+        :root {
+            --meco-sidebar-expanded: 18rem;
+            --meco-sidebar-compact: 5.25rem;
+        }
+        #app-sidebar {
+            width: var(--meco-sidebar-expanded);
+            min-width: var(--meco-sidebar-expanded);
+            transition: width 180ms ease, min-width 180ms ease;
+        }
+        #app-sidebar.sidebar-compact {
+            width: var(--meco-sidebar-compact);
+            min-width: var(--meco-sidebar-compact);
+        }
+        #app-sidebar .meco-sidebar-nav-link,
+        #app-sidebar .meco-sidebar-entry {
+            transition: padding 150ms ease, gap 150ms ease, justify-content 150ms ease;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-nav-link,
+        #app-sidebar.sidebar-compact .meco-sidebar-entry {
+            justify-content: center;
+            gap: 0;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-label,
+        #app-sidebar.sidebar-compact .meco-sidebar-item-text,
+        #app-sidebar.sidebar-compact .meco-sidebar-item-actions,
+        #app-sidebar.sidebar-compact .meco-sidebar-header-text,
+        #app-sidebar.sidebar-compact .meco-sidebar-header-actions,
+        #app-sidebar.sidebar-compact .nav-beta,
+        #app-sidebar.sidebar-compact .meco-sidebar-footer-label {
+            display: none !important;
+        }
+        #app-sidebar.sidebar-compact #sidebar-agent-list,
+        #app-sidebar.sidebar-compact #sidebar-channel-list {
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+            padding-top: 0.12rem;
+            padding-bottom: 0.12rem;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-header-row {
+            display: none !important;
+            padding-top: 0;
+            padding-bottom: 0;
+            margin: 0;
+            min-height: 0;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-divider {
+            margin-left: 0.75rem;
+            margin-right: 0.75rem;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-avatar-wrap {
+            margin-left: auto;
+            margin-right: auto;
+        }
+        #app-sidebar .meco-sidebar-tooltip-host {
+            position: relative;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-tooltip-host[data-tooltip]::before,
+        #app-sidebar.sidebar-compact .meco-sidebar-tooltip-host[data-tooltip]::after {
+            display: none !important;
+        }
+        .meco-sidebar-floating-tooltip {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 2147482000;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(0);
+            transition: opacity 120ms ease, transform 120ms ease;
+            background: rgba(17, 24, 39, 0.96);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            color: #f9fafb;
+            border-radius: 8px;
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 1.2;
+            white-space: nowrap;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+        }
+        .meco-sidebar-floating-tooltip.is-visible {
+            opacity: 1;
+            transform: translateY(-2px);
+        }
+        #app-sidebar.sidebar-compact > .px-4.py-8.space-y-2 {
+            padding-top: 0.42rem;
+            padding-bottom: 0.28rem;
+            gap: 0;
+        }
+        #app-sidebar.sidebar-compact > .px-4.py-8.space-y-2 > * + * {
+            margin-top: 0.18rem !important;
+        }
+        #sidebar-nav-compact-toggle {
+            display: none;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 1.18rem;
+            height: 1.18rem;
+            width: 1.96rem;
+            min-width: 1.96rem;
+            max-width: 1.96rem;
+            padding-top: 0;
+            padding-bottom: 0;
+            padding-left: 0;
+            padding-right: 0;
+            margin-left: auto;
+            margin-right: auto;
+            margin-bottom: 0;
+            border-radius: 0.45rem;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-links {
+            margin-top: 0 !important;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph {
+            position: relative;
+            display: inline-block;
+            width: 0.9rem;
+            height: 0.9rem;
+            color: currentColor;
+            line-height: 1;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph .dot {
+            position: absolute;
+            top: 50%;
+            width: 0.17rem;
+            height: 0.17rem;
+            border-radius: 9999px;
+            background: currentColor;
+            transform: translateY(-50%);
+            opacity: 1;
+            transition: opacity 140ms ease, transform 160ms ease;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph .dot-1 {
+            left: 0.09rem;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph .dot-2 {
+            left: calc(50% - 0.085rem);
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph .dot-3 {
+            right: 0.09rem;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph .x-stroke {
+            position: absolute;
+            top: calc(50% - 0.055rem);
+            left: calc(50% - 0.34rem);
+            width: 0.68rem;
+            height: 0.11rem;
+            border-radius: 9999px;
+            background: currentColor;
+            opacity: 0;
+            transition: opacity 140ms ease, transform 160ms ease;
+            transform-origin: 50% 50%;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph .x-a {
+            transform: rotate(45deg) scaleX(0.45);
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph .x-b {
+            transform: rotate(-45deg) scaleX(0.45);
+        }
+        #app-sidebar.sidebar-compact.meco-sidebar-compact-nav-open #sidebar-nav-compact-toggle .nav-compact-glyph .dot {
+            opacity: 0;
+            transform: translateY(-50%) scale(0.5);
+        }
+        #app-sidebar.sidebar-compact.meco-sidebar-compact-nav-open #sidebar-nav-compact-toggle .nav-compact-glyph .x-stroke {
+            opacity: 1;
+        }
+        #app-sidebar.sidebar-compact.meco-sidebar-compact-nav-open #sidebar-nav-compact-toggle .nav-compact-glyph .x-a {
+            transform: rotate(45deg) scaleX(1);
+        }
+        #app-sidebar.sidebar-compact.meco-sidebar-compact-nav-open #sidebar-nav-compact-toggle .nav-compact-glyph .x-b {
+            transform: rotate(-45deg) scaleX(1);
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-icon {
+            display: none;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-icon,
+        #app-sidebar.sidebar-compact #sidebar-nav-compact-toggle .nav-compact-glyph {
+            align-items: center;
+            justify-content: center;
+            vertical-align: middle;
+        }
+        #sidebar-nav-links {
+            overflow: hidden;
+            transition: max-height 200ms ease, opacity 170ms ease, transform 200ms ease;
+            transform-origin: top center;
+        }
+        #app-sidebar.sidebar-compact #sidebar-nav-links {
+            max-height: 0;
+            opacity: 0;
+            transform: translateY(-6px) scaleY(0.96);
+            pointer-events: none;
+        }
+        #app-sidebar.sidebar-compact.meco-sidebar-compact-nav-open #sidebar-nav-links {
+            max-height: 230px;
+            opacity: 1;
+            transform: translateY(0) scaleY(1);
+            pointer-events: auto;
+        }
+        #app-sidebar:not(.sidebar-compact) #sidebar-nav-links {
+            max-height: none;
+            opacity: 1;
+            transform: none;
+            pointer-events: auto;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-nav-link {
+            min-height: 2.02rem;
+            padding-top: 0.34rem;
+            padding-bottom: 0.34rem;
+        }
+        #app-sidebar .meco-sidebar-avatar-wrap .js-busy-badge {
+            left: auto;
+            right: 1px;
+            bottom: 2px;
+            transform: none;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-avatar-wrap .js-busy-badge {
+            left: auto;
+            right: 1px;
+            bottom: 2px;
+            transform: none;
+        }
+        #app-sidebar.sidebar-compact .meco-sidebar-empty {
+            text-align: center;
+            padding-left: 0;
+            padding-right: 0;
+        }
+        #sidebar-toggle-btn {
+            background: transparent !important;
+            border-radius: 0.65rem;
+            transition: transform 190ms ease, color 150ms ease;
+            transform: translateX(0);
+        }
+        #sidebar-toggle-btn:hover,
+        #sidebar-toggle-btn:focus-visible {
+            background: transparent !important;
+        }
+        #sidebar-toggle-btn.meco-sidebar-toggle-shift {
+            transform: translateX(-5px);
+        }
+        @keyframes remoteDockAddPulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(192, 132, 252, 0.34), 0 8px 18px rgba(0, 0, 0, 0.35);
+            }
+            50% {
+                box-shadow: 0 0 0 6px rgba(192, 132, 252, 0), 0 12px 24px rgba(0, 0, 0, 0.42);
+            }
+        }
+        @keyframes remoteDockAddSpin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        #remote-dock-add-btn.remote-dock-add-btn {
+            position: relative;
+            width: 2.35rem;
+            height: 2.35rem;
+            min-width: 2.35rem;
+            min-height: 2.35rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(192, 132, 252, 0.46);
+            color: #f5f3ff;
+            background:
+                radial-gradient(70% 70% at 32% 28%, rgba(255,255,255,0.28), rgba(255,255,255,0) 62%),
+                linear-gradient(145deg, rgba(192,132,252,0.95), rgba(124,58,237,0.86));
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 170ms ease, filter 170ms ease, border-color 170ms ease;
+            animation: remoteDockAddPulse 2.25s ease-in-out infinite;
+            overflow: hidden;
+        }
+        #remote-dock-add-btn.remote-dock-add-btn::before {
+            content: '';
+            position: absolute;
+            inset: 1px;
+            border-radius: inherit;
+            border: 1px dashed rgba(216, 180, 254, 0.5);
+            opacity: 0.95;
+            animation: remoteDockAddSpin 6s linear infinite;
+            pointer-events: none;
+        }
+        #remote-dock-add-btn.remote-dock-add-btn::after {
+            content: '';
+            position: absolute;
+            inset: 2px;
+            border-radius: inherit;
+            background: linear-gradient(165deg, rgba(255,255,255,0.18), rgba(255,255,255,0.02));
+            pointer-events: none;
+        }
+        #remote-dock-add-btn.remote-dock-add-btn .remote-dock-add-icon {
+            position: relative;
+            z-index: 1;
+            width: 1rem;
+            height: 1rem;
+            filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+            transition: transform 180ms ease;
+        }
+        #remote-dock-add-btn.remote-dock-add-btn:hover,
+        #remote-dock-add-btn.remote-dock-add-btn:focus-visible {
+            transform: translateY(-1px) scale(1.04);
+            filter: saturate(1.1) brightness(1.07);
+            border-color: rgba(233, 213, 255, 0.95);
+        }
+        #remote-dock-add-btn.remote-dock-add-btn:hover .remote-dock-add-icon,
+        #remote-dock-add-btn.remote-dock-add-btn:focus-visible .remote-dock-add-icon {
+            transform: rotate(90deg);
+        }
+        #remote-dock-scroll {
+            flex: 1 1 auto;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-gutter: stable both-edges;
+            padding-bottom: 2px;
+        }
+        #remote-dock-scroll::-webkit-scrollbar {
+            height: 8px;
+        }
+        #remote-dock-scroll::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 9999px;
+        }
+        #remote-dock-scroll::-webkit-scrollbar-thumb {
+            background: linear-gradient(90deg, rgba(168, 85, 247, 0.72), rgba(236, 72, 153, 0.6));
+            border-radius: 9999px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+        }
+        #remote-dock-scroll:hover::-webkit-scrollbar-thumb {
+            background: linear-gradient(90deg, rgba(192, 132, 252, 0.92), rgba(244, 114, 182, 0.82));
+        }
+        body.meco-chat-compact #at-chat-messages {
+            padding-left: 16px !important;
+            padding-right: 16px !important;
+            padding-bottom: 14px !important;
+        }
+        body.meco-chat-compact #at-chat-messages > div[data-role] {
+            gap: 0.6rem !important;
+            margin-bottom: 0.55rem !important;
+            max-width: 94%;
+        }
+        body.meco-chat-compact #at-chat-messages > div[data-role] > img,
+        body.meco-chat-compact #at-chat-messages > div[data-role] > .w-10.h-10,
+        body.meco-chat-compact #at-loading-indicator > img,
+        body.meco-chat-compact #at-loading-indicator > .w-10.h-10 {
+            width: 2rem !important;
+            height: 2rem !important;
+        }
+        body.meco-chat-compact #at-chat-messages > div[data-role] > div:last-child {
+            padding: 0.72rem 0.9rem !important;
+            border-radius: 1rem !important;
+            font-size: 13px !important;
+            line-height: 1.45 !important;
+        }
+        body.meco-chat-compact #at-chat-messages .sender-label {
+            margin-bottom: 0.25rem !important;
+        }
+        body.meco-chat-compact #at-chat-messages .reasoning-container {
+            margin-top: 0.45rem !important;
+            padding: 0.55rem !important;
+            border-radius: 0.8rem !important;
+        }
+        body.meco-chat-compact #at-loading-indicator {
+            gap: 0.6rem !important;
+            margin-bottom: 0.55rem !important;
+        }
+        body.meco-chat-compact #at-loading-indicator > div:last-child {
+            padding: 0.6rem 0.75rem !important;
+            border-radius: 0.95rem !important;
+        }
+        #at-upload-btn,
+        #at-send-btn {
+            width: 2.75rem;
+            height: 2.75rem;
+            min-width: 2.75rem;
+            min-height: 2.75rem;
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            line-height: 1;
+        }
+        #at-upload-btn .material-icons-round,
+        #at-send-btn .material-icons-round {
+            font-size: 1.08rem;
+            line-height: 1;
+        }
+        #at-chat-input {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            padding-top: 0.72rem !important;
+            padding-bottom: 0.72rem !important;
+            min-height: 48px !important;
+            max-height: 96px !important;
+            line-height: 1.3 !important;
+        }
+        #at-channel-input-wrap {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        #at-chat-composer-shell {
+            padding: 1rem !important;
+        }
+        #at-chat-composer-row {
+            gap: 0.5rem !important;
+            align-items: center !important;
+        }
+        #at-chat-composer-box {
+            border-radius: 22px !important;
+            min-height: 2.75rem;
+        }
+        #header-notify-btn {
+            position: relative;
+        }
+        #header-notify-btn .notify-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 0.42rem;
+            height: 0.42rem;
+            border-radius: 999px;
+            background: #ef4444;
+            box-shadow: 0 0 10px rgba(239, 68, 68, 0.65);
+            border: 1px solid rgba(15, 17, 24, 0.9);
+        }
+        .meco-header-icon-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            color: #9ca3af;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 160ms ease;
+        }
+        .meco-header-icon-btn:hover,
+        .meco-header-icon-btn:focus-visible {
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.08);
+        }
+        #header-search-toggle-btn,
+        #header-create-compact-btn,
+        #header-search-compact-panel {
+            display: none;
+        }
+        #app-header.meco-header-compact #header-search-panel,
+        #app-header.meco-header-compact #header-create-btn {
+            display: none !important;
+        }
+        #app-header.meco-header-compact #header-search-toggle-btn,
+        #app-header.meco-header-compact #header-create-compact-btn {
+            display: inline-flex;
+        }
+        #header-search-compact-panel {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 12px;
+            left: 76px;
+            z-index: 45;
+        }
+        #app-header.meco-header-compact.meco-header-search-open #header-search-compact-panel {
+            display: block;
+        }
     </style>
     <script>
         console.log("Meco Studio script initializing...");
@@ -274,46 +795,44 @@
             if (atView) atView.classList.add('hidden');
 
             // Reset all nav styles (Default Style)
-            const defaultStyle = "flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer";
-            const playDefaultStyle = "flex items-center justify-between gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer";
+            const defaultStyle = "meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer";
+            const playDefaultStyle = "meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer";
             
             if (navDash) {
                 navDash.className = defaultStyle;
                 navDash.innerHTML = `
-                    <span class="material-icons-round group-hover:text-primary transition-colors">dashboard</span>
-                    <span class="text-sm font-medium">Dashboard</span>
+                    <span class="material-icons-round nav-icon group-hover:text-primary transition-colors">dashboard</span>
+                    <span class="meco-sidebar-label text-sm font-medium">Dashboard</span>
                 `;
             }
 
             if (navPlay) {
                 navPlay.className = playDefaultStyle;
                 navPlay.innerHTML = `
-                    <div class="flex items-center gap-3">
-                        <span class="material-icons-outlined group-hover:text-blue-400 transition-colors">videogame_asset</span>
-                        <span class="text-sm font-medium">Playgen</span>
-                    </div>
-                    <span class="text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500">BETA</span>
+                    <span class="material-icons-outlined nav-icon group-hover:text-blue-400 transition-colors">videogame_asset</span>
+                    <span class="meco-sidebar-label text-sm font-medium flex-1 min-w-0">Playgen</span>
+                    <span class="nav-beta text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500">BETA</span>
                 `;
             }
 
             if (navContext) {
                 navContext.className = defaultStyle;
                 navContext.innerHTML = `
-                    <span class="material-icons-outlined group-hover:text-pink-400 transition-colors">movie_creation</span>
-                    <span class="text-sm font-medium">Context</span>
+                    <span class="material-icons-outlined nav-icon group-hover:text-pink-400 transition-colors">movie_creation</span>
+                    <span class="meco-sidebar-label text-sm font-medium">Context</span>
                 `;
             }
             
             if (navAgentTools) {
                 navAgentTools.className = defaultStyle;
                 navAgentTools.innerHTML = `
-                    <span class="material-icons-outlined group-hover:text-green-400 transition-colors">construction</span>
-                    <span class="text-sm font-medium">Agent Tools</span>
+                    <span class="material-icons-outlined nav-icon group-hover:text-green-400 transition-colors">construction</span>
+                    <span class="meco-sidebar-label text-sm font-medium">Agent Tools</span>
                 `;
             }
 
             // Active Style Template
-            const activeStyle = "flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer";
+            const activeStyle = "meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer";
             
             // Handle 3D Dispose safely
             if (viewName !== 'playgen' && window.Playgen && typeof window.Playgen.dispose === 'function') {
@@ -325,14 +844,12 @@
                 if (playgen) playgen.classList.remove('hidden');
                 
                 if (navPlay) {
-                    navPlay.className = "flex items-center justify-between gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer";
+                    navPlay.className = "meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer";
                     navPlay.innerHTML = `
                         <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                        <div class="flex items-center gap-3 relative z-10">
-                            <span class="material-icons-outlined text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">videogame_asset</span>
-                            <span class="text-sm">Playgen</span>
-                        </div>
-                        <span class="text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500 relative z-10">BETA</span>
+                        <span class="material-icons-outlined nav-icon relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">videogame_asset</span>
+                        <span class="meco-sidebar-label text-sm relative z-10 flex-1 min-w-0">Playgen</span>
+                        <span class="nav-beta text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500 relative z-10">BETA</span>
                     `;
                 }
 
@@ -356,8 +873,8 @@
                     navContext.className = activeStyle;
                     navContext.innerHTML = `
                         <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                        <span class="material-icons-outlined relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">movie_creation</span>
-                        <span class="text-sm relative z-10">Context</span>
+                        <span class="material-icons-outlined nav-icon relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">movie_creation</span>
+                        <span class="meco-sidebar-label text-sm relative z-10">Context</span>
                     `;
                 }
                 
@@ -375,8 +892,8 @@
                     navAgentTools.className = activeStyle;
                     navAgentTools.innerHTML = `
                         <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                        <span class="material-icons-outlined relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">construction</span>
-                        <span class="text-sm relative z-10">Agent Tools</span>
+                        <span class="material-icons-outlined nav-icon relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">construction</span>
+                        <span class="meco-sidebar-label text-sm relative z-10">Agent Tools</span>
                     `;
                 }
                 
@@ -392,10 +909,13 @@
                     navDash.className = activeStyle;
                     navDash.innerHTML = `
                         <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                        <span class="material-icons-round relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">dashboard</span>
-                        <span class="text-sm relative z-10">Dashboard</span>
+                        <span class="material-icons-round nav-icon relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">dashboard</span>
+                        <span class="meco-sidebar-label text-sm relative z-10">Dashboard</span>
                     `;
                 }
+            }
+            if (typeof applySidebarLayout === 'function') {
+                applySidebarLayout();
             }
         };
 
@@ -480,7 +1000,7 @@
         let atPersonaRefreshInProgress = false;
         let atChannelRefreshInProgress = false;
         let atChannelRuleMode = true;
-        let atSingleChatImmersive = false;
+        let atSingleChatImmersive = true;
         const AT_SOUND_PREF_KEY = 'meco.agenttools.soundEnabled';
         const AT_CHANNEL_RULE_MODE_PREF_KEY = 'meco.agenttools.channelRuleMode';
         const AT_IMMERSIVE_PREF_KEY = 'meco.agenttools.singleChatImmersive';
@@ -542,16 +1062,234 @@
         let mecoUpdateLastLogs = [];
         let mecoUpdateLastTaskId = '';
         let mecoUpdateLastFinishedTaskId = '';
+        let mecoUpdateSawRunningThisSession = false;
+        const MECO_UPDATE_NOTIFIED_TASK_ID_KEY = 'meco.update.notifiedTaskId';
+        const MECO_SIDEBAR_AUTO_COLLAPSE_WIDTH = 1040;
+        const MECO_HEADER_COMPACT_WIDTH = 1080;
+        let mecoSidebarManualCollapsed = false;
+        let mecoSidebarForceExpandedOnNarrow = false;
+        let mecoSidebarWasNarrow = false;
+        let mecoCompactNavExpanded = false;
+        let mecoHeaderSearchExpanded = false;
+        let mecoSidebarTooltipEl = null;
+        let mecoSidebarTooltipTarget = null;
+
+        function isSidebarNarrowViewport() {
+            return window.innerWidth < MECO_SIDEBAR_AUTO_COLLAPSE_WIDTH;
+        }
+
+        function isSidebarCompact() {
+            return !!(mecoSidebarManualCollapsed || (isSidebarNarrowViewport() && !mecoSidebarForceExpandedOnNarrow));
+        }
+
+        function applySidebarLayout() {
+            const sidebar = document.getElementById('app-sidebar');
+            if (!sidebar) return;
+            const compact = isSidebarCompact();
+            sidebar.classList.toggle('sidebar-compact', compact);
+            sidebar.classList.toggle('sidebar-expanded', !compact);
+            if (!compact) {
+                mecoCompactNavExpanded = false;
+                hideSidebarFloatingTooltip();
+            }
+            document.body.classList.toggle('meco-chat-compact', compact);
+
+            const toggleBtn = document.getElementById('sidebar-toggle-btn');
+            if (toggleBtn) {
+                toggleBtn.setAttribute('aria-expanded', compact ? 'false' : 'true');
+                toggleBtn.setAttribute('title', compact ? '展开侧栏' : '收起侧栏');
+                toggleBtn.classList.toggle('text-primary', !compact);
+                toggleBtn.classList.toggle('text-gray-200', compact);
+                toggleBtn.classList.toggle('meco-sidebar-toggle-shift', compact);
+                const icon = toggleBtn.querySelector('.material-icons-outlined');
+                if (icon) {
+                    icon.textContent = compact ? 'menu' : 'menu_open';
+                }
+            }
+            updateCompactNavUi();
+            if (isHashView('agenttools') && (currentChannelId || currentAgentToolId)) {
+                applyAgentToolsLayoutMode();
+            }
+        }
+
+        function toggleSidebarLayout() {
+            const compact = isSidebarCompact();
+            if (compact) {
+                if (isSidebarNarrowViewport()) {
+                    mecoSidebarForceExpandedOnNarrow = true;
+                    mecoSidebarManualCollapsed = false;
+                } else {
+                    mecoSidebarManualCollapsed = false;
+                }
+            } else {
+                if (isSidebarNarrowViewport()) {
+                    mecoSidebarForceExpandedOnNarrow = false;
+                } else {
+                    mecoSidebarManualCollapsed = true;
+                }
+            }
+            applySidebarLayout();
+        }
+
+        function syncSidebarLayoutForViewport() {
+            const narrow = isSidebarNarrowViewport();
+            if (!narrow) {
+                mecoSidebarForceExpandedOnNarrow = false;
+                if (mecoSidebarWasNarrow) {
+                    mecoSidebarManualCollapsed = false;
+                }
+            }
+            mecoSidebarWasNarrow = narrow;
+            applySidebarLayout();
+        }
+
+        function isHeaderCompactViewport() {
+            return window.innerWidth < MECO_HEADER_COMPACT_WIDTH;
+        }
+
+        function updateCompactNavUi() {
+            const sidebar = document.getElementById('app-sidebar');
+            const navLinks = document.getElementById('sidebar-nav-links');
+            const toggleBtn = document.getElementById('sidebar-nav-compact-toggle');
+            if (!sidebar || !navLinks || !toggleBtn) return;
+            const compact = isSidebarCompact();
+            const expanded = !!(compact && mecoCompactNavExpanded);
+            sidebar.classList.toggle('meco-sidebar-compact-nav-open', expanded);
+            toggleBtn.classList.toggle('hidden', !compact);
+            toggleBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            toggleBtn.setAttribute('title', expanded ? '收起功能菜单' : '展开功能菜单');
+            toggleBtn.classList.toggle('text-primary', expanded);
+        }
+
+        function toggleCompactNavLinks() {
+            if (!isSidebarCompact()) return;
+            mecoCompactNavExpanded = !mecoCompactNavExpanded;
+            updateCompactNavUi();
+        }
+
+        function collapseCompactNavLinks() {
+            if (!isSidebarCompact()) return;
+            if (!mecoCompactNavExpanded) return;
+            mecoCompactNavExpanded = false;
+            updateCompactNavUi();
+        }
+
+        function applyHeaderLayout() {
+            const header = document.getElementById('app-header');
+            if (!header) return;
+            const compact = isHeaderCompactViewport();
+            if (!compact) {
+                mecoHeaderSearchExpanded = false;
+            }
+            header.classList.toggle('meco-header-compact', compact);
+            header.classList.toggle('meco-header-search-open', compact && mecoHeaderSearchExpanded);
+            const searchToggleBtn = document.getElementById('header-search-toggle-btn');
+            if (searchToggleBtn) {
+                searchToggleBtn.setAttribute('aria-expanded', compact && mecoHeaderSearchExpanded ? 'true' : 'false');
+                searchToggleBtn.setAttribute('title', compact && mecoHeaderSearchExpanded ? '收起搜索' : '搜索角色');
+            }
+            const compactInput = document.getElementById('search-input-compact');
+            if (compact && mecoHeaderSearchExpanded && compactInput) {
+                setTimeout(() => compactInput.focus(), 0);
+            }
+        }
+
+        function toggleHeaderSearchPanel() {
+            if (!isHeaderCompactViewport()) return;
+            mecoHeaderSearchExpanded = !mecoHeaderSearchExpanded;
+            applyHeaderLayout();
+        }
+
+        function closeHeaderSearchPanel() {
+            if (!mecoHeaderSearchExpanded) return;
+            mecoHeaderSearchExpanded = false;
+            applyHeaderLayout();
+        }
+
+        function ensureSidebarFloatingTooltip() {
+            if (mecoSidebarTooltipEl && document.body.contains(mecoSidebarTooltipEl)) return mecoSidebarTooltipEl;
+            const tip = document.createElement('div');
+            tip.className = 'meco-sidebar-floating-tooltip';
+            tip.setAttribute('aria-hidden', 'true');
+            document.body.appendChild(tip);
+            mecoSidebarTooltipEl = tip;
+            return tip;
+        }
+
+        function hideSidebarFloatingTooltip() {
+            if (!mecoSidebarTooltipEl) return;
+            mecoSidebarTooltipEl.classList.remove('is-visible');
+            mecoSidebarTooltipEl.textContent = '';
+            mecoSidebarTooltipTarget = null;
+        }
+
+        function positionSidebarFloatingTooltip(pointerX, pointerY) {
+            if (!mecoSidebarTooltipEl || !mecoSidebarTooltipTarget) return;
+            const tipRect = mecoSidebarTooltipEl.getBoundingClientRect();
+            const margin = 10;
+            const viewportW = Math.max(320, window.innerWidth);
+            const viewportH = Math.max(240, window.innerHeight);
+            let left = Math.round(pointerX + 14);
+            let top = Math.round(pointerY - tipRect.height / 2);
+            if (left + tipRect.width > viewportW - margin) {
+                left = Math.round(pointerX - tipRect.width - 14);
+            }
+            if (left < margin) left = margin;
+            if (top < margin) top = margin;
+            if (top + tipRect.height > viewportH - margin) {
+                top = viewportH - margin - tipRect.height;
+            }
+            mecoSidebarTooltipEl.style.left = `${left}px`;
+            mecoSidebarTooltipEl.style.top = `${Math.round(top)}px`;
+        }
+
+        function showSidebarFloatingTooltip(target, pointerX, pointerY) {
+            if (!target || !isSidebarCompact()) return;
+            const text = String(target.getAttribute('data-tooltip') || '').trim();
+            if (!text) return;
+            const tip = ensureSidebarFloatingTooltip();
+            tip.textContent = text;
+            tip.classList.add('is-visible');
+            mecoSidebarTooltipTarget = target;
+            positionSidebarFloatingTooltip(pointerX, pointerY);
+        }
+
+        function onSidebarTooltipOver(event) {
+            const sidebar = document.getElementById('app-sidebar');
+            if (!sidebar || !isSidebarCompact()) return;
+            const target = event.target && event.target.closest
+                ? event.target.closest('.meco-sidebar-tooltip-host[data-tooltip]')
+                : null;
+            if (!target || !sidebar.contains(target)) return;
+            const x = Number(event.clientX) || 0;
+            const y = Number(event.clientY) || 0;
+            showSidebarFloatingTooltip(target, x, y);
+        }
+
+        function onSidebarTooltipMove(event) {
+            if (!mecoSidebarTooltipTarget || !mecoSidebarTooltipEl) return;
+            const x = Number(event.clientX) || 0;
+            const y = Number(event.clientY) || 0;
+            positionSidebarFloatingTooltip(x, y);
+        }
+
+        function onSidebarTooltipOut(event) {
+            if (!mecoSidebarTooltipTarget) return;
+            const related = event.relatedTarget;
+            if (related && mecoSidebarTooltipTarget.contains(related)) return;
+            hideSidebarFloatingTooltip();
+        }
 
         function openAgentToolsChat(agentId) {
             if (!agentId) return;
+            collapseCompactNavLinks();
             const applySelection = () => {
                 const select = document.getElementById('at-agent-select');
                 if (select) {
                     select.value = agentId;
                 }
                 setSidebarSelectedAgent(agentId);
-                loadAgentTools(agentId);
+                loadAgentTools(agentId, { autofocusComposer: true });
             };
 
             if (!isHashView('agenttools')) {
@@ -1038,17 +1776,23 @@
         function loadAgentToolsImmersivePref() {
             try {
                 const raw = localStorage.getItem(AT_IMMERSIVE_PREF_KEY);
-                if (raw === '1' || raw === '0') {
-                    atSingleChatImmersive = raw === '1';
+                atSingleChatImmersive = raw === '1';
+                if (!atSingleChatImmersive) {
+                    atSingleChatImmersive = true;
+                    persistAgentToolsImmersivePref();
                 }
             } catch (_) {}
+        }
+
+        function isSingleChatImmersiveActive() {
+            return !!(atSingleChatImmersive || (!currentChannelId && isSidebarCompact()));
         }
 
         function updateAgentToolsImmersiveToggleUi() {
             const btn = document.getElementById('at-immersive-toggle-btn');
             const icon = document.getElementById('at-immersive-toggle-icon');
             if (!btn || !icon) return;
-            const enabled = !!atSingleChatImmersive;
+            const enabled = isSingleChatImmersiveActive();
             btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
             btn.title = enabled ? 'Exit immersive chat' : 'Enable immersive chat';
             icon.textContent = enabled ? 'fullscreen_exit' : 'fullscreen';
@@ -1344,6 +2088,55 @@
             return document.getElementById('at-chat-input');
         }
 
+        function focusActiveAgentToolsComposer(options = {}) {
+            const expectedAgentId = (typeof options.agentId === 'string' && options.agentId.trim()) ? options.agentId.trim() : '';
+            const expectedChannelId = (typeof options.channelId === 'string' && options.channelId.trim()) ? options.channelId.trim() : '';
+            const moveCaretToEnd = options.moveCaretToEnd !== false;
+            const maxAttempts = Math.max(1, Math.min(12, Number(options.maxAttempts) || 6));
+
+            const tryFocusOnce = () => {
+                if (!isHashView('agenttools')) return false;
+                if (expectedAgentId && currentAgentToolId !== expectedAgentId) return true;
+                if (expectedChannelId && currentChannelId !== expectedChannelId) return true;
+
+                if (currentChannelId) {
+                    const editor = getChannelInputElement();
+                    if (!editor) return false;
+                    if (editor.getAttribute('contenteditable') === 'false') return false;
+                    editor.focus();
+                    ensureChannelCaretInEditor(editor);
+                    return true;
+                }
+
+                const input = getAgentTextInputElement();
+                if (!input || input.disabled || input.classList.contains('hidden')) return false;
+                input.focus({ preventScroll: true });
+                if (moveCaretToEnd) {
+                    const len = String(input.value || '').length;
+                    input.setSelectionRange(len, len);
+                }
+                return true;
+            };
+
+            const run = () => {
+                let attempts = 0;
+                const tick = () => {
+                    attempts += 1;
+                    const done = tryFocusOnce();
+                    if (done || attempts >= maxAttempts) return;
+                    const delay = attempts <= 2 ? 40 : 85;
+                    setTimeout(tick, delay);
+                };
+                tick();
+            };
+
+            if (options.defer) {
+                setTimeout(run, 0);
+            } else {
+                run();
+            }
+        }
+
         function closeAttachPicker() {
             const root = document.getElementById('at-attach-picker-root');
             const menu = document.getElementById('at-attach-picker');
@@ -1463,7 +2256,7 @@
         function autosizeAgentToolsTextarea() {
             const input = getAgentTextInputElement();
             if (!input) return;
-            const minHeight = 56;
+            const minHeight = document.body.classList.contains('meco-chat-compact') ? 44 : 48;
             const computed = window.getComputedStyle(input);
             const lineHeight = parseFloat(computed.lineHeight) || 24;
             const paddingY = (parseFloat(computed.paddingTop) || 0) + (parseFloat(computed.paddingBottom) || 0);
@@ -2025,7 +2818,7 @@
 
         function applyAgentToolsLayoutMode() {
             const isChannelMode = !!currentChannelId;
-            const isImmersiveSingle = !isChannelMode && !!atSingleChatImmersive;
+            const isImmersiveSingle = !isChannelMode && isSingleChatImmersiveActive();
             const colBrain = document.getElementById('at-col-brain');
             const colChat = document.getElementById('at-col-chat');
             const colConnectivity = document.getElementById('at-col-connectivity');
@@ -2050,6 +2843,8 @@
             if (isChannelMode) {
                 const channel = getChannelById(currentChannelId);
                 const showMemberStrip = window.innerWidth >= 1024;
+                const compactChannelLayout = isSidebarCompact() || window.innerWidth < 1360;
+                const showChannelBanner = !compactChannelLayout;
                 if (colBrain) colBrain.style.display = 'none';
                 if (colConnectivity) colConnectivity.style.display = 'none';
                 if (colChat) {
@@ -2072,7 +2867,7 @@
                 }
                 if (avatarPlaceholder) avatarPlaceholder.style.display = 'none';
                 if (avatarOverlay) avatarOverlay.style.display = 'none';
-                if (channelBanner) channelBanner.classList.remove('hidden');
+                if (channelBanner) channelBanner.classList.toggle('hidden', !showChannelBanner);
                 if (bannerTitle) bannerTitle.textContent = channel ? channel.name : 'Channel';
                 if (bannerMembers) {
                     const members = channel && Array.isArray(channel.members)
@@ -2083,10 +2878,10 @@
                 if (memberStrip) {
                     renderChannelMemberStrip(channel);
                     memberStrip.classList.toggle('hidden', !showMemberStrip);
-                    memberStrip.style.paddingTop = showMemberStrip ? '88px' : '';
+                    memberStrip.style.paddingTop = showMemberStrip ? (showChannelBanner ? '88px' : '20px') : '';
                 }
                 if (chatMessages) {
-                    chatMessages.style.paddingTop = '124px';
+                    chatMessages.style.paddingTop = showChannelBanner ? '124px' : '24px';
                     chatMessages.style.paddingLeft = '24px';
                     chatMessages.style.paddingRight = showMemberStrip ? '280px' : '24px';
                 }
@@ -2252,17 +3047,19 @@
             if (!list) return;
             list.innerHTML = '';
             if (!Array.isArray(atChannels) || atChannels.length === 0) {
-                list.innerHTML = '<div class="px-3 py-2 text-xs text-gray-600">No channels yet</div>';
+                list.innerHTML = '<div class="meco-sidebar-empty px-3 py-2 text-xs text-gray-600">No channels yet</div>';
                 return;
             }
 
             atChannels.forEach((channel) => {
                 const item = document.createElement('div');
-                item.className = 'group flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent cursor-pointer';
+                item.className = 'meco-sidebar-entry meco-sidebar-channel-item meco-sidebar-tooltip-host group flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent cursor-pointer';
                 item.dataset.channelId = channel.id;
+                item.setAttribute('data-tooltip', channel.name || 'Channel');
+                item.title = channel.name || 'Channel';
                 const memberCount = Array.isArray(channel.agentIds) ? channel.agentIds.length : 0;
                 const avatarWrap = document.createElement('div');
-                avatarWrap.className = 'relative w-9 h-9 shrink-0';
+                avatarWrap.className = 'meco-sidebar-avatar-wrap relative w-9 h-9 shrink-0';
                 avatarWrap.appendChild(buildChannelCompositeAvatarNode(channel));
                 const busyBadge = document.createElement('span');
                 busyBadge.className = 'js-busy-badge hidden absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full border border-blue-300/40 border-t-blue-400 bg-[#050505] animate-spin shadow-[0_0_8px_rgba(96,165,250,0.85)]';
@@ -2271,7 +3068,7 @@
                 item.appendChild(avatarWrap);
 
                 const textWrap = document.createElement('div');
-                textWrap.className = 'min-w-0 flex-1';
+                textWrap.className = 'meco-sidebar-item-text min-w-0 flex-1';
                 const nameEl = document.createElement('div');
                 nameEl.className = 'text-sm truncate font-medium';
                 nameEl.textContent = channel.name;
@@ -2283,7 +3080,7 @@
                 item.appendChild(textWrap);
 
                 const delBtn = document.createElement('button');
-                delBtn.className = 'opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-colors';
+                delBtn.className = 'meco-sidebar-item-actions opacity-0 group-hover:opacity-100 text-gray-500 hover:text-red-400 transition-colors';
                 delBtn.title = 'Delete channel';
                 delBtn.innerHTML = '<span class="material-icons-round text-sm">close</span>';
                 delBtn.onclick = (event) => {
@@ -2292,6 +3089,7 @@
                 };
                 item.appendChild(delBtn);
                 item.onclick = () => {
+                    collapseCompactNavLinks();
                     if (!isHashView('agenttools')) {
                         switchView('agenttools');
                     }
@@ -2537,11 +3335,13 @@
             const task = data.task && typeof data.task === 'object' ? data.task : {};
             const logs = Array.isArray(task.logs) ? task.logs : [];
             if (logs.length) mecoUpdateLastLogs = logs.slice(-240);
+            const localVersion = String(data.localVersion || '').trim();
             const remoteVersion = String(data.remoteVersion || task.targetVersion || '').trim();
             const hasUpdate = !!data.hasUpdate;
             const running = !!task.running;
 
             if (running) {
+                mecoUpdateSawRunningThisSession = true;
                 mecoUpdateLastTaskId = String(task.taskId || mecoUpdateLastTaskId || '');
                 setMecoUpdateButton({ visible: true, label: `Updating ${task.targetVersion || remoteVersion || ''}`.trim(), disabled: true });
                 setMecoUpdateOverlay(true, {
@@ -2552,14 +3352,25 @@
                 return;
             }
 
-            if (task.taskId && (task.status === 'succeeded' || task.status === 'failed') && mecoUpdateLastFinishedTaskId !== task.taskId) {
-                mecoUpdateLastFinishedTaskId = task.taskId;
-                if (task.status === 'succeeded') {
-                    showMecoUpdateToast(`更新成功，当前版本 ${task.localVersionAfter || data.remoteVersion || ''}`.trim(), 'success');
-                } else {
-                    showMecoUpdateToast(`更新失败: ${task.error || 'unknown error'}`, 'error');
+            const finishedTaskId = String(task.taskId || '').trim();
+            const isFinished = task.status === 'succeeded' || task.status === 'failed';
+            if (finishedTaskId && isFinished) {
+                const shouldNotify = mecoUpdateSawRunningThisSession && mecoUpdateLastFinishedTaskId !== finishedTaskId;
+                if (shouldNotify) {
+                    if (task.status === 'succeeded') {
+                        const currentVersion = localVersion || String(task.localVersionAfter || data.remoteVersion || '').trim();
+                        showMecoUpdateToast(`更新成功，当前版本 ${currentVersion || 'unknown'}`.trim(), 'success');
+                    } else {
+                        showMecoUpdateToast(`更新失败: ${task.error || 'unknown error'}`, 'error');
+                    }
+                    setMecoUpdateOverlay(false);
                 }
-                setMecoUpdateOverlay(false);
+                if (mecoUpdateLastFinishedTaskId !== finishedTaskId) {
+                    mecoUpdateLastFinishedTaskId = finishedTaskId;
+                    try {
+                        localStorage.setItem(MECO_UPDATE_NOTIFIED_TASK_ID_KEY, finishedTaskId);
+                    } catch (_) {}
+                }
             }
 
             if (hasUpdate && remoteVersion) {
@@ -2618,6 +3429,7 @@
 
         window.startMecoUpdateFlow = async function() {
             try {
+                mecoUpdateSawRunningThisSession = true;
                 setMecoUpdateButton({ visible: true, label: 'Updating...', disabled: true });
                 setMecoUpdateOverlay(true, {
                     title: 'Updating Meco Studio...',
@@ -2659,6 +3471,39 @@
             loadApiSettings();
         }
 
+        async function openRustDeskWebClient() {
+            closeProfileMenu();
+            const popup = window.open('', '_blank');
+            if (!popup) {
+                alert('打开 RustDesk Web 失败: 浏览器拦截了新窗口，请允许本站弹窗后重试。');
+                return;
+            }
+
+            try {
+                popup.document.title = 'Opening RustDesk Web...';
+                popup.document.body.style.margin = '0';
+                popup.document.body.style.fontFamily = 'system-ui, -apple-system, Segoe UI, sans-serif';
+                popup.document.body.innerHTML = '<div style="padding:18px;color:#111;">正在打开 RustDesk Web...</div>';
+                try {
+                    popup.opener = null;
+                } catch (_) {}
+            } catch (_) {
+                // Ignore if browser blocks writing to the popup document.
+            }
+
+            try {
+                const res = await fetch('/api/remote/rustdesk/web-client-url');
+                const data = await readJsonResponse(res, '获取 RustDesk Web 地址失败');
+                const targetUrl = (data && data.url) ? String(data.url).trim() : 'https://rustdesk.com/web/';
+                popup.location.replace(targetUrl);
+            } catch (e) {
+                try {
+                    popup.close();
+                } catch (_) {}
+                alert(`打开 RustDesk Web 失败: ${e.message}`);
+            }
+        }
+
         function closeApiSettingsModal() {
             const modal = document.getElementById('api-settings-modal');
             if (modal) modal.classList.add('hidden');
@@ -2687,6 +3532,9 @@
                 setValue('cfg-oss-bucket', appRuntimeSettings.ossBucket);
                 setValue('cfg-oss-key-id', appRuntimeSettings.ossAccessKeyId);
                 setValue('cfg-oss-key-secret', appRuntimeSettings.ossAccessKeySecret);
+                setValue('cfg-cloudflare-public-host', appRuntimeSettings.cloudflarePublicHost);
+                setValue('cfg-cloudflare-path-prefix', appRuntimeSettings.cloudflarePathPrefix);
+                setValue('cfg-cloudflare-tunnel-token', appRuntimeSettings.cloudflareTunnelToken);
             } catch (e) {
                 console.error('Load settings failed', e);
                 alert('加载设置失败: ' + e.message);
@@ -2712,7 +3560,10 @@
                 ossEndpoint: document.getElementById('cfg-oss-endpoint')?.value || '',
                 ossBucket: document.getElementById('cfg-oss-bucket')?.value || '',
                 ossAccessKeyId: document.getElementById('cfg-oss-key-id')?.value || '',
-                ossAccessKeySecret: document.getElementById('cfg-oss-key-secret')?.value || ''
+                ossAccessKeySecret: document.getElementById('cfg-oss-key-secret')?.value || '',
+                cloudflarePublicHost: document.getElementById('cfg-cloudflare-public-host')?.value || '',
+                cloudflarePathPrefix: document.getElementById('cfg-cloudflare-path-prefix')?.value || '',
+                cloudflareTunnelToken: document.getElementById('cfg-cloudflare-tunnel-token')?.value || ''
             };
 
             try {
@@ -3233,19 +4084,21 @@
                 }
 
                 const sidebarItem = document.createElement('div');
-                sidebarItem.className = 'flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent group cursor-pointer';
+                sidebarItem.className = 'meco-sidebar-entry meco-sidebar-agent-item meco-sidebar-tooltip-host flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent group cursor-pointer';
                 sidebarItem.dataset.agentId = agent.id;
+                sidebarItem.setAttribute('data-tooltip', displayName);
+                sidebarItem.title = displayName;
 
                 sidebarItem.onclick = () => {
                     openAgentToolsChat(agent.id);
                 };
                 sidebarItem.innerHTML = `
-                    <div class="relative w-8 h-8 shrink-0">
+                    <div class="meco-sidebar-avatar-wrap relative w-8 h-8 shrink-0">
                         ${sidebarAvatarHtml}
                         <span class="js-busy-badge hidden absolute -right-0.5 -bottom-0.5 w-2.5 h-2.5 rounded-full border border-blue-300/40 border-t-blue-400 bg-[#050505] animate-spin shadow-[0_0_8px_rgba(96,165,250,0.85)]" title="Processing"></span>
                     </div>
-                    <span class="text-sm truncate font-medium flex-1 min-w-0">${displayName}</span>
-                    <div class="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span class="meco-sidebar-label meco-sidebar-item-text text-sm truncate font-medium flex-1 min-w-0">${displayName}</span>
+                    <div class="meco-sidebar-item-actions ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button class="js-agent-clone-btn text-gray-500 hover:text-cyan-300 transition-colors" title="复制智能体">
                             <span class="material-icons-round text-sm">content_copy</span>
                         </button>
@@ -3771,7 +4624,7 @@
             const avatarImg = document.getElementById('at-avatar-img');
             const avatarPlaceholder = document.getElementById('at-avatar-placeholder');
             const state = getAgentChatState(agentId);
-            const isImmersiveSingleMode = () => !currentChannelId && !!atSingleChatImmersive;
+            const isImmersiveSingleMode = () => !currentChannelId && isSingleChatImmersiveActive();
             const applyAgentToolsLetterAvatar = (displayName) => {
                 const visual = resolveAgentVisualIdentity(agentId, displayName);
                 if (isImmersiveSingleMode()) {
@@ -3850,6 +4703,13 @@
             if (chatInput) {
                 chatInput.disabled = false;
                 autosizeAgentToolsTextarea();
+            }
+            if (options.autofocusComposer) {
+                focusActiveAgentToolsComposer({
+                    agentId,
+                    defer: true,
+                    maxAttempts: 8
+                });
             }
             clearChannelComposer();
             
@@ -4277,6 +5137,7 @@
                     avatarUrl: channelAvatarUrl,
                     reasoning: renderedReasoning,
                     renderedContent,
+                    entranceAnimation: false,
                     skipScroll: true
                 });
             });
@@ -5191,12 +6052,13 @@
             
             const isUser = role === 'user';
             const div = document.createElement('div');
+            const animateIn = options.entranceAnimation !== false;
             if (Number.isInteger(options.messageIndex)) {
                 div.dataset.msgIndex = String(options.messageIndex);
             }
             div.setAttribute('data-role', isUser ? 'user' : 'assistant');
             // Remove mb-6 to avoid large gaps, add specific margins
-            div.className = `flex gap-4 max-w-[90%] ${isUser ? 'ml-auto flex-row-reverse' : ''} mb-4 animate-scale-in group`;
+            div.className = `flex gap-4 max-w-[90%] ${isUser ? 'ml-auto flex-row-reverse' : ''} mb-4 ${animateIn ? 'animate-scale-in' : ''} group`;
             
             let avatarHtml = '';
             if (isUser) {
@@ -5292,6 +6154,7 @@
                     messageIndex: idx,
                     reasoning: reasoningToRender,
                     renderedContent: contentToRender,
+                    entranceAnimation: false,
                     skipScroll: true
                 });
             });
@@ -5327,10 +6190,16 @@
             const state = getAgentChatState(agentId);
             const streamIndex = state.streamMessageIndex;
             if (!Number.isInteger(streamIndex)) return false;
-            if (!currentMessageDiv || Number(currentMessageDiv.dataset.msgIndex) !== streamIndex) {
+            const chatContainer = document.getElementById('at-chat-messages');
+            if (!chatContainer) return false;
+            let messageDiv = chatContainer.querySelector(`[data-msg-index="${streamIndex}"]`);
+            if (!messageDiv) {
                 renderAgentToolsChat(agentId);
+                messageDiv = chatContainer.querySelector(`[data-msg-index="${streamIndex}"]`);
             }
-            return !!currentMessageDiv && Number(currentMessageDiv.dataset.msgIndex) === streamIndex;
+            if (!messageDiv) return false;
+            currentMessageDiv = messageDiv;
+            return true;
         }
 
         function patchStreamingAssistantDom(agentId) {
@@ -6402,21 +7271,73 @@
         }
         
         document.addEventListener('DOMContentLoaded', () => {
+            try {
+                const cachedFinishedTaskId = localStorage.getItem(MECO_UPDATE_NOTIFIED_TASK_ID_KEY);
+                mecoUpdateLastFinishedTaskId = String(cachedFinishedTaskId || '').trim();
+            } catch (_) {
+                mecoUpdateLastFinishedTaskId = '';
+            }
             loadAgentToolsSoundPref();
             loadAgentToolsChannelRuleModePref();
             loadAgentToolsImmersivePref();
             loadAgentToolsRuntimeStatusPref();
+            mecoSidebarWasNarrow = isSidebarNarrowViewport();
+            const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
+            if (sidebarToggleBtn) {
+                sidebarToggleBtn.addEventListener('click', toggleSidebarLayout);
+            }
+            const sidebarEl = document.getElementById('app-sidebar');
+            if (sidebarEl) {
+                sidebarEl.addEventListener('mouseover', onSidebarTooltipOver);
+                sidebarEl.addEventListener('mousemove', onSidebarTooltipMove);
+                sidebarEl.addEventListener('mouseout', onSidebarTooltipOut);
+                sidebarEl.addEventListener('scroll', hideSidebarFloatingTooltip, { passive: true });
+            }
+            const sidebarCompactNavToggle = document.getElementById('sidebar-nav-compact-toggle');
+            if (sidebarCompactNavToggle) {
+                sidebarCompactNavToggle.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    toggleCompactNavLinks();
+                });
+            }
+            const headerSearchToggleBtn = document.getElementById('header-search-toggle-btn');
+            if (headerSearchToggleBtn) {
+                headerSearchToggleBtn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    toggleHeaderSearchPanel();
+                });
+            }
+            syncSidebarLayoutForViewport();
+            applyHeaderLayout();
             setAttachmentUploadIndicator(false);
             updateAgentToolsImmersiveToggleUi();
             updateAgentToolsChannelRuleModeUi();
             updateSidebarBusyIndicators();
             startAgentToolsRuntimeStatusPolling();
-            const input = document.getElementById('search-input');
-            if (input) {
-                input.addEventListener('input', (e) => {
-                    filterAgents(e.target.value);
+            const searchInput = document.getElementById('search-input');
+            const compactSearchInput = document.getElementById('search-input-compact');
+            let syncingSearchValue = false;
+            const bindSearchInput = (inputEl, peerEl) => {
+                if (!inputEl) return;
+                inputEl.addEventListener('input', (e) => {
+                    const value = String(e.target.value || '');
+                    filterAgents(value);
+                    if (peerEl && peerEl.value !== value && !syncingSearchValue) {
+                        syncingSearchValue = true;
+                        peerEl.value = value;
+                        syncingSearchValue = false;
+                    }
                 });
-            }
+                inputEl.addEventListener('keydown', (event) => {
+                    if (event.key === 'Escape' && inputEl.id === 'search-input-compact') {
+                        closeHeaderSearchPanel();
+                    }
+                });
+            };
+            bindSearchInput(searchInput, compactSearchInput);
+            bindSearchInput(compactSearchInput, searchInput);
             const chatScroll = document.getElementById('at-chat-messages');
             if (chatScroll) {
                 chatScroll.addEventListener('scroll', maybeLoadOlderHistoryOnScroll, { passive: true });
@@ -6439,6 +7360,23 @@
                         || mentionInput.contains(e.target)
                         || (mentionInputWrap && mentionInputWrap.contains(e.target));
                     if (!inside) hideMentionPopup();
+                }
+                if (mecoHeaderSearchExpanded) {
+                    const compactPanel = document.getElementById('header-search-compact-panel');
+                    const compactToggle = document.getElementById('header-search-toggle-btn');
+                    const insideCompactSearch = (compactPanel && compactPanel.contains(e.target))
+                        || (compactToggle && compactToggle.contains(e.target));
+                    if (!insideCompactSearch) {
+                        closeHeaderSearchPanel();
+                    }
+                }
+                if (mecoSidebarTooltipTarget) {
+                    const sidebar = document.getElementById('app-sidebar');
+                    const insideSidebarTooltipTarget = sidebar && sidebar.contains(e.target)
+                        && e.target.closest && e.target.closest('.meco-sidebar-tooltip-host[data-tooltip]');
+                    if (!insideSidebarTooltipTarget) {
+                        hideSidebarFloatingTooltip();
+                    }
                 }
             });
             document.addEventListener('keydown', (event) => {
@@ -6571,6 +7509,9 @@
                 autosizeAgentToolsTextarea();
             }
             window.addEventListener('resize', () => {
+                syncSidebarLayoutForViewport();
+                applyHeaderLayout();
+                hideSidebarFloatingTooltip();
                 if (isHashView('agenttools') && (currentChannelId || currentAgentToolId)) {
                     applyAgentToolsLayoutMode();
                     if (currentChannelId) {
@@ -6600,9 +7541,13 @@
     <div class="absolute bottom-[10%] right-[-5%] w-[600px] h-[600px] bg-blue-900/10 rounded-full blur-[130px] ambient-blob" style="animation-delay: -2s;"></div>
     <div class="absolute top-[40%] left-[30%] w-[300px] h-[300px] bg-indigo-900/20 rounded-full blur-[100px] ambient-blob" style="animation-delay: -5s;"></div>
 </div>
-<header class="h-16 flex items-center justify-between px-6 glass-panel border-b-0 z-20 shrink-0 relative">
+<header id="app-header" class="h-16 flex items-center justify-between px-6 glass-panel border-b-0 z-20 shrink-0 relative">
     <div class="flex items-center gap-5">
-        <button class="p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-colors">
+        <button id="sidebar-toggle-btn"
+                type="button"
+                aria-expanded="true"
+                title="收起侧栏"
+                class="p-2 text-gray-400 hover:text-white transition-colors duration-150">
             <span class="material-icons-outlined">menu</span>
         </button>
         <div class="flex items-center gap-3">
@@ -6623,7 +7568,7 @@
             </button>
         </div>
     </div>
-    <div class="hidden md:flex flex-1 max-w-lg mx-8">
+    <div id="header-search-panel" class="hidden md:flex flex-1 max-w-lg mx-8">
         <div class="relative w-full group">
             <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <span class="material-icons-outlined text-gray-500 group-focus-within:text-primary transition-colors">search</span>
@@ -6631,14 +7576,28 @@
             <input id="search-input" class="w-full h-10 pl-10 pr-4 rounded-xl bg-white/5 border border-white/5 focus:border-primary/50 focus:bg-white/10 focus:ring-1 focus:ring-primary/50 text-sm transition-all text-gray-200 placeholder-gray-600 backdrop-blur-sm" placeholder="Search characters..." type="text"/>
         </div>
     </div>
+    <div id="header-search-compact-panel">
+        <div class="relative group">
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <span class="material-icons-outlined text-gray-500 group-focus-within:text-primary transition-colors">search</span>
+            </div>
+            <input id="search-input-compact" class="w-full h-10 pl-10 pr-4 rounded-xl bg-[#0f1118]/95 border border-white/10 focus:border-primary/50 focus:bg-[#11131c] focus:ring-1 focus:ring-primary/50 text-sm transition-all text-gray-200 placeholder-gray-600 backdrop-blur-sm shadow-xl" placeholder="Search characters..." type="text"/>
+        </div>
+    </div>
     <div class="flex items-center gap-4">
-        <button class="hidden sm:flex items-center gap-2 bg-white text-black hover:bg-gray-200 px-5 py-2 rounded-full text-sm font-bold transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)] hover:shadow-[0_0_20px_rgba(255,255,255,0.3)]" onclick="openCreateModal()">
+        <button id="header-create-btn" class="hidden sm:flex items-center gap-2 bg-white text-black hover:bg-gray-200 px-5 py-2 rounded-full text-sm font-bold transition-all shadow-[0_0_15px_rgba(255,255,255,0.2)] hover:shadow-[0_0_20px_rgba(255,255,255,0.3)]" onclick="openCreateModal()">
             <span class="material-icons-round text-lg">add</span>
             Create
         </button>
-        <button class="p-2 rounded-full hover:bg-white/5 text-gray-400 hover:text-white transition-colors relative">
-            <span class="material-icons-outlined">notifications</span>
-            <span class="absolute top-2.5 right-2.5 w-2 h-2 bg-red-500 rounded-full shadow-[0_0_8px_rgba(239,68,68,0.6)]"></span>
+        <button id="header-search-toggle-btn" class="meco-header-icon-btn" type="button" aria-expanded="false" title="搜索角色">
+            <span class="material-icons-outlined text-[18px]">search</span>
+        </button>
+        <button id="header-create-compact-btn" class="meco-header-icon-btn" type="button" title="创建角色" onclick="openCreateModal()">
+            <span class="material-icons-outlined text-[18px]">add</span>
+        </button>
+        <button id="header-notify-btn" class="meco-header-icon-btn" type="button" title="通知">
+            <span class="material-icons-outlined text-[17px]">notifications</span>
+            <span class="notify-dot"></span>
         </button>
         <div id="profile-menu-root" class="relative">
             <button type="button" onclick="toggleProfileMenu()" class="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center cursor-pointer hover:bg-white/10 transition-colors">
@@ -6649,38 +7608,58 @@
                     <span class="material-icons-outlined text-base">vpn_key</span>
                     <span>API Keys</span>
                 </button>
+                <button type="button" onclick="openRustDeskWebClient()" class="w-full px-4 py-3 text-left text-sm text-gray-200 hover:bg-white/10 transition-colors flex items-center gap-2 border-t border-white/5">
+                    <span class="material-icons-outlined text-base">desktop_windows</span>
+                    <span>RustDesk Web</span>
+                </button>
             </div>
         </div>
     </div>
 </header>
 <div class="flex flex-1 overflow-hidden relative z-10">
-    <aside class="w-72 glass-panel border-r-0 border-t-0 flex-col hidden md:flex overflow-y-auto pb-6">
+    <aside id="app-sidebar" class="glass-panel border-r-0 border-t-0 flex flex-col overflow-y-auto pb-6 sidebar-expanded">
         <div class="px-4 py-8 space-y-2">
-            <a id="nav-dashboard" class="flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer" onclick="switchView('dashboard')">
-                <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                <span class="material-icons-round relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">dashboard</span>
-                <span class="text-sm relative z-10">Dashboard</span>
-            </a>
-            <a id="nav-playgen" class="flex items-center justify-between gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" onclick="switchView('playgen')">
-                <div class="flex items-center gap-3">
-                    <span class="material-icons-outlined group-hover:text-blue-400 transition-colors">videogame_asset</span>
-                    <span class="text-sm font-medium">Playgen</span>
-                </div>
-                <span class="text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500">BETA</span>
-            </a>
-            <a id="nav-context" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" onclick="switchView('context')">
-                <span class="material-icons-outlined group-hover:text-pink-400 transition-colors">movie_creation</span>
-                <span class="text-sm font-medium">Context</span>
-            </a>
-            <a id="nav-agenttools" class="flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" onclick="switchView('agenttools')">
-                <span class="material-icons-outlined group-hover:text-green-400 transition-colors">construction</span>
-                <span class="text-sm font-medium">Agent Tools</span>
-            </a>
+            <button id="sidebar-nav-compact-toggle"
+                    type="button"
+                    class="meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-300 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer"
+                    data-tooltip="功能菜单"
+                    aria-expanded="false"
+                    title="展开功能菜单">
+                <span class="material-icons-round nav-icon">more_horiz</span>
+                <span class="nav-compact-glyph" aria-hidden="true">
+                    <span class="dot dot-1"></span>
+                    <span class="dot dot-2"></span>
+                    <span class="dot dot-3"></span>
+                    <span class="x-stroke x-a"></span>
+                    <span class="x-stroke x-b"></span>
+                </span>
+                <span class="meco-sidebar-label text-sm font-medium">Menu</span>
+            </button>
+            <div id="sidebar-nav-links" class="space-y-2">
+                <a id="nav-dashboard" class="meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 bg-primary/10 border border-primary/20 text-white rounded-xl font-medium transition-all shadow-neon relative overflow-hidden group cursor-pointer" data-tooltip="Dashboard" title="Dashboard" onclick="switchView('dashboard')">
+                    <div class="absolute inset-0 bg-primary/10 blur-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                    <span class="material-icons-round nav-icon relative z-10 text-primary drop-shadow-[0_0_8px_rgba(192,132,252,0.8)]">dashboard</span>
+                    <span class="meco-sidebar-label text-sm relative z-10">Dashboard</span>
+                </a>
+                <a id="nav-playgen" class="meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" data-tooltip="Playgen" title="Playgen" onclick="switchView('playgen')">
+                    <span class="material-icons-outlined nav-icon group-hover:text-blue-400 transition-colors">videogame_asset</span>
+                    <span class="meco-sidebar-label text-sm font-medium flex-1 min-w-0">Playgen</span>
+                    <span class="nav-beta text-[10px] bg-white/5 px-2 py-0.5 rounded border border-white/5 text-gray-500">BETA</span>
+                </a>
+                <a id="nav-context" class="meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" data-tooltip="Context" title="Context" onclick="switchView('context')">
+                    <span class="material-icons-outlined nav-icon group-hover:text-pink-400 transition-colors">movie_creation</span>
+                    <span class="meco-sidebar-label text-sm font-medium">Context</span>
+                </a>
+                <a id="nav-agenttools" class="meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer" data-tooltip="Agent Tools" title="Agent Tools" onclick="switchView('agenttools')">
+                    <span class="material-icons-outlined nav-icon group-hover:text-green-400 transition-colors">construction</span>
+                    <span class="meco-sidebar-label text-sm font-medium">Agent Tools</span>
+                </a>
+            </div>
         </div>
-        <div class="border-t border-white/5 my-2 mx-6"></div>
-        <div class="px-6 py-4 flex items-center justify-between">
-            <span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Character Library</span>
-            <div class="flex items-center gap-2">
+        <div class="meco-sidebar-divider border-t border-white/5 my-2 mx-6"></div>
+        <div class="meco-sidebar-header-row px-6 py-4 flex items-center justify-between">
+            <span class="meco-sidebar-header-text text-xs font-bold text-gray-500 uppercase tracking-widest">Character Library</span>
+            <div class="meco-sidebar-header-actions flex items-center gap-2">
                 <button id="at-immersive-toggle-btn"
                         type="button"
                         title="Enable immersive chat"
@@ -6699,19 +7678,20 @@
         <div id="sidebar-agent-list" class="px-4 space-y-1">
             <!-- Dynamic Agent List -->
         </div>
-        <div class="px-6 pt-5 pb-3 flex items-center justify-between">
-            <span class="text-xs font-bold text-gray-500 uppercase tracking-widest">Channels</span>
-            <button class="material-icons-outlined text-gray-500 text-sm hover:text-primary transition-colors"
+        <div class="meco-sidebar-divider border-t border-white/5 my-2 mx-6"></div>
+        <div class="meco-sidebar-header-row px-6 pt-5 pb-3 flex items-center justify-between">
+            <span class="meco-sidebar-header-text text-xs font-bold text-gray-500 uppercase tracking-widest">Channels</span>
+            <button class="meco-sidebar-header-actions material-icons-outlined text-gray-500 text-sm hover:text-primary transition-colors"
                     title="Create Channel"
                     onclick="openChannelCreateModal()">add</button>
         </div>
         <div id="sidebar-channel-list" class="px-4 space-y-1">
-            <div class="px-3 py-2 text-xs text-gray-600">No channels yet</div>
+            <div class="meco-sidebar-empty px-3 py-2 text-xs text-gray-600">No channels yet</div>
         </div>
         <div class="mt-auto px-4 py-6">
-            <a class="flex items-center gap-3 px-4 py-3 text-gray-600 cursor-not-allowed rounded-xl transition-colors opacity-50 pointer-events-none" href="javascript:void(0)">
+            <a class="meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-600 cursor-not-allowed rounded-xl transition-colors opacity-50 pointer-events-none" data-tooltip="Settings" title="Settings" href="javascript:void(0)">
                 <span class="material-icons-outlined">settings</span>
-                <span class="text-sm font-medium">Settings</span>
+                <span class="meco-sidebar-footer-label text-sm font-medium">Settings</span>
             </a>
         </div>
     </aside>
@@ -6845,7 +7825,7 @@
                 </div>
 
                 <!-- Chat Input -->
-                <div class="p-6 bg-black/80 backdrop-blur-md border-t border-white/5 z-10">
+                <div id="at-chat-composer-shell" class="p-6 bg-black/80 backdrop-blur-md border-t border-white/5 z-10">
                      <div id="at-sound-toggle-wrap" class="hidden max-w-3xl mx-auto mb-3 flex justify-center">
                          <div class="inline-flex items-center gap-2">
                              <button id="at-sound-toggle-btn"
@@ -6873,11 +7853,11 @@
                              </button>
                          </div>
                      </div>
-                     <div class="relative max-w-3xl mx-auto flex items-end gap-3">
+                     <div id="at-chat-composer-row" class="relative max-w-3xl mx-auto flex items-end gap-3">
                          <!-- File Upload Button -->
                          <div id="at-attach-picker-root" class="relative flex-shrink-0">
-                             <button id="at-upload-btn" class="w-14 h-14 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors text-gray-400 hover:text-white border border-transparent hover:border-white/10 disabled:opacity-50 disabled:cursor-not-allowed" onclick="toggleAttachPicker()" title="Upload files">
-                                 <span class="material-icons-round text-xl">attach_file</span>
+                             <button id="at-upload-btn" class="w-11 h-11 flex items-center justify-center bg-white/5 hover:bg-white/10 rounded-full transition-colors text-gray-400 hover:text-white border border-transparent hover:border-white/10 disabled:opacity-50 disabled:cursor-not-allowed" onclick="toggleAttachPicker()" title="Upload files">
+                                 <span class="material-icons-round text-lg">attach_file</span>
                              </button>
                              <div id="at-attach-picker" class="hidden absolute left-0 bottom-[calc(100%+8px)] w-44 rounded-xl border border-white/10 bg-black/90 backdrop-blur-md shadow-2xl overflow-hidden">
                                  <button type="button"
@@ -6898,22 +7878,22 @@
                          <input type="file" id="at-folder-input" webkitdirectory directory multiple class="hidden" onchange="handleFolderUpload(this.files)">
                          <input type="file" id="at-replace-file-input" accept="video/*" class="hidden" onchange="handleReplaceFileUpload(this.files)">
 
-                         <div class="flex-1 relative bg-white/5 border border-white/10 rounded-[28px] focus-within:bg-white/10 focus-within:border-primary/50 transition-all shadow-lg flex flex-col justify-center"
+                         <div id="at-chat-composer-box" class="flex-1 relative bg-white/5 border border-white/10 rounded-[22px] focus-within:bg-white/10 focus-within:border-primary/50 transition-all shadow-lg flex flex-col justify-center"
                               ondragover="event.preventDefault(); this.classList.add('border-primary', 'bg-white/10')"
                              ondragleave="this.classList.remove('border-primary', 'bg-white/10')"
                              ondrop="handleComposerDrop(event)">
                              <div id="at-mention-popup" class="mention-popup hidden"></div>
-                             <div id="file-preview-area" class="flex flex-wrap gap-2 p-3 pb-0 empty:hidden"></div>
-                             <div id="at-attachment-uploading" class="hidden items-center gap-2 px-4 pt-3 text-xs text-blue-200">
+                             <div id="file-preview-area" class="flex flex-wrap gap-2 p-2.5 pb-0 empty:hidden"></div>
+                             <div id="at-attachment-uploading" class="hidden items-center gap-2 px-3 pt-2 text-xs text-blue-200">
                                  <span class="inline-block w-3 h-3 rounded-full border border-blue-300/50 border-t-blue-400 animate-spin"></span>
                                  <span id="at-attachment-uploading-text">Uploading attachments...</span>
                              </div>
                              <textarea id="at-chat-input" 
-                                    class="w-full bg-transparent border-none px-6 py-4 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none h-14 min-h-[56px] max-h-[104px] leading-6 overflow-y-hidden box-border"
+                                    class="w-full bg-transparent border-none px-4 py-3 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none h-12 min-h-[48px] max-h-[96px] leading-5 overflow-y-hidden box-border"
                                     placeholder="Message agent..."
                                     rows="1"
                                     disabled></textarea>
-                             <div id="at-channel-input-wrap" class="hidden w-full px-6">
+                             <div id="at-channel-input-wrap" class="hidden w-full px-4">
                                  <div class="flex items-center gap-2">
                                      <div class="flex items-center gap-2 pr-2">
                                          <button type="button"
@@ -6937,8 +7917,8 @@
                              </div>
                          </div>
                          
-                         <button id="at-send-btn" class="w-14 h-14 flex items-center justify-center flex-shrink-0 bg-primary hover:bg-primaryHover text-black rounded-full transition-all shadow-neon hover:shadow-neon-strong disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105 active:scale-95" onclick="sendAgentToolsMessage()" disabled>
-                             <span class="material-icons-round text-xl">arrow_upward</span>
+                         <button id="at-send-btn" class="w-11 h-11 flex items-center justify-center flex-shrink-0 bg-primary hover:bg-primaryHover text-black rounded-full transition-all shadow-neon hover:shadow-neon-strong disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105 active:scale-95" onclick="sendAgentToolsMessage()" disabled>
+                             <span class="material-icons-round text-lg">arrow_upward</span>
                          </button>
                      </div>
                 </div>
@@ -7033,6 +8013,148 @@
     </main>
 </div>
 
+<!-- Remote Control Dock -->
+<div id="remote-dock" class="relative z-20 shrink-0 w-full">
+    <div class="glass-panel rounded-none border-x-0 border-b-0 border-t border-white/10 shadow-none px-3 py-2 w-full">
+        <div class="flex items-center gap-2">
+            <button id="remote-dock-add-btn"
+                    type="button"
+                    class="remote-dock-add-btn"
+                    title="绑定设备"
+                    aria-label="绑定设备">
+                <svg class="remote-dock-add-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M12 4v16M4 12h16" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+            <div id="remote-dock-scroll">
+                <div id="remote-dock-tabs" class="flex items-center gap-2 min-h-[36px] w-max min-w-full pr-1"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Remote Bind Modal -->
+<div id="remote-bind-modal" class="fixed inset-0 z-[74] hidden items-center justify-center">
+    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" data-role="backdrop"></div>
+    <div class="relative w-full max-w-4xl mx-4 rounded-2xl border border-white/10 bg-[#0c0c0c] shadow-2xl overflow-hidden">
+        <div class="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+            <div>
+                <h3 class="text-white font-bold text-lg">远控设备绑定</h3>
+                <p class="text-xs text-gray-400 mt-1">唯一规则：同一台 MecoStudio 中，`用户名 + 设备名` 不能重复。</p>
+            </div>
+            <button id="remote-bind-close-btn" type="button" class="text-gray-400 hover:text-white">
+                <span class="material-icons-round">close</span>
+            </button>
+        </div>
+        <div class="p-5 max-h-[74vh] overflow-y-auto">
+            <div class="flex items-center gap-2 mb-4">
+                <button id="remote-bind-tab-import-btn" type="button"
+                        class="h-9 px-3 rounded-lg border border-primary/40 bg-primary/15 text-primary text-xs font-semibold">
+                    从被控码导入
+                </button>
+                <button id="remote-bind-tab-local-btn" type="button"
+                        class="h-9 px-3 rounded-lg border border-white/10 bg-white/5 text-gray-300 text-xs font-semibold hover:bg-white/10">
+                    本机信息编辑
+                </button>
+            </div>
+
+            <div id="remote-bind-panel-import" class="space-y-3">
+                <h4 class="text-sm uppercase tracking-wide text-gray-400 font-semibold">从被控码导入（支持多行）</h4>
+                <textarea id="remote-bind-import-code" rows="6"
+                          placeholder="每行一个 MRC1... 被控码，支持批量导入"
+                          class="w-full rounded-lg bg-white/5 border border-white/10 p-3 text-sm text-white resize-y"></textarea>
+                <div class="flex items-center gap-2">
+                    <button id="remote-bind-import-btn" type="button"
+                            class="px-4 h-10 rounded-lg border border-white/15 text-sm text-white hover:bg-white/5 transition-colors">
+                        导入绑定
+                    </button>
+                    <span id="remote-bind-import-status" class="text-xs text-gray-400"></span>
+                </div>
+            </div>
+
+            <div id="remote-bind-panel-local" class="space-y-3 hidden">
+                <h4 class="text-sm uppercase tracking-wide text-gray-400 font-semibold">本机信息编辑</h4>
+                <p class="text-[11px] text-gray-500">首次点击创建绑定会新增本机；后续编辑同一台会自动改为修改绑定。</p>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">用户名</label>
+                    <input id="remote-bind-owner" type="text" placeholder="自动读取系统用户名"
+                           class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">设备名</label>
+                    <input id="remote-bind-device" type="text" placeholder="dev1"
+                           class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">备注</label>
+                    <input id="remote-bind-note" type="text" placeholder="设备备注"
+                           class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">局域网地址（后台自动检测，可修改）</label>
+                    <input id="remote-bind-lan-url" type="text" placeholder="http://192.168.1.20:4430"
+                           class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">RustDesk ID</label>
+                    <input id="remote-bind-rustdesk-id" type="text" placeholder="123456789"
+                           class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white">
+                    <div class="mt-2">
+                        <label class="block text-xs text-gray-400 mb-1">RustDesk Password</label>
+                        <input id="remote-bind-rustdesk-password-view" type="text" placeholder="自动读取后可手动修改"
+                               class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white">
+                    </div>
+                    <div class="mt-2 flex items-center gap-2">
+                        <button id="remote-bind-rustdesk-read-btn" type="button"
+                                class="px-3 h-8 rounded-lg border border-cyan-400/35 text-xs text-cyan-200 hover:bg-cyan-500/10 transition-colors">
+                            点击读取
+                        </button>
+                        <span id="remote-bind-rustdesk-read-status" class="text-xs text-gray-400"></span>
+                    </div>
+                </div>
+                <div class="pt-2 flex items-center gap-2">
+                    <button id="remote-bind-create-btn" type="button"
+                            class="px-4 h-10 rounded-lg bg-primary text-black text-sm font-semibold hover:bg-primaryHover transition-colors">
+                        创建绑定
+                    </button>
+                    <span id="remote-bind-create-status" class="text-xs text-gray-400"></span>
+                </div>
+            </div>
+
+            <div class="mt-5">
+                <h4 class="text-sm uppercase tracking-wide text-gray-400 font-semibold mb-2">已绑定设备</h4>
+                <div id="remote-bind-device-list" class="space-y-2 max-h-[330px] overflow-y-auto pr-1"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Remote Viewer Window -->
+<div id="remote-viewer-window"
+     class="fixed z-[73] hidden rounded-none border border-white/10 bg-[#060606] shadow-2xl overflow-hidden"
+     style="left: 8vw; top: 8vh; width: 84vw; height: 78vh;">
+    <div id="remote-viewer-header" class="h-11 px-3 border-b border-white/10 bg-black/70 cursor-move flex items-center justify-between gap-2">
+        <div class="min-w-0 flex items-center gap-2">
+            <span class="material-icons-round text-primary text-base">desktop_windows</span>
+            <span id="remote-viewer-title" class="text-sm text-white font-medium truncate">Remote Viewer</span>
+            <span id="remote-viewer-mode-badge" class="hidden text-[10px] px-2 py-0.5 rounded-full border border-white/20 text-gray-300">mode</span>
+        </div>
+        <div class="flex items-center gap-1">
+            <button id="remote-viewer-min-btn" type="button" class="w-8 h-8 rounded-lg hover:bg-white/10 text-gray-300" title="最小化">
+                <span class="material-icons-round text-[18px]">remove</span>
+            </button>
+            <button id="remote-viewer-full-btn" type="button" class="w-8 h-8 rounded-lg hover:bg-white/10 text-gray-300" title="全屏">
+                <span class="material-icons-round text-[18px]">fullscreen</span>
+            </button>
+            <button id="remote-viewer-close-btn" type="button" class="w-8 h-8 rounded-lg hover:bg-red-500/20 text-gray-300 hover:text-red-300" title="断开当前设备">
+                <span class="material-icons-round text-[18px]">close</span>
+            </button>
+        </div>
+    </div>
+    <div id="remote-viewer-tabs" class="h-10 px-2 border-b border-white/10 bg-black/55 flex items-center gap-2 overflow-x-auto"></div>
+    <div id="remote-viewer-body" class="relative w-full h-[calc(100%-84px)] bg-black"></div>
+</div>
+
 <!-- API Settings Modal -->
 <div id="api-settings-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center">
     <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="closeApiSettingsModal()"></div>
@@ -7094,6 +8216,19 @@
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">Aliyun OSS AccessKey Secret</label>
                 <input id="cfg-oss-key-secret" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AccessKey Secret">
+            </div>
+            <div class="md:col-span-2 pt-2 border-t border-white/10 mt-1"></div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Cloudflare Public Host</label>
+                <input id="cfg-cloudflare-public-host" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="https://xxx.com 或 xxx.com">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Cloudflare Path Prefix (optional)</label>
+                <input id="cfg-cloudflare-path-prefix" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="/eden 或留空">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Cloudflare Tunnel Token (optional)</label>
+                <input id="cfg-cloudflare-tunnel-token" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="cloudflared token">
             </div>
         </div>
         <div class="px-6 py-4 border-t border-white/10 flex items-center justify-end gap-3">

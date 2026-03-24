@@ -21,7 +21,11 @@
         "/Users/joyy/Documents/知识库/热门话题/Society/🎯年轻人开玩笑得有个度，这玩笑开大了！ 这下好了，包...",
         "/Users/joyy/Documents/知识库/热门话题/Military/🎯 Pentagon headhunting Goldman,",
         "/Users/joyy/Documents/知识库/热门话题/Technology/🎮 NetEase Cuts Ties with Yakuza Creator's Studio in Shock Gaming Industry Move 💥",
-        "/Users/joyy/Documents/知识库/热门话题/Society/💰 MKBHD's Samsung S26 Ultra Review The Price is More Ultra Than the Phone Itself"
+        "/Users/joyy/Documents/知识库/热门话题/Society/💰 MKBHD's Samsung S26 Ultra Review The Price is More Ultra Than the Phone Itself",
+        "/Users/joyy/Documents/知识库/热门话题/Technology/🎬 Google's NotebookLM Now Creates Cinematic Videos Using Gemini 3 & Veo 3 AI! 🎥",
+        "/Users/joyy/Documents/知识库/热门话题/Technology/🎨🔊 Phrack Magazine Drops Epic Demoscene Cracktro CFP - Retro Vibes, Loud Beats &",
+        "/Users/joyy/Documents/知识库/热门话题/AI_Tech/🚨 Ring CEO's Privacy Damage Control Backfires as His Answers Fail to Calm Fears ",
+        "/Users/joyy/Documents/知识库/热门话题/AI_Tech/🍎 Apple Goes Ultra Premium! New High-End Products Set to Redefine Luxury Tech 🚀"
       ],
       "keys": [
         "url:https://x.com/whyyoutouzhele/status/2033777852097958203",
@@ -43,11 +47,15 @@
         "url:https://x.com/elhadjdiouf2/status/2033541369126617163",
         "url:https://x.com/Reuters/status/2031974753288773735",
         "url:https://x.com/engadget/status/2030714253506642213",
-        "url:https://x.com/MKBHD/status/2030014376359449000"
+        "url:https://x.com/MKBHD/status/2030014376359449000",
+        "url:https://x.com/Google/status/2030040439642783914",
+        "url:https://x.com/samykamkar/status/2030374107079221431",
+        "url:https://x.com/TechCrunch/status/2030865962061406447",
+        "url:https://x.com/verge/status/2030703272252878893"
       ],
-      "lastPath": "/Users/joyy/Documents/知识库/热门话题/Society/💰 MKBHD's Samsung S26 Ultra Review The Price is More Ultra Than the Phone Itself",
-      "lastKey": "url:https://x.com/MKBHD/status/2030014376359449000",
-      "updatedAt": "2026-03-24T05:56:56.899Z"
+      "lastPath": "/Users/joyy/Documents/知识库/热门话题/AI_Tech/🍎 Apple Goes Ultra Premium! New High-End Products Set to Redefine Luxury Tech 🚀",
+      "lastKey": "url:https://x.com/verge/status/2030703272252878893",
+      "updatedAt": "2026-03-24T10:35:14.108Z"
     },
     "podcast:room_89c4343d": {
       "paths": [
@@ -83,5 +91,5 @@
       "updatedAt": "2026-03-23T12:46:57.162Z"
     }
   },
-  "updatedAt": "2026-03-24T05:56:56.899Z"
+  "updatedAt": "2026-03-24T10:35:14.108Z"
 }

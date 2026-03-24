@@ -29,6 +29,7 @@
 
 - `data/rooms.json`
 - `data/room-covers/*`
+- `~/.meco-studio/remote-devices.json`
 
 说明：房间与封面属于运行态，不进入 GitHub。
 

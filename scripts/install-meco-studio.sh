@@ -28,6 +28,26 @@ OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
 CONFIG_SKILLS_ROOT="${CONFIG_SKILLS_ROOT:-$HOME/.config/agents/skills}"
 HOT_TOPICS_ROOT="${HOT_TOPICS_ROOT:-$HOME/Documents/知识库/热门话题}"
 
+# Remote control defaults (hardcoded deployment preset; can be overridden by env)
+MECO_CLOUDFLARE_PUBLIC_HOST="${MECO_CLOUDFLARE_PUBLIC_HOST:-https://mecoclaw.com}"
+MECO_CLOUDFLARE_PATH_PREFIX="${MECO_CLOUDFLARE_PATH_PREFIX:-}"
+MECO_CLOUDFLARE_TUNNEL_TOKEN="${MECO_CLOUDFLARE_TUNNEL_TOKEN:-eyJhIjoiNzMyNGQ3ZjU3MGY5MzBlMjRjODRlYTY2ZmNkM2IwYjUiLCJ0IjoiYTk1OTZiMDgtNDZjOC00NmRlLWIzZGYtN2NjYjQ4OTJhM2NkIiwicyI6Ik5EWmlaREV4TjJFdFpXRXdNeTAwWlRNNExXSTJZakF0TWpFek5HRmlNVEl4WXpCaiJ9}"
+MECO_RUSTDESK_WEB_BASE_URL="${MECO_RUSTDESK_WEB_BASE_URL:-https://rustdesk.com/web/}"
+MECO_AUTO_INSTALL_CLOUDFLARED="${MECO_AUTO_INSTALL_CLOUDFLARED:-1}"
+MECO_AUTO_INSTALL_MESHCENTRAL="${MECO_AUTO_INSTALL_MESHCENTRAL:-0}"
+MECO_MESH_NODE_BIN="${MECO_MESH_NODE_BIN:-}"
+MECO_MESHCENTRAL_CERT="${MECO_MESHCENTRAL_CERT:-mecoclaw.com}"
+MECO_MESHCENTRAL_PORT="${MECO_MESHCENTRAL_PORT:-4470}"
+MECO_MESHCENTRAL_ALIAS_PORT="${MECO_MESHCENTRAL_ALIAS_PORT:-443}"
+MECO_MESHCENTRAL_MPS_PORT="${MECO_MESHCENTRAL_MPS_PORT:-44430}"
+MECO_MESHCENTRAL_MPS_ALIAS_PORT="${MECO_MESHCENTRAL_MPS_ALIAS_PORT:-4433}"
+MECO_MESHCENTRAL_ADMIN_USER="${MECO_MESHCENTRAL_ADMIN_USER:-eden_admin}"
+MECO_MESHCENTRAL_ADMIN_PASS="${MECO_MESHCENTRAL_ADMIN_PASS:-EdenMesh@2026!}"
+MECO_MESHCENTRAL_ADMIN_EMAIL="${MECO_MESHCENTRAL_ADMIN_EMAIL:-admin@mecoclaw.local}"
+MECO_MESHCENTRAL_ADMIN_NAME="${MECO_MESHCENTRAL_ADMIN_NAME:-Eden Admin}"
+MECO_MESHCENTRAL_LOGIN_TOKEN="${MECO_MESHCENTRAL_LOGIN_TOKEN:-}"
+MECO_MESHCENTRAL_DOMAIN_PATH="${MECO_MESHCENTRAL_DOMAIN_PATH:-}"
+
 HOT_TOPICS_CATEGORIES=(
   "AI_Tech"
   "Entertainment"
@@ -44,6 +64,7 @@ HOT_TOPICS_CATEGORIES=(
 )
 
 MECO_IS_UPDATE=0
+MECO_MESHCENTRAL_LOGIN_TOKEN_RUNTIME=""
 
 log() {
   printf '[meco-install] %s\n' "$*"
@@ -225,6 +246,281 @@ ensure_kimi_whisper() {
 
   if ! command -v ffmpeg >/dev/null 2>&1; then
     warn "ffmpeg not found; local Whisper transcription may be limited. Install ffmpeg if needed."
+  fi
+}
+
+get_mesh_node_bin() {
+  if [[ -n "${MECO_MESH_NODE_BIN:-}" && -x "${MECO_MESH_NODE_BIN}" ]]; then
+    printf '%s\n' "$MECO_MESH_NODE_BIN"
+    return 0
+  fi
+  if [[ -x "$HOME/.nvm/versions/node/v20.19.5/bin/node" ]]; then
+    printf '%s\n' "$HOME/.nvm/versions/node/v20.19.5/bin/node"
+    return 0
+  fi
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+  die "node binary not found for meshcentral"
+}
+
+ensure_cloudflared() {
+  if [[ "$MECO_AUTO_INSTALL_CLOUDFLARED" != "1" ]]; then
+    log "Skip cloudflared install (MECO_AUTO_INSTALL_CLOUDFLARED=$MECO_AUTO_INSTALL_CLOUDFLARED)"
+    return 0
+  fi
+  if command -v cloudflared >/dev/null 2>&1; then
+    log "cloudflared already installed"
+    return 0
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    log "Installing cloudflared via Homebrew..."
+    brew install cloudflared >/dev/null || warn "brew install cloudflared failed"
+  else
+    warn "cloudflared not found and brew unavailable, please install cloudflared manually"
+  fi
+  command -v cloudflared >/dev/null 2>&1 || warn "cloudflared command still not found in PATH"
+}
+
+patch_meshcentral_installmodules_compat() {
+  local file_path="$1"
+  [[ -f "$file_path" ]] || return 0
+  if grep -q "require.resolve(moduleName)" "$file_path"; then
+    return 0
+  fi
+
+  local patch_status=0
+  node - "$file_path" <<'NODE' || patch_status=$?
+const fs = require("fs");
+const p = process.argv[2];
+let text = fs.readFileSync(p, "utf8");
+if (text.includes("require.resolve(moduleName)")) process.exit(0);
+
+const needle = "modulePath = ex.stack.split(' ').pop().slice(1,-3)";
+if (!text.includes(needle)) process.exit(3);
+
+const replacement = [
+  "const msg = '' + ex;",
+  "                            const m = msg.match(/in\\s+([^\\s]+package\\.json)/i);",
+  "                            if (m && m[1]) {",
+  "                                modulePath = m[1].replace(/^['\\\"]+|['\\\".,]+$/g, '');",
+  "                            }",
+  "                            if (modulePath == null) {",
+  "                                try {",
+  "                                    var resolvedModulePath = require.resolve(moduleName);",
+  "                                    var probe = require('path').dirname(resolvedModulePath);",
+  "                                    for (var pcount = 0; pcount < 6; pcount++) {",
+  "                                        var pp = require('path').join(probe, 'package.json');",
+  "                                        if (require('fs').existsSync(pp)) {",
+  "                                            try {",
+  "                                                var pj = JSON.parse(require('fs').readFileSync(pp, 'utf8'));",
+  "                                                if (pj && (pj.name == moduleName)) { modulePath = pp; break; }",
+  "                                            } catch (ex2) { }",
+  "                                        }",
+  "                                        var up = require('path').dirname(probe);",
+  "                                        if (up == probe) break;",
+  "                                        probe = up;",
+  "                                    }",
+  "                                } catch (ex3) { }",
+  "                            }"
+].join("\n");
+
+text = text.replace(needle, replacement);
+fs.writeFileSync(p, text, "utf8");
+NODE
+
+  if [[ "$patch_status" -eq 0 ]]; then
+    log "Patched meshcentral module-compat guard: $file_path"
+  elif [[ "$patch_status" -eq 3 ]]; then
+    warn "meshcentral compat patch skipped (pattern not found): $file_path"
+  else
+    warn "meshcentral compat patch failed: $file_path (code=$patch_status)"
+  fi
+}
+
+write_meshcentral_config() {
+  local config_path="$1"
+  node - "$config_path" \
+    "$MECO_MESHCENTRAL_CERT" \
+    "$MECO_MESHCENTRAL_PORT" \
+    "$MECO_MESHCENTRAL_ALIAS_PORT" \
+    "$MECO_MESHCENTRAL_MPS_PORT" \
+    "$MECO_MESHCENTRAL_MPS_ALIAS_PORT" <<'NODE'
+const fs = require("fs");
+const crypto = require("crypto");
+
+const configPath = process.argv[2];
+const cert = String(process.argv[3] || "mecoclaw.com").trim();
+const port = Number(process.argv[4] || 4470) || 4470;
+const aliasPort = Number(process.argv[5] || 443) || 443;
+const mpsPort = Number(process.argv[6] || 44430) || 44430;
+const mpsAliasPort = Number(process.argv[7] || 4433) || 4433;
+
+let current = {};
+if (fs.existsSync(configPath)) {
+  try {
+    current = JSON.parse(fs.readFileSync(configPath, "utf8") || "{}");
+  } catch (_) {
+    current = {};
+  }
+}
+
+if (!current.settings || typeof current.settings !== "object") current.settings = {};
+if (!current.domains || typeof current.domains !== "object") current.domains = {};
+if (!current.domains[""] || typeof current.domains[""] !== "object") current.domains[""] = {};
+
+const randHex = (bytes) => crypto.randomBytes(bytes).toString("hex");
+const settings = current.settings;
+settings.cert = cert || "mecoclaw.com";
+settings.WANonly = true;
+settings.port = port;
+settings.portBind = "127.0.0.1";
+settings.aliasPort = aliasPort;
+settings.redirPort = 0;
+settings.redirAliasPort = 80;
+settings.tlsOffload = "127.0.0.1,::1";
+settings.trustedProxy = "127.0.0.1,::1";
+settings.allowFraming = true;
+settings.sessionKey = String(settings.sessionKey || randHex(24));
+settings.dbEncryptKey = String(settings.dbEncryptKey || randHex(24));
+settings.mpsPort = mpsPort;
+settings.mpsPortBind = "127.0.0.1";
+settings.mpsAliasPort = mpsAliasPort;
+
+const d = current.domains[""];
+d.title = d.title || "Meco Mesh";
+d.title2 = d.title2 || "MeshCentral";
+d.newAccounts = true;
+d.minify = true;
+const certHost = String(cert || "")
+  .replace(/^https?:\/\//i, "")
+  .split("/")[0]
+  .split(":")[0]
+  .trim()
+  .toLowerCase();
+const allowedOrigins = Array.from(
+  new Set([certHost, "127.0.0.1", "localhost"].filter(Boolean))
+);
+d.allowedorigin = allowedOrigins.join(",");
+
+fs.mkdirSync(require("path").dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, JSON.stringify(current, null, 2) + "\n", "utf8");
+NODE
+}
+
+bootstrap_meshcentral_admin_and_token() {
+  local mc_dir="$1"
+  local node_bin="$2"
+  local create_output admin_output token_output token
+  local user_id="user//${MECO_MESHCENTRAL_ADMIN_USER}"
+
+  create_output="$(
+    cd "$mc_dir" && \
+    "$node_bin" node_modules/meshcentral --configfile config.json \
+      --createaccount "$MECO_MESHCENTRAL_ADMIN_USER" \
+      --pass "$MECO_MESHCENTRAL_ADMIN_PASS" \
+      --email "$MECO_MESHCENTRAL_ADMIN_EMAIL" \
+      --name "$MECO_MESHCENTRAL_ADMIN_NAME" 2>&1 || true
+  )"
+  if printf '%s\n' "$create_output" | grep -Eqi "Done\\.|User already exists\\."; then
+    log "MeshCentral admin account ready: ${MECO_MESHCENTRAL_ADMIN_USER}"
+  else
+    warn "MeshCentral createaccount output: $(printf '%s' "$create_output" | tail -n 1)"
+  fi
+
+  admin_output="$(
+    cd "$mc_dir" && \
+    "$node_bin" node_modules/meshcentral --configfile config.json \
+      --adminaccount "$MECO_MESHCENTRAL_ADMIN_USER" 2>&1 || true
+  )"
+  if printf '%s\n' "$admin_output" | grep -Eqi "Done\\."; then
+    log "MeshCentral admin privilege ensured: ${MECO_MESHCENTRAL_ADMIN_USER}"
+  else
+    warn "MeshCentral adminaccount output: $(printf '%s' "$admin_output" | tail -n 1)"
+  fi
+
+  token_output="$(
+    cd "$mc_dir" && \
+    "$node_bin" node_modules/meshcentral --configfile config.json \
+      --logintoken "$user_id" 2>&1 || true
+  )"
+  token="$(printf '%s\n' "$token_output" | awk 'NF { line=$0 } END { print line }' | tr -d '\r\n')"
+  if [[ "$token" =~ ^[A-Za-z0-9._~=-]{32,}$ ]]; then
+    MECO_MESHCENTRAL_LOGIN_TOKEN_RUNTIME="$token"
+    log "MeshCentral login token generated for ${MECO_MESHCENTRAL_ADMIN_USER}"
+  else
+    warn "MeshCentral logintoken generation did not return a valid token"
+  fi
+
+  if [[ -n "${MECO_MESHCENTRAL_LOGIN_TOKEN_RUNTIME:-}" ]]; then
+    local secret_file="$HOME/.meco-studio/meshcentral-bootstrap.json"
+    mkdir -p "$(dirname "$secret_file")"
+    node -e '
+      const fs = require("fs");
+      const path = process.argv[1];
+      const payload = {
+        updatedAt: new Date().toISOString(),
+        meshcentralAdminUser: String(process.argv[2] || ""),
+        meshcentralAdminPass: String(process.argv[3] || ""),
+        meshcentralLoginToken: String(process.argv[4] || "")
+      };
+      fs.writeFileSync(path, JSON.stringify(payload, null, 2) + "\n", "utf8");
+    ' "$secret_file" \
+      "$MECO_MESHCENTRAL_ADMIN_USER" \
+      "$MECO_MESHCENTRAL_ADMIN_PASS" \
+      "$MECO_MESHCENTRAL_LOGIN_TOKEN_RUNTIME"
+    log "Stored Mesh bootstrap secret locally: $secret_file"
+  fi
+}
+
+ensure_meshcentral_runtime() {
+  log "MeshCentral support removed; skip meshcentral runtime install."
+  return 0
+  if [[ "$MECO_AUTO_INSTALL_MESHCENTRAL" != "1" ]]; then
+    log "Skip meshcentral install (MECO_AUTO_INSTALL_MESHCENTRAL=$MECO_AUTO_INSTALL_MESHCENTRAL)"
+    return 0
+  fi
+
+  local mc_dir="$MECO_INSTALL_DIR/meshcentral"
+  local node_bin
+  node_bin="$(get_mesh_node_bin)"
+
+  mkdir -p "$mc_dir"
+  if [[ ! -f "$mc_dir/package.json" ]]; then
+    (cd "$mc_dir" && npm init -y >/dev/null 2>&1)
+  fi
+
+  log "Installing meshcentral runtime dependencies..."
+  (
+    cd "$mc_dir" && \
+    npm install --no-fund --no-audit --omit=optional meshcentral ua-client-hints-js@0.1.2 >/dev/null 2>&1
+  ) || warn "meshcentral npm install reported errors"
+
+  if [[ -d "$mc_dir/node_modules/meshcentral" ]]; then
+    (
+      cd "$mc_dir/node_modules/meshcentral" && \
+      npm install --no-fund --no-audit --omit=optional ua-client-hints-js@0.1.2 >/dev/null 2>&1
+    ) || true
+    patch_meshcentral_installmodules_compat "$mc_dir/node_modules/meshcentral/meshcentral.js"
+  fi
+
+  write_meshcentral_config "$mc_dir/meshcentral-data/config.json"
+
+  if [[ -x "$MECO_INSTALL_DIR/scripts/meshcentral-stop.sh" ]]; then
+    "$MECO_INSTALL_DIR/scripts/meshcentral-stop.sh" >/dev/null 2>&1 || true
+  fi
+
+  bootstrap_meshcentral_admin_and_token "$mc_dir" "$node_bin"
+
+  if [[ -x "$MECO_INSTALL_DIR/scripts/meshcentral-start.sh" ]]; then
+    if "$MECO_INSTALL_DIR/scripts/meshcentral-start.sh" >/dev/null 2>&1; then
+      log "MeshCentral started"
+    else
+      warn "MeshCentral start failed, check $mc_dir/meshcentral.log"
+    fi
+  else
+    warn "meshcentral-start.sh missing, skip auto start"
   fi
 }
 
@@ -423,7 +719,12 @@ configure_meco_runtime_settings() {
       ossEndpoint: String(process.argv[11] || "").trim(),
       ossBucket: String(process.argv[12] || "").trim(),
       ossAccessKeyId: String(process.argv[13] || "").trim(),
-      ossAccessKeySecret: String(process.argv[14] || "").trim()
+      ossAccessKeySecret: String(process.argv[14] || "").trim(),
+      cloudflarePublicHost: String(process.argv[15] || "").trim(),
+      cloudflarePathPrefix: String(process.argv[16] || "").trim(),
+      cloudflareTunnelToken: String(process.argv[17] || "").trim(),
+      rustdeskWebBaseUrl: String(process.argv[18] || "").trim(),
+      rustdeskSchemeAuthority: String(process.argv[19] || "").trim() || "connect"
     };
 
     let current = {};
@@ -454,7 +755,12 @@ configure_meco_runtime_settings() {
     "$MECO_OSS_ENDPOINT" \
     "$MECO_OSS_BUCKET" \
     "$MECO_OSS_ACCESS_KEY_ID" \
-    "$MECO_OSS_ACCESS_KEY_SECRET"
+    "$MECO_OSS_ACCESS_KEY_SECRET" \
+    "$MECO_CLOUDFLARE_PUBLIC_HOST" \
+    "$MECO_CLOUDFLARE_PATH_PREFIX" \
+    "$MECO_CLOUDFLARE_TUNNEL_TOKEN" \
+    "$MECO_RUSTDESK_WEB_BASE_URL" \
+    "connect"
 
   log "Updated Meco runtime settings: $settings_path"
 }
@@ -1018,6 +1324,7 @@ main() {
   prepare_repo
   run_permissions_preflight
   install_dependencies
+  ensure_cloudflared
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets
   ensure_hot_topics_skill

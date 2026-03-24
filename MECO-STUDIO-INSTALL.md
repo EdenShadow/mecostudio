@@ -33,6 +33,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 - 安装 Python3 + pip（未安装自动安装）
 - 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
 - 安装 Whisper（`python3 -m pip install --user --upgrade openai-whisper`）
+- 自动安装 cloudflared（可关闭）
 - 拉取或更新仓库至 `~/meco-studio`
 - 运行权限预检脚本（目录读写 + 网络连通 + OpenClaw 可用性）
 - 安装 npm 依赖
@@ -45,6 +46,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 - 初始化 `~/Documents/知识库/热门话题` 及分类目录（只补齐缺失，不覆盖已有内容）
 - 默认清空测试房间数据（`data/rooms.json = []`）
 - 启动服务（默认 `http://127.0.0.1:3456`）
+- 自动写入远控默认配置（Cloudflare host/token + RustDesk Web 地址）
 - 若为升级流程：完成后自动重启 OpenClaw Gateway 与 Meco Studio
 - 同步版本号文件：`VERSION` -> `~/.meco-studio/VERSION`
 
@@ -147,6 +149,12 @@ MECO_OSS_BUCKET="cfplusvideo" \
 MECO_OSS_ACCESS_KEY_ID="<your-oss-access-key-id>" \
 MECO_OSS_ACCESS_KEY_SECRET="<your-oss-access-key-secret>" \
 MECO_OPENAI_API_KEY="" \
+MECO_CLOUDFLARE_PUBLIC_HOST="https://mecoclaw.com" \
+MECO_CLOUDFLARE_TUNNEL_TOKEN="<your-cloudflare-tunnel-token>" \
+MECO_AUTO_INSTALL_CLOUDFLARED=1 \
+MECO_AUTO_INSTALL_MESHCENTRAL=1 \
+MECO_MESHCENTRAL_ADMIN_USER="eden_admin" \
+MECO_MESHCENTRAL_ADMIN_PASS="<strong-password>" \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
@@ -164,6 +172,12 @@ $env:MECO_OSS_ENDPOINT = "https://oss-cn-hongkong.aliyuncs.com/"
 $env:MECO_OSS_BUCKET = "cfplusvideo"
 $env:MECO_OSS_ACCESS_KEY_ID = "<your-oss-access-key-id>"
 $env:MECO_OSS_ACCESS_KEY_SECRET = "<your-oss-access-key-secret>"
+$env:MECO_CLOUDFLARE_PUBLIC_HOST = "https://mecoclaw.com"
+$env:MECO_CLOUDFLARE_TUNNEL_TOKEN = "<your-cloudflare-tunnel-token>"
+$env:MECO_AUTO_INSTALL_CLOUDFLARED = "1"
+$env:MECO_AUTO_INSTALL_MESHCENTRAL = "1"
+$env:MECO_MESHCENTRAL_ADMIN_USER = "eden_admin"
+$env:MECO_MESHCENTRAL_ADMIN_PASS = "<strong-password>"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
 ```
 
@@ -262,6 +276,7 @@ bash scripts/openclaw-permission-preflight.sh
 ## Security Policy
 
 - Do not commit real API keys/AccessKeys to repository files.
+- Private deployment preset may include default Cloudflare/Mesh bootstrap values; rotate immediately before sharing/forking.
 - Configure secrets only via local UI settings or environment variables.
 - Rotate keys immediately if any leakage is suspected.
 - UI 保存的密钥默认写入 `~/.meco-studio/app-settings.json`（不在仓库目录）。

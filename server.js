@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
+const net = require('net');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -10,6 +11,7 @@ const voiceService = require('./services/voice'); // Voice Training Service
 const appSettings = require('./services/app-settings');
 const integrationSetup = require('./services/integration-setup');
 const ossStorage = require('./services/oss-storage');
+const remoteControl = require('./services/remote-control');
 
 const app = express();
 const server = http.createServer(app);
@@ -3514,6 +3516,2706 @@ app.post('/api/settings', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+const cloudflareTunnelRuntime = {
+  process: null,
+  pid: 0,
+  status: 'idle',
+  startedAt: '',
+  lastError: '',
+  logs: []
+};
+const REMOTE_PUBLIC_PATH_SEGMENT = 'web';
+const REMOTE_RUSTDESK_PATH_SEGMENT = 'rustdesk';
+const RUSTDESK_APP_BUNDLE_PATH = '/Applications/RustDesk.app';
+const RUSTDESK_PREF_DIR = path.join(os.homedir(), 'Library', 'Preferences', 'com.carriez.RustDesk');
+const RUSTDESK_LOG_DIR = path.join(os.homedir(), 'Library', 'Logs', 'RustDesk');
+
+function remoteSafeString(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function remoteTrimSlashes(value) {
+  return remoteSafeString(value).replace(/^\/+|\/+$/g, '');
+}
+
+function remoteToSlug(value, fallback = 'device') {
+  const normalized = remoteSafeString(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return normalized || fallback;
+}
+
+function escapeRegexLiteral(text) {
+  return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseTomlStringValue(content, key) {
+  const raw = String(content || '');
+  if (!raw || !key) return '';
+  const escapedKey = escapeRegexLiteral(key);
+  const m = raw.match(new RegExp(`^\\s*${escapedKey}\\s*=\\s*['"]([^'"]*)['"]\\s*$`, 'm'));
+  return m && m[1] ? remoteSafeString(m[1]) : '';
+}
+
+function readTailTextFileSafe(filePath, maxBytes = 280000) {
+  try {
+    if (!fs.existsSync(filePath)) return '';
+    const buf = fs.readFileSync(filePath);
+    if (!buf || !buf.length) return '';
+    const tail = buf.length > maxBytes ? buf.slice(buf.length - maxBytes) : buf;
+    return String(tail.toString('utf8') || '');
+  } catch (_) {
+    return '';
+  }
+}
+
+function listRustDeskLogFiles() {
+  const files = [];
+  const collect = (dir) => {
+    try {
+      if (!fs.existsSync(dir)) return;
+      const names = fs.readdirSync(dir);
+      for (const name of names) {
+        if (!/\.log$/i.test(name)) continue;
+        const full = path.join(dir, name);
+        let stat = null;
+        try {
+          stat = fs.statSync(full);
+        } catch (_) {
+          stat = null;
+        }
+        if (!stat || !stat.isFile()) continue;
+        files.push({ path: full, mtimeMs: Number(stat.mtimeMs) || 0 });
+      }
+    } catch (_) {}
+  };
+  collect(RUSTDESK_LOG_DIR);
+  collect(path.join(RUSTDESK_LOG_DIR, 'server'));
+  return files
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .map((item) => item.path);
+}
+
+function extractRustDeskIdFromLogs(logFiles = []) {
+  const picked = Array.isArray(logFiles) ? logFiles.slice(0, 16) : [];
+  for (const file of picked) {
+    const text = readTailTextFileSafe(file);
+    if (!text) continue;
+    const generated = [...text.matchAll(/Generated id\s+([A-Za-z0-9._-]{5,})/gi)];
+    if (generated.length > 0) {
+      const id = remoteSafeString(generated[generated.length - 1][1]).replace(/\s+/g, '');
+      if (id) return { id, source: 'log_generated_id' };
+    }
+    const idMatches = [...text.matchAll(/\bid[:=]\s*([A-Za-z0-9._-]{5,})/gi)];
+    if (idMatches.length > 0) {
+      const id = remoteSafeString(idMatches[idMatches.length - 1][1]).replace(/\s+/g, '');
+      if (id) return { id, source: 'log_recent_id' };
+    }
+  }
+  return { id: '', source: '' };
+}
+
+function extractRustDeskPasswordFromLogs(logFiles = []) {
+  const picked = Array.isArray(logFiles) ? logFiles.slice(0, 18) : [];
+  for (const file of picked) {
+    const text = readTailTextFileSafe(file);
+    if (!text) continue;
+    const matches = [...text.matchAll(/rustdesk:\/\/[^\s'"]+\?[^'"\\s]*password=([^&\s'"]+)/gi)];
+    if (matches.length === 0) continue;
+    const raw = remoteSafeString(matches[matches.length - 1][1]);
+    if (!raw) continue;
+    let decoded = raw;
+    try {
+      decoded = decodeURIComponent(raw);
+    } catch (_) {}
+    const password = remoteSafeString(decoded);
+    if (password) {
+      return { password, source: 'recent_launch_url' };
+    }
+  }
+  return { password: '', source: '' };
+}
+
+function extractRustDeskPeerPasswordToken(peerId = '') {
+  const id = remoteSafeString(peerId).replace(/\s+/g, '');
+  if (!id) return { token: '', source: '' };
+  try {
+    const peerPath = path.join(RUSTDESK_PREF_DIR, 'peers', `${id}.toml`);
+    const text = readTailTextFileSafe(peerPath, 220000);
+    if (!text) return { token: '', source: '' };
+    const m = text.match(/password\s*=\s*\[([\s\S]*?)\]/m);
+    if (!m || !m[1]) return { token: '', source: '' };
+    const nums = String(m[1])
+      .split(/[^0-9]+/)
+      .map((part) => Number(part))
+      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 255);
+    if (!nums.length) return { token: '', source: '' };
+    const token = Buffer.from(nums)
+      .toString('utf8')
+      .replace(/[\u0000-\u001f\u007f]+/g, '')
+      .trim();
+    if (!token) return { token: '', source: '' };
+    return { token, source: 'peer_toml_token' };
+  } catch (_) {
+    return { token: '', source: '' };
+  }
+}
+
+function readRustDeskPasswordFromRemoteStore(preferredRustDeskId = '') {
+  try {
+    const storePath = remoteControl.STORE_PATH;
+    if (!storePath || !fs.existsSync(storePath)) {
+      return { password: '', source: '' };
+    }
+    const parsed = JSON.parse(fs.readFileSync(storePath, 'utf8') || '{}');
+    const devices = Array.isArray(parsed.devices) ? parsed.devices : [];
+    const preferred = remoteSafeString(preferredRustDeskId).replace(/\s+/g, '');
+
+    if (preferred) {
+      for (const dev of devices) {
+        if (!dev || typeof dev !== 'object') continue;
+        const id = remoteSafeString(dev.rustdeskId || dev.meshNodeId).replace(/\s+/g, '');
+        const password = remoteSafeString(dev.password);
+        if (!id || !password) continue;
+        if (id === preferred) {
+          return { password, source: 'bound_device' };
+        }
+      }
+    }
+
+    const candidates = devices
+      .filter((dev) => dev && typeof dev === 'object' && remoteSafeString(dev.password))
+      .sort((a, b) => {
+        const ta = Date.parse(a && a.updatedAt ? a.updatedAt : 0) || 0;
+        const tb = Date.parse(b && b.updatedAt ? b.updatedAt : 0) || 0;
+        return tb - ta;
+      });
+    if (candidates.length > 0) {
+      return {
+        password: remoteSafeString(candidates[0].password),
+        source: 'recent_bound_device'
+      };
+    }
+  } catch (_) {}
+  return { password: '', source: '' };
+}
+
+function isRustDeskRunning() {
+  try {
+    const { execFileSync } = require('child_process');
+    const out = String(execFileSync('ps', ['-ax', '-o', 'command='], { encoding: 'utf8' }) || '');
+    return /\/Applications\/RustDesk\.app\/Contents\/MacOS\/(RustDesk|service)\b/.test(out);
+  } catch (_) {
+    return false;
+  }
+}
+
+function startRustDeskApp() {
+  return new Promise((resolve, reject) => {
+    try {
+      const { execFile } = require('child_process');
+      execFile('open', ['-a', 'RustDesk'], (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(true);
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+async function readLocalRustDeskInfo(options = {}) {
+  const launchIfNeeded = !!(options && options.launchIfNeeded);
+  const preferLogs = !!(options && options.preferLogs);
+  const appInstalled = fs.existsSync(RUSTDESK_APP_BUNDLE_PATH);
+
+  let running = isRustDeskRunning();
+  let started = false;
+  let launchError = '';
+
+  if (appInstalled && launchIfNeeded && !running) {
+    try {
+      await startRustDeskApp();
+      started = true;
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      running = isRustDeskRunning();
+    } catch (e) {
+      launchError = remoteSafeString(e && e.message);
+    }
+  }
+
+  const logFiles = listRustDeskLogFiles();
+  const fromLogs = extractRustDeskIdFromLogs(logFiles);
+  let id = remoteSafeString(fromLogs.id).replace(/\s+/g, '');
+  let idSource = remoteSafeString(fromLogs.source);
+
+  if (!id) {
+    const localToml = readTailTextFileSafe(path.join(RUSTDESK_PREF_DIR, 'RustDesk_local.toml'));
+    id = remoteSafeString(parseTomlStringValue(localToml, 'remote_id')).replace(/\s+/g, '');
+    idSource = id ? 'local_toml' : '';
+  }
+
+  const peerPasswordToken = extractRustDeskPeerPasswordToken(id);
+
+  let password = '';
+  let passwordSource = '';
+  const fromLogsPassword = extractRustDeskPasswordFromLogs(logFiles);
+  const fromStore = readRustDeskPasswordFromRemoteStore(id);
+  if (preferLogs) {
+    if (fromLogsPassword.password) {
+      password = remoteSafeString(fromLogsPassword.password);
+      passwordSource = remoteSafeString(fromLogsPassword.source);
+    } else if (fromStore.password) {
+      password = remoteSafeString(fromStore.password);
+      passwordSource = remoteSafeString(fromStore.source);
+    }
+  } else if (fromStore.password) {
+    password = remoteSafeString(fromStore.password);
+    passwordSource = remoteSafeString(fromStore.source);
+  }
+  if (!password) {
+    password = remoteSafeString(fromLogsPassword.password);
+    passwordSource = remoteSafeString(fromLogsPassword.source);
+  }
+
+  return {
+    appInstalled,
+    running,
+    started,
+    launchError,
+    id,
+    idSource,
+    password,
+    oneTimePassword: password,
+    passwordToken: remoteSafeString(peerPasswordToken.token),
+    passwordTokenSource: remoteSafeString(peerPasswordToken.source),
+    passwordSource,
+    readAt: new Date().toISOString()
+  };
+}
+
+function normalizeRemotePublicHost(host) {
+  const raw = remoteSafeString(host);
+  if (!raw) return '';
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!/^https?:$/i.test(parsed.protocol)) return '';
+    return `${parsed.protocol}//${parsed.host}`.replace(/\/+$/, '');
+  } catch (_) {
+    return '';
+  }
+}
+
+function getServerPortForRemote() {
+  try {
+    const addr = server.address();
+    if (addr && typeof addr === 'object' && addr.port) {
+      return Number(addr.port) || Number(process.env.PORT) || 3456;
+    }
+  } catch (_) {}
+  return Number(process.env.PORT) || 3456;
+}
+
+function isPrivateIpv4(ip) {
+  const text = remoteSafeString(ip);
+  if (!text) return false;
+  return (
+    /^10\./.test(text) ||
+    /^192\.168\./.test(text) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(text)
+  );
+}
+
+function detectPrimaryLanIpv4() {
+  const interfaces = os.networkInterfaces() || {};
+  const preferredOrder = ['en0', 'en1', 'eth0', 'Ethernet', 'Wi-Fi', 'wlan0'];
+  const names = Object.keys(interfaces);
+  const ordered = [
+    ...preferredOrder.filter((name) => names.includes(name)),
+    ...names.filter((name) => !preferredOrder.includes(name))
+  ];
+
+  let firstNonInternal = '';
+  for (const name of ordered) {
+    const list = Array.isArray(interfaces[name]) ? interfaces[name] : [];
+    for (const item of list) {
+      if (!item || item.internal) continue;
+      if (item.family !== 'IPv4') continue;
+      const address = remoteSafeString(item.address);
+      if (!address) continue;
+      if (!firstNonInternal) firstNonInternal = address;
+      if (isPrivateIpv4(address)) return address;
+    }
+  }
+  return firstNonInternal;
+}
+
+function buildDefaultLanUrl() {
+  const port = getServerPortForRemote();
+  const ip = detectPrimaryLanIpv4() || '127.0.0.1';
+  return {
+    lanIp: ip,
+    port,
+    lanUrl: `http://${ip}:${port}`
+  };
+}
+
+function getSystemUsernameSafe() {
+  try {
+    if (typeof os.userInfo === 'function') {
+      const info = os.userInfo();
+      const name = remoteSafeString(info && info.username);
+      if (name) return name;
+    }
+  } catch (_) {}
+  return remoteSafeString(process.env.USER || process.env.USERNAME || '');
+}
+
+function buildRemotePathPrefixSegments(settings = {}, leafSegment = REMOTE_PUBLIC_PATH_SEGMENT) {
+  const configured = remoteTrimSlashes(settings.cloudflarePathPrefix || '');
+  const segments = configured ? configured.split('/').filter(Boolean) : [];
+  const last = segments.length ? segments[segments.length - 1] : '';
+  const target = remoteSafeString(leafSegment || REMOTE_PUBLIC_PATH_SEGMENT) || REMOTE_PUBLIC_PATH_SEGMENT;
+  if (last !== target) {
+    segments.push(target);
+  }
+  return segments;
+}
+
+function buildRemotePublicPreview(owner, deviceName, settings = {}, options = {}) {
+  const host = normalizeRemotePublicHost(settings.cloudflarePublicHost || '');
+  if (!host) return '';
+  const routeSegment = remoteSafeString(options.routeSegment || REMOTE_PUBLIC_PATH_SEGMENT) || REMOTE_PUBLIC_PATH_SEGMENT;
+  const prefixSegments = buildRemotePathPrefixSegments(settings, routeSegment);
+  const ownerSlug = remoteToSlug(owner, 'user');
+  const deviceSlug = remoteToSlug(deviceName, 'dev');
+  const pathPart = [...prefixSegments, ownerSlug, deviceSlug].filter(Boolean).join('/');
+  return `${host}/${pathPart}`;
+}
+
+function normalizeRemoteRoutePathForMatch(input) {
+  const raw = remoteSafeString(input);
+  if (!raw) return '/';
+  const noQuery = raw.split('?')[0].split('#')[0];
+  const normalized = `/${remoteTrimSlashes(noQuery)}`.replace(/\/+$/g, '');
+  return normalized || '/';
+}
+
+function shouldSkipRemoteEntryPath(pathname) {
+  const pathOnly = normalizeRemoteRoutePathForMatch(pathname);
+  if (!pathOnly || pathOnly === '/') return true;
+
+  if (
+    pathOnly === '/index.html' ||
+    pathOnly === '/chat' ||
+    pathOnly === '/create' ||
+    pathOnly === '/edit' ||
+    pathOnly === '/playgen' ||
+    pathOnly === '/playgen.html' ||
+    pathOnly === '/roundtable-config'
+  ) {
+    return true;
+  }
+
+  return (
+    pathOnly.startsWith('/api/') ||
+    pathOnly.startsWith('/roundtable/') ||
+    pathOnly.startsWith('/knowledge-assets/') ||
+    pathOnly.startsWith('/topics/') ||
+    pathOnly.startsWith('/room-covers/') ||
+    pathOnly.startsWith('/js/') ||
+    pathOnly.startsWith('/css/') ||
+    pathOnly.startsWith('/fonts/') ||
+    pathOnly.startsWith('/images/') ||
+    pathOnly.startsWith('/assets/')
+  );
+}
+
+function findBoundRemoteDeviceByPath(routePath, settings = {}) {
+  const target = normalizeRemoteRoutePathForMatch(routePath);
+  if (!target || target === '/') return null;
+
+  let devices = [];
+  try {
+    devices = remoteControl.listDevices(settings);
+  } catch (_) {
+    devices = [];
+  }
+
+  for (const device of devices) {
+    if (!device) continue;
+    const route = normalizeRemoteRoutePathForMatch(device.routePath || '');
+    if (route === target) return device;
+  }
+
+  const parts = target.split('/').filter(Boolean);
+  if (parts.length >= 2) {
+    const ownerSlug = remoteToSlug(parts[parts.length - 2], 'user');
+    const deviceSlug = remoteToSlug(parts[parts.length - 1], 'dev');
+    for (const device of devices) {
+      if (!device) continue;
+      if (remoteToSlug(device.ownerSlug || '', 'user') !== ownerSlug) continue;
+      if (remoteToSlug(device.deviceSlug || '', 'dev') !== deviceSlug) continue;
+      return device;
+    }
+  }
+
+  return null;
+}
+
+function buildRemoteEntryRedirectPath(routePath, options = {}) {
+  const targetRoute = normalizeRemoteRoutePathForMatch(routePath);
+  const qs = new URLSearchParams();
+  qs.set('remoteRoute', targetRoute);
+  const mode = remoteSafeString(options.mode || '').toLowerCase();
+  if (mode === 'mesh' || mode === 'rustdesk') {
+    qs.set('remoteMode', 'rustdesk');
+  }
+  return `/index.html?${qs.toString()}#agenttools`;
+}
+
+function inferRemoteEntryMode(routePath, settings = {}) {
+  const pathOnly = normalizeRemoteRoutePathForMatch(routePath);
+  if (!pathOnly || pathOnly === '/') return '';
+
+  const rustdeskPrefixSegments = buildRemotePathPrefixSegments(settings, REMOTE_RUSTDESK_PATH_SEGMENT);
+  const rustdeskPrefix = normalizeRemoteRoutePathForMatch(`/${rustdeskPrefixSegments.join('/')}`);
+  if (rustdeskPrefix && rustdeskPrefix !== '/') {
+    if (pathOnly === rustdeskPrefix || pathOnly.startsWith(`${rustdeskPrefix}/`)) {
+      return 'rustdesk';
+    }
+  }
+
+  if (pathOnly === '/rustdesk' || pathOnly.startsWith('/rustdesk/')) {
+    return 'rustdesk';
+  }
+
+  if (pathOnly === '/mesh' || pathOnly.startsWith('/mesh/')) {
+    return 'rustdesk';
+  }
+
+  return '';
+}
+
+function appendCloudflareTunnelLog(line) {
+  const text = remoteSafeString(line);
+  if (!text) return;
+  cloudflareTunnelRuntime.logs.push({
+    at: new Date().toISOString(),
+    text
+  });
+  if (cloudflareTunnelRuntime.logs.length > 60) {
+    cloudflareTunnelRuntime.logs.splice(0, cloudflareTunnelRuntime.logs.length - 60);
+  }
+}
+
+function snapshotCloudflareTunnelRuntime() {
+  const proc = cloudflareTunnelRuntime.process;
+  const running = !!(proc && !proc.killed);
+  return {
+    running,
+    pid: Number(cloudflareTunnelRuntime.pid) || 0,
+    status: cloudflareTunnelRuntime.status || (running ? 'running' : 'idle'),
+    startedAt: cloudflareTunnelRuntime.startedAt || '',
+    lastError: cloudflareTunnelRuntime.lastError || '',
+    logs: Array.isArray(cloudflareTunnelRuntime.logs) ? cloudflareTunnelRuntime.logs.slice(-20) : []
+  };
+}
+
+function clearCloudflareTunnelRuntime(nextStatus = 'idle') {
+  cloudflareTunnelRuntime.process = null;
+  cloudflareTunnelRuntime.pid = 0;
+  cloudflareTunnelRuntime.status = nextStatus;
+}
+
+function buildCloudflareGuideCommands(options = {}) {
+  const localUrl = remoteSafeString(options.localUrl);
+  const previewPublicUrl = remoteSafeString(options.previewPublicUrl);
+  const pathPrefix = remoteSafeString(options.pathPrefix);
+  const commands = [];
+  commands.push('cloudflared --version');
+  if (!options.hasToken) {
+    commands.push('在 API Keys 中填写 Cloudflare Tunnel Token');
+    commands.push(`建议先测试: cloudflared tunnel --url ${localUrl || 'http://127.0.0.1:3456'}`);
+  } else {
+    commands.push('cloudflared tunnel --no-autoupdate run --token <已配置token>');
+  }
+  if (previewPublicUrl) {
+    commands.push(`目标公网地址: ${previewPublicUrl}`);
+  }
+  if (pathPrefix) {
+    commands.push(`Cloudflare Path Prefix: /${remoteTrimSlashes(pathPrefix)}`);
+  }
+  return commands;
+}
+
+function execFileText(cmd, args = [], options = {}) {
+  const { execFile } = require('child_process');
+  return new Promise((resolve, reject) => {
+    execFile(
+      cmd,
+      args,
+      { timeout: 12000, maxBuffer: 1024 * 1024, ...options },
+      (error, stdout, stderr) => {
+        if (error) {
+          const message = remoteSafeString(stderr || error.message || '');
+          const err = new Error(message || 'exec failed');
+          err.original = error;
+          reject(err);
+          return;
+        }
+        resolve(remoteSafeString(stdout || stderr || ''));
+      }
+    );
+  });
+}
+
+function normalizeRemoteHttpBase(raw, defaultProtocol = 'https://') {
+  const value = remoteSafeString(raw);
+  if (!value) return '';
+  const candidate = /^https?:\/\//i.test(value) ? value : `${defaultProtocol}${value}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!/^https?:$/i.test(parsed.protocol)) return '';
+    const pathname = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/g, '');
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+const RUSTDESK_WEB_PROXY_BASE_URL = 'https://rustdesk.com/web/';
+const RUSTDESK_PUBLIC_RENDEZVOUS = 'rs-ny.rustdesk.com:21116';
+const RUSTDESK_DEFAULT_LOCAL_RENDEZVOUS = '127.0.0.1:21116,127.0.0.1:21118';
+
+function parseRustDeskServerTarget(value, defaultPort = 21116) {
+  const raw = remoteSafeString(value);
+  if (!raw) return null;
+
+  let host = '';
+  let port = Number(defaultPort) || 21116;
+  try {
+    if (/^wss?:\/\//i.test(raw) || /^https?:\/\//i.test(raw)) {
+      const u = new URL(raw);
+      host = remoteSafeString(u.hostname || '');
+      port = Number(u.port) || port;
+    } else {
+      // Support plain "host:port" and "[::1]:21116".
+      const prefixed = raw.startsWith('[') || raw.includes(':') ? `tcp://${raw}` : `tcp://${raw}`;
+      const u = new URL(prefixed);
+      host = remoteSafeString(u.hostname || '');
+      port = Number(u.port) || port;
+    }
+  } catch (_) {
+    return null;
+  }
+
+  if (!host || !Number.isFinite(port) || port <= 0 || port > 65535) {
+    return null;
+  }
+  return { host, port, normalized: `${host}:${port}` };
+}
+
+function probeRustDeskServerTcp(target, timeoutMs = 550) {
+  const parsed = parseRustDeskServerTarget(target);
+  if (!parsed) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      try { socket.destroy(); } catch (_) {}
+      resolve(!!ok);
+    };
+    socket.setTimeout(Math.max(120, Number(timeoutMs) || 550));
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+    try {
+      socket.connect(parsed.port, parsed.host);
+    } catch (_) {
+      finish(false);
+    }
+  });
+}
+
+function splitRustDeskRendezvousCandidates(raw) {
+  const text = remoteSafeString(raw);
+  if (!text) return [];
+  return text
+    .split(/[,\s]+/g)
+    .map((item) => remoteSafeString(item))
+    .filter(Boolean);
+}
+
+function getRustDeskLocalRendezvousCandidates(settings = {}) {
+  const fromSettings = splitRustDeskRendezvousCandidates(settings.rustdeskPreferredRendezvous || '');
+  const fallback = splitRustDeskRendezvousCandidates(RUSTDESK_DEFAULT_LOCAL_RENDEZVOUS);
+  const merged = fromSettings.length > 0 ? [...fromSettings, ...fallback] : fallback;
+  const picked = [];
+  const seen = new Set();
+  for (const item of merged) {
+    const parsed = parseRustDeskServerTarget(item);
+    if (!parsed || !parsed.normalized) continue;
+    if (seen.has(parsed.normalized)) continue;
+    seen.add(parsed.normalized);
+    picked.push(parsed.normalized);
+  }
+  return picked;
+}
+
+function buildRustDeskWebProxyUrl(pathPart = '', search = '') {
+  const relativePath = remoteSafeString(pathPart).replace(/^\/+/, '');
+  const target = new URL(relativePath, RUSTDESK_WEB_PROXY_BASE_URL);
+  if (typeof search === 'string') {
+    target.search = search;
+  }
+  return target;
+}
+
+function rewriteRustDeskWebRedirectLocation(rawLocation) {
+  const location = remoteSafeString(rawLocation);
+  if (!location) return '';
+  try {
+    const parsed = new URL(location, RUSTDESK_WEB_PROXY_BASE_URL);
+    if (parsed.origin !== 'https://rustdesk.com') return '';
+    if (!parsed.pathname.startsWith('/web')) return '';
+    const suffix = parsed.pathname.slice('/web'.length) || '/';
+    return `/rustdesk-web${suffix}${parsed.search}${parsed.hash}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function rewriteRustDeskWebHtml(rawHtml, options = {}) {
+  const html = String(rawHtml || '');
+  if (!html) return html;
+  const localRendezvous = remoteSafeString(options.localRendezvous || '');
+  const initialRendezvous = remoteSafeString(options.initialRendezvous || '') || RUSTDESK_PUBLIC_RENDEZVOUS;
+  const injectedPublicRendezvous = JSON.stringify(RUSTDESK_PUBLIC_RENDEZVOUS);
+  const injectedLocalRendezvous = JSON.stringify(localRendezvous);
+  const injectedInitialRendezvous = JSON.stringify(initialRendezvous);
+  const fixed = html
+    .replace(/<base\s+href=(['"])\/web\/\1\s*\/?>/i, '<base href="/rustdesk-web/" />')
+    .replace(/(["'])\/web\//g, '$1/rustdesk-web/');
+  const bootstrapScript = [
+    '<script>',
+    '(() => {',
+    '  const normalize = (v) => String(v == null ? "" : v).trim();',
+    '  const isVisible = (el) => !!(el && el.offsetParent !== null && !el.disabled);',
+    '  const isClickable = (el) => !!(el && typeof el.click === "function" && isVisible(el));',
+    '  const textOf = (el) => normalize((el && (el.textContent || "")) + " " + (el && el.getAttribute ? (el.getAttribute("aria-label") || "") : "") + " " + (el && el.getAttribute ? (el.getAttribute("title") || "") : "")).toLowerCase();',
+    '  const setInputValue = (input, value) => {',
+    '    if (!input) return;',
+    '    const text = normalize(value);',
+    '    if (normalize(input.value) === text) return;',
+    '    input.focus();',
+    '    input.value = text;',
+    '    input.dispatchEvent(new Event("input", { bubbles: true }));',
+    '    input.dispatchEvent(new Event("change", { bubbles: true }));',
+    '  };',
+    '  const pressEnter = (input) => {',
+    '    if (!input) return;',
+    '    const payload = { key: "Enter", code: "Enter", which: 13, keyCode: 13, bubbles: true, cancelable: true };',
+    '    try { input.dispatchEvent(new KeyboardEvent("keydown", payload)); } catch (_) {}',
+    '    try { input.dispatchEvent(new KeyboardEvent("keypress", payload)); } catch (_) {}',
+    '    try { input.dispatchEvent(new KeyboardEvent("keyup", payload)); } catch (_) {}',
+    '    const form = input.form || input.closest("form");',
+    '    if (form && typeof form.requestSubmit === "function") {',
+    '      try { form.requestSubmit(); } catch (_) {}',
+    '    }',
+    '  };',
+    '  const clickIfPossible = (el) => {',
+    '    if (!isClickable(el)) return false;',
+    '    try { el.click(); return true; } catch (_) { return false; }',
+    '  };',
+    '  const classOf = (el) => normalize(el && (el.className || "")).toLowerCase();',
+    '  const digitsOnly = (v) => normalize(v).replace(/\\D+/g, "");',
+    '  const hasSize = (el) => {',
+    '    if (!el || typeof el.getBoundingClientRect !== "function") return false;',
+    '    const r = el.getBoundingClientRect();',
+    '    return !!(r && Number.isFinite(r.width) && Number.isFinite(r.height) && r.width >= 6 && r.height >= 6);',
+    '  };',
+    '  const isLikelyClearAction = (el) => {',
+    '    const text = textOf(el);',
+    '    const cls = classOf(el);',
+    '    return /(clear|close|cancel|删除|移除|取消|^x$)/.test(text) || /(clear|close|cancel|remove|delete|cross|times|minus-circle|close-circle)/.test(cls);',
+    '  };',
+    '  const dispatchMouseClick = (el, point = null) => {',
+    '    if (!el) return false;',
+    '    try {',
+    '      const r = el.getBoundingClientRect ? el.getBoundingClientRect() : null;',
+    '      const x = point && Number.isFinite(point.x) ? point.x : (r ? (r.left + r.width / 2) : 0);',
+    '      const y = point && Number.isFinite(point.y) ? point.y : (r ? (r.top + r.height / 2) : 0);',
+    '      const payload = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };',
+    '      try { el.dispatchEvent(new MouseEvent("pointerdown", payload)); } catch (_) {}',
+    '      try { el.dispatchEvent(new MouseEvent("mousedown", payload)); } catch (_) {}',
+    '      try { el.dispatchEvent(new MouseEvent("mouseup", payload)); } catch (_) {}',
+    '      try { el.dispatchEvent(new MouseEvent("click", payload)); } catch (_) {}',
+    '      if (clickIfPossible(el)) return true;',
+    '      return true;',
+    '    } catch (_) {',
+    '      return clickIfPossible(el);',
+    '    }',
+    '  };',
+    '  const keyRendezvous = "wc-custom-rendezvous-server";',
+    `  const publicRendezvous = ${injectedPublicRendezvous};`,
+    `  const localRendezvous = ${injectedLocalRendezvous};`,
+    `  let rendezvousServer = ${injectedInitialRendezvous};`,
+    '  const normalizeServer = (v) => normalize(v).replace(/^wss?:\\/\\//i, "").replace(/^https?:\\/\\//i, "").replace(/\\/+$/g, "");',
+    '  const setRendezvousServer = (value) => {',
+    '    const next = normalizeServer(value) || publicRendezvous;',
+    '    rendezvousServer = next;',
+    '    try { localStorage.setItem(keyRendezvous, next); } catch (_) {}',
+    '  };',
+    '  const shouldFallbackRendezvous = () => {',
+    '    if (!rendezvousServer || rendezvousServer === publicRendezvous) return false;',
+    '    const text = normalize((document.body && document.body.innerText) || "").toLowerCase();',
+    '    return /failed to connect to rendezvous server|rendezvous server|连接.*rendezvous/.test(text);',
+    '  };',
+    '  const closeErrorDialog = () => {',
+    '    const nodes = Array.from(document.querySelectorAll("button,[role=button]")).filter(isVisible);',
+    '    for (const node of nodes) {',
+    '      const text = textOf(node);',
+    '      if (/^ok$|确定|确认|知道|close/.test(text)) {',
+    '        if (clickIfPossible(node)) break;',
+    '      }',
+    '    }',
+    '  };',
+    '  const hasWrongPasswordDialog = () => {',
+    '    const text = normalize((document.body && document.body.innerText) || "").toLowerCase();',
+    '    return /wrong password|password incorrect|密码错误|密码不对/.test(text);',
+    '  };',
+    '  const hasOfflineDialog = () => {',
+    '    const text = normalize((document.body && document.body.innerText) || "").toLowerCase();',
+    '    return /remote desktop is offline|desktop is offline|peer is offline|device is offline|目标设备离线|设备离线/.test(text);',
+    '  };',
+    '  const clickRetryButton = () => {',
+    '    const nodes = Array.from(document.querySelectorAll("button,[role=button]")).filter(isVisible);',
+    '    for (const node of nodes) {',
+    '      const text = textOf(node);',
+    '      if (/retry|重试|再试一次|重新尝试/.test(text)) {',
+    '        if (clickIfPossible(node)) return true;',
+    '      }',
+    '    }',
+    '    return false;',
+    '  };',
+    '  const disableRustDeskServiceWorkerCache = () => {',
+    '    try {',
+    '      if ("serviceWorker" in navigator && navigator.serviceWorker && typeof navigator.serviceWorker.getRegistrations === "function") {',
+    '        navigator.serviceWorker.getRegistrations().then((regs) => {',
+    '          for (const reg of regs || []) {',
+    '            try {',
+    '              const scope = normalize(reg && reg.scope);',
+    '              if (!scope || scope.includes("/rustdesk-web/") || scope.includes(window.location.origin)) {',
+    '                reg.unregister();',
+    '              }',
+    '            } catch (_) {}',
+    '          }',
+    '        }).catch(() => {});',
+    '      }',
+    '    } catch (_) {}',
+    '    try {',
+    '      if ("caches" in window && typeof caches.keys === "function") {',
+    '        caches.keys().then((keys) => {',
+    '          for (const key of keys || []) {',
+    '            const low = normalize(key).toLowerCase();',
+    '            if (/rustdesk|flutter|workbox|offline/.test(low)) {',
+    '              caches.delete(key).catch(() => {});',
+    '            }',
+    '          }',
+    '        }).catch(() => {});',
+    '      }',
+    '    } catch (_) {}',
+    '  };',
+    '  try {',
+    '    localStorage.removeItem("wc-api-server");',
+    '    localStorage.removeItem("wc-key");',
+    '  } catch (_) {}',
+    '  disableRustDeskServiceWorkerCache();',
+    '  setRendezvousServer(rendezvousServer);',
+    '  let mecoId = "";',
+    '  let mecoPassword = "";',
+    '  let mecoPasswordToken = "";',
+    '  let mecoAutoConnect = false;',
+    '  try {',
+    '    const u = new URL(window.location.href);',
+    '    mecoId = normalize(u.searchParams.get("meco_id")).replace(/\\s+/g, "");',
+    '    mecoPassword = normalize(u.searchParams.get("meco_password"));',
+    '    mecoPasswordToken = normalize(u.searchParams.get("meco_password_token"));',
+    '    const auto = normalize(u.searchParams.get("meco_autoconnect")).toLowerCase();',
+    '    mecoAutoConnect = auto === "1" || auto === "true" || auto === "yes";',
+    '    const mecoRendezvous = normalizeServer(u.searchParams.get("meco_rendezvous"));',
+    '    if (mecoRendezvous) setRendezvousServer(mecoRendezvous);',
+    '    if (mecoId) {',
+      '      localStorage.setItem("wc-id", mecoId);',
+      '      localStorage.setItem("wc-last_remote_id", mecoId);',
+    '    }',
+    '    if (u.searchParams.has("meco_id") || u.searchParams.has("meco_password") || u.searchParams.has("meco_password_token") || u.searchParams.has("meco_autoconnect") || u.searchParams.has("meco_rendezvous") || u.searchParams.has("meco_nonce")) {',
+    '      u.searchParams.delete("meco_id");',
+    '      u.searchParams.delete("meco_password");',
+    '      u.searchParams.delete("meco_password_token");',
+    '      u.searchParams.delete("meco_autoconnect");',
+    '      u.searchParams.delete("meco_rendezvous");',
+    '      u.searchParams.delete("meco_nonce");',
+    '      const nextUrl = u.pathname + (u.search ? u.search : "") + (u.hash ? u.hash : "");',
+    '      window.history.replaceState({}, "", nextUrl);',
+    '    }',
+    '  } catch (_) {}',
+    '  const hasRustDeskBridge = () => typeof window.setByName === "function";',
+    '  const callSetByName = (name, payload = "") => {',
+    '    try {',
+    '      if (typeof window.setByName !== "function") return false;',
+    '      window.setByName(name, payload == null ? "" : String(payload));',
+    '      return true;',
+    '    } catch (_) {',
+    '      return false;',
+    '    }',
+    '  };',
+    '  const callGetByName = (name, payload = "") => {',
+    '    try {',
+    '      if (typeof window.getByName !== "function") return "";',
+    '      return normalize(window.getByName(name, payload == null ? "" : String(payload)));',
+    '    } catch (_) {',
+    '      return "";',
+    '    }',
+    '  };',
+    '  const getConnStatusNum = () => {',
+    '    try {',
+    '      const raw = callGetByName("get_conn_status", "");',
+    '      if (!raw) return 0;',
+    '      const parsed = JSON.parse(raw);',
+    '      const n = Number(parsed && parsed.status_num);',
+    '      return Number.isFinite(n) ? n : 0;',
+    '    } catch (_) {',
+    '      return 0;',
+    '    }',
+    '  };',
+    '  const seedBridgeOptions = () => {',
+    '    if (!mecoId || !hasRustDeskBridge()) return;',
+    '    callSetByName("option", JSON.stringify({ name: "custom-rendezvous-server", value: rendezvousServer }));',
+    '    callSetByName("option:local", JSON.stringify({ name: "last_remote_id", value: mecoId }));',
+    '    const passwordForPeer = mecoPasswordToken || mecoPassword;',
+    '    if (passwordForPeer) {',
+    '      callSetByName("option:peer", JSON.stringify({ id: mecoId, name: "password", value: passwordForPeer }));',
+    '      callSetByName("option:peer", JSON.stringify({ id: mecoId, name: "remember", value: "Y" }));',
+    '    }',
+    '  };',
+    '  let bridgeConnectAttempts = 0;',
+    '  let bridgeLoginAttempts = 0;',
+    '  let localPasswordRefreshPending = false;',
+    '  let localPasswordRefreshAt = 0;',
+    '  const refreshPasswordFromLocalInfo = async () => {',
+    '    if (localPasswordRefreshPending) return;',
+    '    if (!mecoId) return;',
+    '    localPasswordRefreshPending = true;',
+    '    try {',
+    '      const url = `/api/remote/rustdesk/local-info?launch=1&preferLogs=1&_ts=${Date.now()}`;',
+    '      const res = await fetch(url, { cache: "no-store" });',
+    '      if (!res || !res.ok) return;',
+    '      const body = await res.json();',
+    '      const info = body && body.rustdesk ? body.rustdesk : null;',
+    '      if (!info) return;',
+    '      const id = normalize(info.id).replace(/\\s+/g, "");',
+    '      if (id && id !== mecoId) return;',
+    '      const nextToken = normalize(info.passwordToken);',
+    '      if (nextToken) mecoPasswordToken = nextToken;',
+    '      const nextPassword = normalize(info.password);',
+    '      if (!nextPassword || nextPassword === mecoPassword) return;',
+    '      mecoPassword = nextPassword;',
+    '      bridgeConnectAttempts = 0;',
+    '      bridgeLoginAttempts = 0;',
+    '      connectAttempts = 0;',
+    '      loginAttempts = 0;',
+    '    } catch (_) {}',
+    '    localPasswordRefreshPending = false;',
+    '  };',
+    '  const runBridgeAutoConnect = () => {',
+    '    if (!mecoAutoConnect || !mecoId) return false;',
+    '    if (!hasRustDeskBridge()) return false;',
+    '    seedBridgeOptions();',
+    '    const statusNum = getConnStatusNum();',
+    '    if (statusNum <= 0 && bridgeConnectAttempts < 90) {',
+    '      const sessionPayload = JSON.stringify({ id: mecoId, remember: true });',
+    '      callSetByName("session_add_sync", sessionPayload);',
+    '      callSetByName("session_start", "");',
+    '      callSetByName("connect", "");',
+    '      bridgeConnectAttempts += 1;',
+    '    }',
+    '    if (!mecoPasswordToken && mecoPassword && bridgeLoginAttempts < 140) {',
+    '      callSetByName("login", JSON.stringify({ os_username: "", os_password: "", password: mecoPassword, remember: true }));',
+    '      bridgeLoginAttempts += 1;',
+    '    }',
+    '    return true;',
+    '  };',
+    '  const findIdInput = () => {',
+    '    const inputs = Array.from(document.querySelectorAll("input")).filter(isVisible);',
+    '    const byHint = inputs.find((el) => {',
+    '      const hint = normalize((el.placeholder || "") + " " + (el.name || "") + " " + (el.getAttribute("aria-label") || "")).toLowerCase();',
+    '      return /remote|id|设备|被控/.test(hint) && !/password|pass|密码/.test(hint);',
+    '    });',
+    '    if (byHint) return byHint;',
+    '    return inputs.find((el) => /text|search|tel|number/.test(String(el.type || "text").toLowerCase())) || null;',
+    '  };',
+    '  const scoreConnectCandidate = (el, idInput) => {',
+    '    const text = textOf(el);',
+    '    if (!text) return 0;',
+    '    if (isLikelyClearAction(el)) return -10;',
+    '    let score = 0;',
+    '    if (/connect|连接|进入|go|continue|开始|arrow|submit|control/.test(text)) score += 6;',
+    '    if (/desktop|remote|id/.test(text)) score += 2;',
+    '    if (/arrow_forward|arrow-right|right/.test(text)) score += 3;',
+    '    if (idInput && typeof idInput.contains === "function") {',
+    '      const row = idInput.closest("div");',
+    '      if (row && row.contains(el)) score += 4;',
+    '    }',
+    '    return score;',
+    '  };',
+    '  const findConnectButton = () => {',
+    '    const idInput = findIdInput();',
+    '    const nodes = Array.from(document.querySelectorAll("button,[role=button],[tabindex],.ant-btn,.material-icons-round,.material-icons-outlined")).filter((el) => isVisible(el) && !el.closest("input"));',
+    '    let best = null;',
+    '    let bestScore = 0;',
+    '    for (const node of nodes) {',
+    '      const score = scoreConnectCandidate(node, idInput);',
+    '      if (score > bestScore) {',
+    '        best = node;',
+    '        bestScore = score;',
+    '      }',
+    '    }',
+    '    return bestScore > 0 ? best : null;',
+    '  };',
+    '  const clickConnectNearIdInput = (idInput) => {',
+    '    if (!idInput) return false;',
+    '    const scopes = [];',
+    '    const row = idInput.closest("div");',
+    '    if (row) scopes.push(row);',
+    '    if (row && row.parentElement) scopes.push(row.parentElement);',
+    '    let candidates = [];',
+    '    for (const scope of scopes) {',
+    '      const items = Array.from(scope.querySelectorAll("button,[role=button],[tabindex],.ant-btn,.anticon,[class*=icon],[class*=suffix],svg,span,div")).filter((el) => !el.closest("input") && hasSize(el));',
+    '      candidates = candidates.concat(items);',
+    '    }',
+    '    const uniq = [];',
+    '    const seen = new Set();',
+    '    for (const item of candidates) {',
+    '      if (!item || seen.has(item)) continue;',
+    '      seen.add(item);',
+    '      uniq.push(item);',
+    '    }',
+    '    const safe = uniq.filter((el) => {',
+    '      if (!hasSize(el)) return false;',
+    '      if (isLikelyClearAction(el)) return false;',
+    '      const cls = classOf(el);',
+    '      if (/(input|textarea)/.test(cls)) return false;',
+    '      return true;',
+    '    });',
+    '    if (!safe.length) return false;',
+    '    safe.sort((a, b) => {',
+    '      const ra = a.getBoundingClientRect ? a.getBoundingClientRect() : { right: 0, width: 0 };',
+    '      const rb = b.getBoundingClientRect ? b.getBoundingClientRect() : { right: 0, width: 0 };',
+    '      if (rb.right !== ra.right) return rb.right - ra.right;',
+    '      return (rb.width || 0) - (ra.width || 0);',
+    '    });',
+    '    return dispatchMouseClick(safe[0]);',
+    '  };',
+    '  const clickConnectByHitTest = (idInput) => {',
+    '    if (!idInput || typeof document.elementFromPoint !== "function" || typeof idInput.getBoundingClientRect !== "function") return false;',
+    '    const r = idInput.getBoundingClientRect();',
+    '    if (!r || !Number.isFinite(r.right) || !Number.isFinite(r.top)) return false;',
+    '    const cy = r.top + (r.height / 2);',
+    '    const probes = [',
+    '      { x: r.right + 28, y: cy },',
+    '      { x: r.right + 12, y: cy },',
+    '      { x: r.right - 8, y: cy },',
+    '      { x: r.right - 28, y: cy },',
+    '      { x: r.right + 42, y: cy }',
+    '    ];',
+    '    for (const probe of probes) {',
+    '      const target = document.elementFromPoint(probe.x, probe.y);',
+    '      if (!target) continue;',
+    '      const pick = target.closest',
+    '        ? (target.closest("button,[role=button],[tabindex],.ant-btn,.anticon,[class*=icon],[class*=suffix],svg,span,div") || target)',
+    '        : target;',
+    '      if (!pick || pick === idInput || (idInput.contains && idInput.contains(pick))) continue;',
+    '      if (!hasSize(pick)) continue;',
+    '      if (isLikelyClearAction(pick)) continue;',
+    '      if (dispatchMouseClick(pick, probe)) return true;',
+    '    }',
+    '    return false;',
+    '  };',
+    '  const clickRecentSessionById = (idText) => {',
+    '    const idDigits = digitsOnly(idText);',
+    '    if (!idDigits) return false;',
+    '    const nodes = Array.from(document.querySelectorAll("button,[role=button],a,li,div")).filter((el) => hasSize(el));',
+    '    for (const node of nodes) {',
+    '      if (isLikelyClearAction(node)) continue;',
+    '      const rawText = normalize(node.textContent || "");',
+    '      if (!rawText) continue;',
+    '      const ds = digitsOnly(rawText);',
+    '      if (!ds || (ds !== idDigits && !ds.includes(idDigits))) continue;',
+    '      const r = node.getBoundingClientRect ? node.getBoundingClientRect() : null;',
+    '      if (!r || r.width < 90 || r.height < 24) continue;',
+    '      if (dispatchMouseClick(node)) return true;',
+    '    }',
+    '    return false;',
+    '  };',
+    '  const clickRecentSessionFallback = () => {',
+    '    const nodes = Array.from(document.querySelectorAll("button,[role=button],a,li,div")).filter((el) => hasSize(el));',
+    '    const candidates = nodes.filter((node) => {',
+    '      if (isLikelyClearAction(node)) return false;',
+    '      const text = normalize(node.textContent || "").toLowerCase();',
+    '      if (!text) return false;',
+    '      if (!/mac|windows|linux|android|ios|desktop|remote|\\.local|\\d{3,}/.test(text)) return false;',
+    '      const r = node.getBoundingClientRect ? node.getBoundingClientRect() : null;',
+    '      if (!r || r.width < 90 || r.height < 24) return false;',
+    '      return true;',
+    '    });',
+    '    if (!candidates.length) return false;',
+    '    candidates.sort((a, b) => {',
+    '      const ra = a.getBoundingClientRect ? a.getBoundingClientRect() : { top: 0, left: 0 };',
+    '      const rb = b.getBoundingClientRect ? b.getBoundingClientRect() : { top: 0, left: 0 };',
+    '      if (ra.top !== rb.top) return ra.top - rb.top;',
+    '      return ra.left - rb.left;',
+    '    });',
+    '    return dispatchMouseClick(candidates[0]);',
+    '  };',
+    '  const clickConnectByViewportHotspots = () => {',
+    '    if (typeof document.elementFromPoint !== "function") return false;',
+    '    const w = Math.max(320, window.innerWidth || 0);',
+    '    const h = Math.max(240, window.innerHeight || 0);',
+    '    const points = [',
+    '      { x: Math.round(w * 0.78), y: Math.round(h * 0.30) },',
+    '      { x: Math.round(w * 0.74), y: Math.round(h * 0.30) },',
+    '      { x: Math.round(w * 0.80), y: Math.round(h * 0.33) },',
+    '      { x: Math.round(w * 0.16), y: Math.round(h * 0.56) }',
+    '    ];',
+    '    for (const p of points) {',
+    '      const target = document.elementFromPoint(p.x, p.y);',
+    '      if (!target) continue;',
+    '      const pick = target.closest',
+    '        ? (target.closest("button,[role=button],[tabindex],.ant-btn,.anticon,[class*=icon],[class*=suffix],svg,span,div,canvas") || target)',
+    '        : target;',
+    '      if (!pick || !hasSize(pick)) continue;',
+    '      if (isLikelyClearAction(pick)) continue;',
+    '      if (dispatchMouseClick(pick, p)) return true;',
+    '    }',
+    '    return false;',
+    '  };',
+    '  const findPasswordInput = () => {',
+    '    const inputs = Array.from(document.querySelectorAll("input")).filter(isVisible);',
+    '    const byType = inputs.find((el) => String(el.type || "").toLowerCase() === "password");',
+    '    if (byType) return byType;',
+    '    return inputs.find((el) => {',
+    '      const hint = normalize((el.placeholder || "") + " " + (el.name || "") + " " + (el.getAttribute("aria-label") || "")).toLowerCase();',
+    '      return /password|pass|密码|one-time|临时/.test(hint);',
+    '    }) || null;',
+    '  };',
+    '  const scoreLoginCandidate = (el, passwordInput) => {',
+    '    const text = textOf(el);',
+    '    if (!text) return 0;',
+    '    if (/close|clear|cancel|取消|删除|移除/.test(text)) return -10;',
+    '    let score = 0;',
+    '    if (/login|连接|connect|确定|确认|ok|继续|submit/.test(text)) score += 7;',
+    '    if (/arrow_forward|arrow-right|right/.test(text)) score += 2;',
+    '    if (passwordInput) {',
+    '      const row = passwordInput.closest("div");',
+    '      if (row && row.contains(el)) score += 3;',
+    '    }',
+    '    return score;',
+    '  };',
+    '  const findLoginButton = () => {',
+    '    const passwordInput = findPasswordInput();',
+    '    const nodes = Array.from(document.querySelectorAll("button,[role=button],[tabindex],.ant-btn,.material-icons-round,.material-icons-outlined")).filter(isVisible);',
+    '    let best = null;',
+    '    let bestScore = 0;',
+    '    for (const node of nodes) {',
+    '      const score = scoreLoginCandidate(node, passwordInput);',
+    '      if (score > bestScore) {',
+    '        best = node;',
+    '        bestScore = score;',
+    '      }',
+    '    }',
+    '    return bestScore > 0 ? best : null;',
+    '  };',
+    '  let connectAttempts = 0;',
+    '  let loginAttempts = 0;',
+    '  const tick = () => {',
+    '    try {',
+    '      if (shouldFallbackRendezvous()) {',
+    '        setRendezvousServer(publicRendezvous);',
+    '        connectAttempts = 0;',
+    '        loginAttempts = 0;',
+    '        bridgeConnectAttempts = 0;',
+    '        bridgeLoginAttempts = 0;',
+    '        closeErrorDialog();',
+    '      }',
+    '      if (hasOfflineDialog()) {',
+    '        if (rendezvousServer !== publicRendezvous) setRendezvousServer(publicRendezvous);',
+    '        connectAttempts = 0;',
+    '        loginAttempts = 0;',
+    '        bridgeConnectAttempts = 0;',
+    '        bridgeLoginAttempts = 0;',
+    '        closeErrorDialog();',
+    '        if (mecoId && hasRustDeskBridge()) {',
+    '          const payload = JSON.stringify({ id: mecoId, remember: true });',
+    '          callSetByName("session_add_sync", payload);',
+    '          callSetByName("session_start", "");',
+    '          callSetByName("connect", "");',
+    '        }',
+    '      }',
+    '      if (hasWrongPasswordDialog()) {',
+    '        clickRetryButton();',
+    '        const now = Date.now();',
+    '        if (!localPasswordRefreshPending && (now - localPasswordRefreshAt >= 1600)) {',
+    '          localPasswordRefreshAt = now;',
+    '          refreshPasswordFromLocalInfo();',
+    '        }',
+    '      }',
+    '      runBridgeAutoConnect();',
+    '      if (mecoId) {',
+    '        localStorage.setItem("wc-id", mecoId);',
+    '        localStorage.setItem("wc-last_remote_id", mecoId);',
+    '      }',
+    '      const idInput = mecoId ? findIdInput() : null;',
+    '      if (idInput && mecoId) setInputValue(idInput, mecoId);',
+    '      if (mecoAutoConnect && mecoId && connectAttempts < 260) {',
+    '        const connectBtn = findConnectButton();',
+    '        let triggered = false;',
+    '        if (connectBtn) triggered = clickIfPossible(connectBtn);',
+    '        if (!triggered && idInput) triggered = clickConnectNearIdInput(idInput);',
+    '        if (!triggered && idInput) triggered = clickConnectByHitTest(idInput);',
+    '        if (!triggered) triggered = clickRecentSessionById(mecoId);',
+    '        if (!triggered) triggered = clickRecentSessionFallback();',
+    '        if (!triggered) triggered = clickConnectByViewportHotspots();',
+    '        if (idInput) pressEnter(idInput);',
+    '        connectAttempts += 1;',
+    '      }',
+    '      if (mecoPassword) {',
+    '        const passwordInput = findPasswordInput();',
+    '        if (passwordInput) {',
+    '          setInputValue(passwordInput, mecoPassword);',
+    '          if (loginAttempts < 220) {',
+    '            const loginBtn = findLoginButton();',
+    '            if (loginBtn) clickIfPossible(loginBtn);',
+    '            pressEnter(passwordInput);',
+    '            loginAttempts += 1;',
+    '          }',
+    '        }',
+    '      }',
+    '    } catch (_) {}',
+    '  };',
+    '  tick();',
+    '  const observer = new MutationObserver(() => tick());',
+    '  try {',
+    '    observer.observe(document.documentElement || document.body, { childList: true, subtree: true });',
+    '  } catch (_) {}',
+    '  let tries = 0;',
+    '  const timer = setInterval(() => {',
+    '    tries += 1;',
+    '    tick();',
+    '    if (tries > 200) {',
+    '      clearInterval(timer);',
+    '      try { observer.disconnect(); } catch (_) {}',
+    '    }',
+    '  }, 400);',
+    '  setTimeout(() => {',
+    '    try { observer.disconnect(); } catch (_) {}',
+    '  }, 120000);',
+    '})();',
+    '</script>'
+  ].join('');
+  return fixed.replace('</head>', `${bootstrapScript}\n</head>`);
+}
+
+function isLikelyMeshNodeId(nodeId) {
+  const text = remoteSafeString(nodeId);
+  if (!text) return false;
+  if (!/^node\//i.test(text)) return false;
+  // Accept default-domain ids like `node//<id>` (2 effective segments)
+  // and explicit-domain ids like `node/<domain>/<id>`.
+  return text.split('/').filter(Boolean).length >= 2;
+}
+
+function extractMeshNodeIdFromLaunchUrl(rawUrl) {
+  const urlText = remoteSafeString(rawUrl);
+  if (!urlText) return '';
+  try {
+    const parsed = new URL(urlText);
+    const nodeId = remoteSafeString(parsed.searchParams.get('gotonode'));
+    return isLikelyMeshNodeId(nodeId) ? nodeId : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function appendMeshCentralAuth(url, settings = {}) {
+  const target = remoteSafeString(url);
+  if (!target) return '';
+  const token = remoteSafeString(settings.meshcentralLoginToken || '');
+  const rawKey = remoteSafeString(settings.meshcentralTokenQueryKey || '');
+  const key = !rawKey || rawKey.toLowerCase() === 'loginkey' ? 'login' : rawKey;
+  if (!token || !key) return target;
+  try {
+    const parsed = new URL(target);
+    if (!parsed.searchParams.has(key)) {
+      parsed.searchParams.set(key, token);
+    }
+    return parsed.toString();
+  } catch (_) {
+    return target;
+  }
+}
+
+function buildMeshCentralBaseUrl(settings = {}) {
+  const explicit = normalizeRemoteHttpBase(settings.meshcentralBaseUrl || '', 'https://');
+  if (explicit) return explicit;
+
+  const host = normalizeRemotePublicHost(settings.cloudflarePublicHost || '');
+  if (!host) return '';
+  const prefixSegments = buildRemotePathPrefixSegments(settings, REMOTE_RUSTDESK_PATH_SEGMENT);
+  const pathPart = prefixSegments.filter(Boolean).join('/');
+  return pathPart ? `${host}/${pathPart}` : host;
+}
+
+function appendMeshCentralDomainPath(baseUrl, settings = {}) {
+  const base = remoteSafeString(baseUrl);
+  if (!base) return '';
+  const domainPath = remoteTrimSlashes(settings.meshcentralDomainPath || '');
+  if (!domainPath) return base.replace(/\/+$/g, '');
+
+  try {
+    const parsed = new URL(base);
+    const baseSegments = parsed.pathname.split('/').filter(Boolean);
+    const domainSegments = domainPath.split('/').filter(Boolean);
+    const tail = baseSegments.slice(-domainSegments.length).join('/');
+    if (tail !== domainSegments.join('/')) {
+      parsed.pathname = `/${[...baseSegments, ...domainSegments].join('/')}`;
+    }
+    const pathname = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/g, '');
+    return `${parsed.protocol}//${parsed.host}${pathname}`;
+  } catch (_) {
+    return `${base.replace(/\/+$/g, '')}/${domainPath}`;
+  }
+}
+
+function buildMeshCentralAdminPortalUrl(settings = {}) {
+  const base = buildMeshCentralBaseUrl(settings);
+  if (!base) return '';
+  const root = appendMeshCentralDomainPath(base, settings);
+  return appendMeshCentralAuth(`${root}/`, settings);
+}
+
+function buildMeshCentralDiscoveryUrls(settings = {}) {
+  const base = buildMeshCentralBaseUrl(settings);
+  if (!base) return [];
+  const suffixes = [
+    '/api/v1/devices',
+    '/api/devices',
+    '/api/v1/nodes',
+    '/api/nodes',
+    '/api/default/devices',
+    '/api/default/nodes'
+  ];
+  const out = [];
+  for (const suffix of suffixes) {
+    const joined = `${base}${suffix}`;
+    out.push(appendMeshCentralAuth(joined, settings));
+  }
+  return Array.from(new Set(out));
+}
+
+function buildMeshCentralControlWsUrl(settings = {}) {
+  const base = buildMeshCentralBaseUrl(settings);
+  if (!base) return '';
+  const root = appendMeshCentralDomainPath(base, settings);
+  const token = remoteSafeString(settings.meshcentralLoginToken || '');
+  if (!root) return '';
+  try {
+    const parsed = new URL(root.endsWith('/') ? root : `${root}/`);
+    parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+    parsed.pathname = `${parsed.pathname.replace(/\/+$/g, '')}/control.ashx`;
+    if (token && !parsed.searchParams.has('auth')) {
+      parsed.searchParams.set('auth', token);
+    }
+    return parsed.toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+async function fetchMeshNodeCandidatesViaWebSocket(settings = {}, options = {}) {
+  const wsUrl = buildMeshCentralControlWsUrl(settings);
+  if (!wsUrl) {
+    const err = new Error('mesh_ws_url_missing');
+    err.code = 'mesh_ws_url_missing';
+    throw err;
+  }
+
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 3800;
+
+  return await new Promise((resolve, reject) => {
+    let done = false;
+    let closeReason = '';
+    let closeCode = 0;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try {
+        ws.terminate();
+      } catch (_) {}
+      const err = new Error('mesh_ws_timeout');
+      err.code = 'mesh_ws_timeout';
+      reject(err);
+    }, timeoutMs);
+
+    const finish = (result, err = null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch (_) {}
+      if (err) return reject(err);
+      return resolve(result);
+    };
+
+    let ws;
+    try {
+      ws = new WebSocket(wsUrl, {
+        rejectUnauthorized: false,
+        handshakeTimeout: Math.max(1200, timeoutMs - 300)
+      });
+    } catch (e) {
+      done = true;
+      clearTimeout(timer);
+      const err = new Error(remoteSafeString(e && e.message) || 'mesh_ws_create_failed');
+      err.code = 'mesh_ws_create_failed';
+      reject(err);
+      return;
+    }
+
+    ws.on('open', () => {
+      try {
+        ws.send(JSON.stringify({ action: 'nodes', responseid: 'meco_mesh_discovery' }));
+      } catch (e) {
+        const err = new Error(remoteSafeString(e && e.message) || 'mesh_ws_send_failed');
+        err.code = 'mesh_ws_send_failed';
+        finish(null, err);
+      }
+    });
+
+    ws.on('message', (raw) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(String(raw || ''));
+      } catch (_) {
+        return;
+      }
+      if (!payload || typeof payload !== 'object') return;
+
+      const action = remoteSafeString(payload.action || '').toLowerCase();
+      if (action === 'close') {
+        const cause = remoteSafeString(payload.cause || payload.msg || 'mesh_ws_closed');
+        const err = new Error(cause);
+        err.code = cause || 'mesh_ws_closed';
+        finish(null, err);
+        return;
+      }
+      if (action !== 'nodes') return;
+
+      const candidates = extractMeshNodeCandidates(payload);
+      finish({
+        wsUrl,
+        candidates
+      });
+    });
+
+    ws.on('error', (e) => {
+      const err = new Error(remoteSafeString(e && e.message) || 'mesh_ws_error');
+      err.code = err.message || 'mesh_ws_error';
+      finish(null, err);
+    });
+
+    ws.on('close', (code, reason) => {
+      closeCode = Number(code) || 0;
+      closeReason = remoteSafeString(reason || '');
+      if (!done) {
+        const err = new Error(closeReason || `mesh_ws_closed_${closeCode}`);
+        err.code = closeReason || `mesh_ws_closed_${closeCode}`;
+        finish(null, err);
+      }
+    });
+  });
+}
+
+async function fetchJsonWithTimeout(url, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 3000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch (_) {}
+  }, timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { accept: 'application/json,text/plain,*/*' },
+      signal: controller.signal
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const err = new Error(`HTTP ${response.status}`);
+      err.status = response.status;
+      err.body = text.slice(0, 240);
+      throw err;
+    }
+    const parsed = JSON.parse(text);
+    return parsed;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function extractMeshNodeCandidates(payload) {
+  if (!payload || typeof payload !== 'object') return [];
+  const queue = [payload];
+  const seen = new Set();
+  const map = new Map();
+  let scanned = 0;
+
+  const pickText = (obj, keys) => {
+    for (const key of keys) {
+      const value = remoteSafeString(obj[key]);
+      if (value) return value;
+    }
+    return '';
+  };
+
+  while (queue.length > 0 && scanned < 9000) {
+    const current = queue.shift();
+    scanned += 1;
+    if (!current || typeof current !== 'object') continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        if (item && typeof item === 'object') queue.push(item);
+      }
+      continue;
+    }
+
+    const nodeId = pickText(current, ['nodeid', 'nodeId', '_id', 'id', 'node']);
+    if (isLikelyMeshNodeId(nodeId)) {
+      const name = pickText(current, ['name', 'rname', 'computerName', 'hostname', 'deviceName', 'title']);
+      const host = pickText(current, ['host', 'hostname', 'fqdn', 'ip', 'ipv4', 'lanIp']);
+      const prev = map.get(nodeId);
+      if (!prev || (!prev.name && name) || (!prev.host && host)) {
+        map.set(nodeId, { nodeId, name, host });
+      }
+    }
+
+    for (const value of Object.values(current)) {
+      if (value && typeof value === 'object') queue.push(value);
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+function summarizeMeshNodesPayload(payload) {
+  const out = {
+    hasNodesField: false,
+    nodesType: '',
+    meshGroupCount: 0,
+    sampleMeshKeys: [],
+    sampleNodeKeyCount: 0
+  };
+  if (!payload || typeof payload !== 'object') return out;
+
+  const nodes = payload.nodes;
+  if (nodes === undefined) return out;
+  out.hasNodesField = true;
+
+  if (Array.isArray(nodes)) {
+    out.nodesType = 'array';
+    out.meshGroupCount = nodes.length;
+    return out;
+  }
+  if (!nodes || typeof nodes !== 'object') {
+    out.nodesType = typeof nodes;
+    return out;
+  }
+
+  out.nodesType = 'object';
+  const meshKeys = Object.keys(nodes);
+  out.meshGroupCount = meshKeys.length;
+  out.sampleMeshKeys = meshKeys.slice(0, 3);
+
+  if (meshKeys.length > 0) {
+    const first = nodes[meshKeys[0]];
+    if (Array.isArray(first)) {
+      out.sampleNodeKeyCount = first.length;
+    } else if (first && typeof first === 'object') {
+      out.sampleNodeKeyCount = Object.keys(first).length;
+    }
+  }
+  return out;
+}
+
+function scoreMeshCandidate(candidate, hints = {}) {
+  const deviceName = remoteSafeString(hints.deviceName).toLowerCase();
+  const deviceSlug = remoteToSlug(hints.deviceName || '', '');
+  const ownerSlug = remoteToSlug(hints.owner || '', '');
+  const lanHost = remoteSafeString(hints.lanHost).toLowerCase();
+  const name = remoteSafeString(candidate.name).toLowerCase();
+  const nameSlug = remoteToSlug(name, '');
+  const host = remoteSafeString(candidate.host).toLowerCase();
+  const nodeId = remoteSafeString(candidate.nodeId).toLowerCase();
+
+  let score = 0;
+  let exactName = false;
+  let exactHost = false;
+
+  if (deviceName && name && name === deviceName) {
+    score += 180;
+    exactName = true;
+  }
+  if (deviceSlug && nameSlug && nameSlug === deviceSlug) {
+    score += 170;
+    exactName = true;
+  } else if (deviceSlug && nameSlug && nameSlug.includes(deviceSlug)) {
+    score += 80;
+  }
+
+  if (lanHost && host) {
+    if (host === lanHost) {
+      score += 220;
+      exactHost = true;
+    } else if (host.includes(lanHost) || lanHost.includes(host)) {
+      score += 90;
+    }
+  }
+
+  if (ownerSlug && nodeId && nodeId.includes(`/${ownerSlug}`)) {
+    score += 25;
+  }
+
+  return { score, exactName, exactHost };
+}
+
+function pickBestMeshCandidate(candidates = [], hints = {}) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+  const scored = candidates
+    .map((candidate) => {
+      const score = scoreMeshCandidate(candidate, hints);
+      return { candidate, ...score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const first = scored[0];
+  const second = scored[1];
+  if (!first) return null;
+  if (first.score < 160) return null;
+  if (second && first.score - second.score < 20 && !(first.exactHost || first.exactName)) {
+    return null;
+  }
+  return first.candidate;
+}
+
+function pickMeshCandidateWithFallback(candidates = [], hints = {}) {
+  const strict = pickBestMeshCandidate(candidates, hints);
+  if (strict) return { candidate: strict, mode: 'strict' };
+  if (Array.isArray(candidates) && candidates.length === 1 && isLikelyMeshNodeId(candidates[0].nodeId)) {
+    return { candidate: candidates[0], mode: 'single_candidate_fallback' };
+  }
+  return { candidate: null, mode: '' };
+}
+
+function getMeshDeviceHints(device = {}) {
+  const lanUrl = remoteSafeString(device.lanUrl || '');
+  let lanHost = '';
+  if (lanUrl) {
+    try {
+      lanHost = remoteSafeString(new URL(lanUrl).hostname).toLowerCase();
+    } catch (_) {
+      lanHost = '';
+    }
+  }
+  return {
+    owner: remoteSafeString(device.owner || ''),
+    deviceName: remoteSafeString(device.deviceName || ''),
+    lanHost
+  };
+}
+
+function isLikelyMeshId(meshId) {
+  const text = remoteSafeString(meshId);
+  if (!text) return false;
+  if (!/^mesh\//i.test(text)) return false;
+  // MeshCentral default-domain ids look like "mesh//<base64>", which is valid.
+  return text.split('/').filter(Boolean).length >= 2;
+}
+
+let localMeshHostCache = {
+  at: 0,
+  values: new Set(['localhost', '127.0.0.1', '::1'])
+};
+
+function getLocalMeshHostCandidates() {
+  const now = Date.now();
+  if (localMeshHostCache && (now - localMeshHostCache.at) < 15000) {
+    return localMeshHostCache.values;
+  }
+
+  const out = new Set(['localhost', '127.0.0.1', '::1']);
+  const systemHost = remoteSafeString(os.hostname()).toLowerCase();
+  if (systemHost) {
+    out.add(systemHost);
+    const short = systemHost.split('.')[0];
+    if (short) out.add(short);
+  }
+
+  const networkMap = os.networkInterfaces() || {};
+  for (const rows of Object.values(networkMap)) {
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const addr = remoteSafeString(row.address).toLowerCase();
+      if (addr) out.add(addr);
+    }
+  }
+
+  localMeshHostCache = { at: now, values: out };
+  return out;
+}
+
+function normalizeHostForMeshMatch(host) {
+  let value = remoteSafeString(host).toLowerCase();
+  if (!value) return '';
+  if (value.startsWith('::ffff:')) value = value.slice(7);
+  value = value.replace(/\.$/, '');
+  return value;
+}
+
+function isLikelyLocalMeshHost(host) {
+  const normalized = normalizeHostForMeshMatch(host);
+  if (!normalized) return false;
+  const candidates = getLocalMeshHostCandidates();
+  if (candidates.has(normalized)) return true;
+  const short = normalized.split('.')[0];
+  if (short && candidates.has(short)) return true;
+  return false;
+}
+
+function shouldAttemptLocalMeshProvision(device = {}, hints = {}) {
+  const lanHost = normalizeHostForMeshMatch(hints.lanHost || '');
+  if (!lanHost) return false;
+  return isLikelyLocalMeshHost(lanHost);
+}
+
+function isMeshActionOkResult(value) {
+  const text = remoteSafeString(value).toLowerCase();
+  if (!text) return true;
+  return text === 'ok' || text === 'success';
+}
+
+function pickMeshGroupForProvision(meshes = [], device = {}, options = {}) {
+  if (!Array.isArray(meshes) || meshes.length === 0) return null;
+
+  const expectedType = Number(options && options.expectedType);
+  const normalized = meshes.filter((m) => {
+    if (!m || !isLikelyMeshId(m._id)) return false;
+    if (!Number.isFinite(expectedType)) return true;
+    return Number(m.mtype) === expectedType;
+  });
+  if (normalized.length === 0) return null;
+
+  const owner = remoteSafeString(device.owner || '').toLowerCase();
+  const ownerSlug = remoteToSlug(owner, '');
+  const deviceSlug = remoteToSlug(device.deviceName || '', '');
+
+  const preferredNames = [
+    'eden devices',
+    owner ? `${owner} devices` : '',
+    ownerSlug ? `${ownerSlug} devices` : '',
+    'meco devices'
+  ].filter(Boolean);
+
+  for (const name of preferredNames) {
+    const exact = normalized.find((m) => remoteSafeString(m.name).toLowerCase() === name);
+    if (exact) return exact;
+  }
+
+  if (ownerSlug) {
+    const byOwner = normalized.find((m) => {
+      const meshName = remoteToSlug(remoteSafeString(m.name || ''), '');
+      return meshName.includes(ownerSlug);
+    });
+    if (byOwner) return byOwner;
+  }
+
+  if (deviceSlug) {
+    const byDevice = normalized.find((m) => {
+      const meshName = remoteToSlug(remoteSafeString(m.name || ''), '');
+      return meshName.includes(deviceSlug);
+    });
+    if (byDevice) return byDevice;
+  }
+
+  return normalized[0];
+}
+
+function getMeshProvisionDeviceType() {
+  if (process.platform === 'darwin') return 29;
+  if (process.platform === 'linux') return 6;
+  return 4;
+}
+
+function getMeshProvisionDeviceName(device = {}) {
+  const preferred = remoteSafeString(device.deviceName || '');
+  if (preferred) return preferred;
+  const note = remoteSafeString(device.note || '');
+  if (note) return note.slice(0, 64);
+  return remoteSafeString(os.hostname() || 'meco-device') || 'meco-device';
+}
+
+async function provisionLocalMeshNodeViaWebSocket(device = {}, settings = {}, options = {}) {
+  const wsUrl = buildMeshCentralControlWsUrl(settings);
+  const hints = options && options.hints ? options.hints : getMeshDeviceHints(device);
+  const timeoutMs = Number(options && options.timeoutMs) > 0 ? Number(options.timeoutMs) : 15000;
+
+  const deviceName = getMeshProvisionDeviceName(device);
+  const hostname = remoteSafeString(hints.lanHost || os.hostname() || '');
+  const deviceType = getMeshProvisionDeviceType();
+  const preferredGroupName = 'Eden Local Devices';
+  const expectedMeshType = 3;
+
+  if (!wsUrl) {
+    return {
+      attempted: false,
+      found: false,
+      nodeId: '',
+      source: '',
+      reason: 'mesh_ws_url_missing',
+      debug: {
+        url: '',
+        stage: 'init',
+        hostname,
+        deviceName,
+        type: deviceType,
+        selectedMeshId: ''
+      }
+    };
+  }
+
+  return await new Promise((resolve) => {
+    let done = false;
+    let stage = 'init';
+    let ws = null;
+    let selectedMeshId = '';
+    let addLocalFallbackTimer = null;
+    let nodeProbeAttempts = 0;
+    const maxNodeProbeAttempts = 5;
+    const debug = {
+      url: wsUrl,
+      stage,
+      hostname,
+      deviceName,
+      type: deviceType,
+      selectedMeshId: '',
+      receivedActions: []
+    };
+
+    const appendWsActionTrace = (entry = {}) => {
+      const row = {
+        at: Date.now(),
+        ...entry
+      };
+      if (!Array.isArray(debug.receivedActions)) {
+        debug.receivedActions = [];
+      }
+      debug.receivedActions.push(row);
+      if (debug.receivedActions.length > 24) {
+        debug.receivedActions.splice(0, debug.receivedActions.length - 24);
+      }
+    };
+
+    const finish = (result = {}) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (addLocalFallbackTimer) {
+        clearTimeout(addLocalFallbackTimer);
+        addLocalFallbackTimer = null;
+      }
+      try {
+        if (ws) ws.close();
+      } catch (_) {}
+      resolve({
+        attempted: true,
+        found: false,
+        nodeId: '',
+        source: '',
+        reason: 'mesh_ws_provision_failed',
+        debug,
+        ...result,
+        debug: {
+          ...debug,
+          ...(result && result.debug && typeof result.debug === 'object' ? result.debug : {})
+        }
+      });
+    };
+
+    const timer = setTimeout(() => {
+      finish({
+        reason: `mesh_ws_provision_timeout:${stage || 'unknown'}`
+      });
+    }, timeoutMs);
+
+    const sendNodesProbe = (delayMs = 0) => {
+      setTimeout(() => {
+        if (done) return;
+        stage = 'nodes';
+        debug.stage = stage;
+        nodeProbeAttempts += 1;
+        debug.nodeProbeAttempts = nodeProbeAttempts;
+        try {
+          ws.send(JSON.stringify({
+            action: 'nodes',
+            responseid: 'meco_mesh_provision_nodes'
+          }));
+        } catch (_) {}
+      }, Math.max(0, Number(delayMs) || 0));
+    };
+
+    const sendAddLocalDevice = () => {
+      stage = 'addlocaldevice';
+      debug.stage = stage;
+      if (addLocalFallbackTimer) {
+        clearTimeout(addLocalFallbackTimer);
+        addLocalFallbackTimer = null;
+      }
+      const meshIdFull = remoteSafeString(selectedMeshId);
+      const meshIdShort = meshIdFull.includes('/') ? meshIdFull.split('/').filter(Boolean).slice(-1)[0] : meshIdFull;
+      debug.addLocalMeshIdFull = meshIdFull;
+      debug.addLocalMeshIdShort = meshIdShort;
+      debug.addLocalSentIds = [];
+
+      ws.send(JSON.stringify({
+        action: 'addlocaldevice',
+        meshid: meshIdFull,
+        devicename: deviceName,
+        hostname,
+        type: deviceType,
+        responseid: 'meco_mesh_provision_addlocal'
+      }));
+      debug.addLocalSentIds.push(meshIdFull);
+      if (meshIdShort && meshIdShort !== meshIdFull) {
+        setTimeout(() => {
+          if (done) return;
+          try {
+            ws.send(JSON.stringify({
+              action: 'addlocaldevice',
+              meshid: meshIdShort,
+              devicename: deviceName,
+              hostname,
+              type: deviceType,
+              responseid: 'meco_mesh_provision_addlocal_short'
+            }));
+            debug.addLocalSentIds.push(meshIdShort);
+          } catch (_) {}
+        }, 600);
+      }
+      // Some MeshCentral setups silently accept addlocaldevice without an explicit response.
+      // Probe node list after a short delay to avoid getting stuck in addlocaldevice stage.
+      addLocalFallbackTimer = setTimeout(() => {
+        if (done) return;
+        debug.addLocalFallbackTriggered = true;
+        sendNodesProbe(0);
+      }, 1800);
+    };
+
+    try {
+      ws = new WebSocket(wsUrl, {
+        rejectUnauthorized: false,
+        handshakeTimeout: Math.max(1200, timeoutMs - 800)
+      });
+    } catch (e) {
+      finish({
+        reason: remoteSafeString(e && e.message) || 'mesh_ws_create_failed'
+      });
+      return;
+    }
+
+    ws.on('open', () => {
+      stage = 'meshes';
+      debug.stage = stage;
+      try {
+        ws.send(JSON.stringify({
+          action: 'meshes',
+          responseid: 'meco_mesh_provision_meshes'
+        }));
+      } catch (e) {
+        finish({
+          reason: remoteSafeString(e && e.message) || 'mesh_ws_meshes_send_failed'
+        });
+      }
+    });
+
+    ws.on('message', (raw) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(String(raw || ''));
+      } catch (_) {
+        return;
+      }
+      if (!payload || typeof payload !== 'object') return;
+
+      const action = remoteSafeString(payload.action || '').toLowerCase();
+      appendWsActionTrace({
+        action,
+        stage,
+        result: remoteSafeString(payload.result || ''),
+        responseid: remoteSafeString(payload.responseid || '')
+      });
+
+      if (action === 'close') {
+        finish({
+          reason: remoteSafeString(payload.cause || payload.msg || 'mesh_ws_closed') || 'mesh_ws_closed'
+        });
+        return;
+      }
+
+      if (stage === 'meshes' && action === 'meshes') {
+        const groups = Array.isArray(payload.meshes) ? payload.meshes : [];
+        appendWsActionTrace({
+          action,
+          stage,
+          meshCount: groups.length
+        });
+        const selected = pickMeshGroupForProvision(groups, device, { expectedType: expectedMeshType });
+        if (selected && isLikelyMeshId(selected._id)) {
+          selectedMeshId = remoteSafeString(selected._id);
+          debug.selectedMeshId = selectedMeshId;
+          debug.selectedMeshType = Number(selected.mtype) || 0;
+          sendAddLocalDevice();
+          return;
+        }
+
+        stage = 'createmesh';
+        debug.stage = stage;
+        ws.send(JSON.stringify({
+          action: 'createmesh',
+          meshname: preferredGroupName,
+          meshtype: expectedMeshType,
+          responseid: 'meco_mesh_provision_createmesh'
+        }));
+        return;
+      }
+
+      if (stage === 'createmesh' && action === 'createmesh') {
+        const createResult = remoteSafeString(payload.result || '');
+        debug.createMeshResult = createResult;
+        if (!isMeshActionOkResult(createResult)) {
+          finish({
+            reason: `mesh_ws_createmesh_failed:${createResult || 'unknown'}`
+          });
+          return;
+        }
+        selectedMeshId = remoteSafeString(payload.meshid || '');
+        if (isLikelyMeshId(selectedMeshId)) {
+          debug.selectedMeshId = selectedMeshId;
+          sendAddLocalDevice();
+          return;
+        }
+        stage = 'meshes_after_create';
+        debug.stage = stage;
+        ws.send(JSON.stringify({
+          action: 'meshes',
+          responseid: 'meco_mesh_provision_meshes_after_create'
+        }));
+        return;
+      }
+
+      if (stage === 'meshes_after_create' && action === 'meshes') {
+        const groups = Array.isArray(payload.meshes) ? payload.meshes : [];
+        debug.meshesAfterCreateCount = groups.length;
+        appendWsActionTrace({
+          action,
+          stage,
+          meshCount: groups.length
+        });
+        const selected = pickMeshGroupForProvision(groups, device, { expectedType: expectedMeshType });
+        if (selected && isLikelyMeshId(selected._id)) {
+          selectedMeshId = remoteSafeString(selected._id);
+          debug.selectedMeshId = selectedMeshId;
+          debug.selectedMeshType = Number(selected.mtype) || 0;
+          sendAddLocalDevice();
+          return;
+        }
+        finish({
+          reason: `mesh_ws_createmesh_no_meshid:${groups.length}`
+        });
+        return;
+      }
+
+      if (stage === 'addlocaldevice' && action === 'addlocaldevice') {
+        debug.addLocalAck = true;
+        if (addLocalFallbackTimer) {
+          clearTimeout(addLocalFallbackTimer);
+          addLocalFallbackTimer = null;
+        }
+        if (!isMeshActionOkResult(payload.result)) {
+          finish({
+            reason: `mesh_ws_addlocaldevice_failed:${remoteSafeString(payload.result || 'unknown') || 'unknown'}`
+          });
+          return;
+        }
+
+        const directNodeId = remoteSafeString(payload.nodeid || payload.nodeId || payload.id || '');
+        if (isLikelyMeshNodeId(directNodeId)) {
+          finish({
+            found: true,
+            nodeId: directNodeId,
+            source: 'mesh_ws:addlocaldevice'
+          });
+          return;
+        }
+
+        sendNodesProbe(0);
+        return;
+      }
+
+      if (stage === 'nodes' && action === 'nodes') {
+        debug.lastNodesSummary = summarizeMeshNodesPayload(payload);
+        const candidates = extractMeshNodeCandidates(payload);
+        appendWsActionTrace({
+          action,
+          stage,
+          candidates: candidates.length,
+          nodeProbeAttempts
+        });
+        const picked = pickMeshCandidateWithFallback(candidates, hints);
+        if (picked.candidate && isLikelyMeshNodeId(picked.candidate.nodeId)) {
+          finish({
+            found: true,
+            nodeId: picked.candidate.nodeId,
+            source: 'mesh_ws:addlocaldevice'
+          });
+          return;
+        }
+        if (nodeProbeAttempts < maxNodeProbeAttempts) {
+          sendNodesProbe(1600);
+          return;
+        }
+        finish({
+          reason: candidates.length === 0
+            ? `mesh_ws_addlocaldevice_no_nodes:${nodeProbeAttempts}`
+            : `mesh_ws_addlocaldevice_no_match:${nodeProbeAttempts}`
+        });
+      }
+    });
+
+    ws.on('error', (e) => {
+      finish({
+        reason: remoteSafeString(e && (e.code || e.message)) || 'mesh_ws_provision_error'
+      });
+    });
+
+    ws.on('close', (code, reason) => {
+      if (done) return;
+      finish({
+        reason: remoteSafeString(reason || '') || `mesh_ws_provision_closed_${Number(code) || 0}`
+      });
+    });
+  });
+}
+
+async function discoverMeshNodeIdForDevice(device, settings = {}) {
+  const fromLaunch = extractMeshNodeIdFromLaunchUrl(device && device.meshLaunchUrl);
+  if (fromLaunch) {
+    return {
+      found: true,
+      nodeId: fromLaunch,
+      source: 'mesh_launch_url',
+      reason: ''
+    };
+  }
+
+  const baseUrl = buildMeshCentralBaseUrl(settings);
+  if (!baseUrl) {
+    return {
+      found: false,
+      nodeId: '',
+      source: '',
+      reason: 'meshcentral_base_missing'
+    };
+  }
+
+  const hints = getMeshDeviceHints(device);
+  const urls = buildMeshCentralDiscoveryUrls(settings);
+  const debug = { baseUrl, tried: [] };
+  for (const url of urls) {
+    const row = { url, candidates: 0, matched: '' };
+    debug.tried.push(row);
+    try {
+      const payload = await fetchJsonWithTimeout(url, { timeoutMs: 2800 });
+      const candidates = extractMeshNodeCandidates(payload);
+      row.candidates = candidates.length;
+      const picked = pickMeshCandidateWithFallback(candidates, hints);
+      if (picked.candidate && isLikelyMeshNodeId(picked.candidate.nodeId)) {
+        row.matched = picked.candidate.nodeId;
+        row.matchMode = picked.mode;
+        return {
+          found: true,
+          nodeId: picked.candidate.nodeId,
+          source: `mesh_api:${url}`,
+          reason: '',
+          debug
+        };
+      }
+    } catch (e) {
+      row.error = remoteSafeString(e && e.message) || 'request_failed';
+      continue;
+    }
+  }
+
+  const wsRow = { url: '', protocol: 'websocket', candidates: 0, matched: '' };
+  try {
+    const wsPayload = await fetchMeshNodeCandidatesViaWebSocket(settings, { timeoutMs: 4200 });
+    wsRow.url = wsPayload.wsUrl || '';
+    const candidates = Array.isArray(wsPayload.candidates) ? wsPayload.candidates : [];
+    wsRow.candidates = candidates.length;
+    const picked = pickMeshCandidateWithFallback(candidates, hints);
+    if (picked.candidate && isLikelyMeshNodeId(picked.candidate.nodeId)) {
+      wsRow.matched = picked.candidate.nodeId;
+      wsRow.matchMode = picked.mode;
+      debug.tried.push(wsRow);
+      return {
+        found: true,
+        nodeId: picked.candidate.nodeId,
+        source: 'mesh_ws:nodes',
+        reason: '',
+        debug
+      };
+    }
+    wsRow.error = candidates.length === 0 ? 'mesh_ws_no_nodes' : 'mesh_ws_no_match';
+    debug.tried.push(wsRow);
+  } catch (e) {
+    wsRow.error = remoteSafeString(e && (e.code || e.message)) || 'mesh_ws_failed';
+    debug.tried.push(wsRow);
+  }
+
+  const provisionRow = {
+    url: '',
+    protocol: 'websocket',
+    operation: 'addlocaldevice',
+    matched: ''
+  };
+  if (shouldAttemptLocalMeshProvision(device, hints)) {
+    try {
+      const provision = await provisionLocalMeshNodeViaWebSocket(device, settings, { hints, timeoutMs: 15000 });
+      provisionRow.url = remoteSafeString(provision && provision.debug && provision.debug.url);
+      provisionRow.hostname = remoteSafeString(provision && provision.debug && provision.debug.hostname);
+      provisionRow.selectedMeshId = remoteSafeString(provision && provision.debug && provision.debug.selectedMeshId);
+      provisionRow.selectedMeshType = Number(provision && provision.debug && provision.debug.selectedMeshType) || 0;
+      provisionRow.addLocalAck = !!(provision && provision.debug && provision.debug.addLocalAck);
+      provisionRow.addLocalFallbackTriggered = !!(provision && provision.debug && provision.debug.addLocalFallbackTriggered);
+      provisionRow.addLocalMeshIdFull = remoteSafeString(provision && provision.debug && provision.debug.addLocalMeshIdFull);
+      provisionRow.addLocalMeshIdShort = remoteSafeString(provision && provision.debug && provision.debug.addLocalMeshIdShort);
+      provisionRow.addLocalSentIds = Array.isArray(provision && provision.debug && provision.debug.addLocalSentIds)
+        ? provision.debug.addLocalSentIds.slice(0, 6)
+        : [];
+      provisionRow.nodeProbeAttempts = Number(provision && provision.debug && provision.debug.nodeProbeAttempts) || 0;
+      provisionRow.createMeshResult = remoteSafeString(provision && provision.debug && provision.debug.createMeshResult);
+      provisionRow.meshesAfterCreateCount = Number(provision && provision.debug && provision.debug.meshesAfterCreateCount) || 0;
+      provisionRow.lastNodesSummary = (provision && provision.debug && provision.debug.lastNodesSummary) || null;
+      provisionRow.receivedActions = Array.isArray(provision && provision.debug && provision.debug.receivedActions)
+        ? provision.debug.receivedActions.slice(-8)
+        : [];
+      if (provision && provision.found && isLikelyMeshNodeId(provision.nodeId)) {
+        provisionRow.matched = provision.nodeId;
+        provisionRow.result = 'ok';
+        debug.tried.push(provisionRow);
+        return {
+          found: true,
+          nodeId: provision.nodeId,
+          source: provision.source || 'mesh_ws:addlocaldevice',
+          reason: '',
+          debug
+        };
+      }
+      provisionRow.error = remoteSafeString(provision && provision.reason) || 'mesh_ws_addlocaldevice_failed';
+      debug.tried.push(provisionRow);
+    } catch (e) {
+      provisionRow.error = remoteSafeString(e && (e.code || e.message)) || 'mesh_ws_addlocaldevice_error';
+      debug.tried.push(provisionRow);
+    }
+  } else {
+    provisionRow.error = 'mesh_local_provision_skipped_not_local_host';
+    provisionRow.hostname = remoteSafeString(hints.lanHost || '');
+    debug.tried.push(provisionRow);
+  }
+
+  return {
+    found: false,
+    nodeId: '',
+    source: '',
+    reason: 'mesh_node_not_found',
+    debug
+  };
+}
+
+async function autoFillMeshNodeIdForDevice(deviceId, settings = {}, options = {}) {
+  const id = remoteSafeString(deviceId);
+  if (!id) {
+    throw new Error('device id is required');
+  }
+
+  const overwrite = !!(options && options.overwrite);
+  let device = remoteControl.getDeviceById(id, settings, { includeSensitive: true });
+  const currentNodeId = remoteSafeString(device.meshNodeId || '');
+  if (!overwrite && isLikelyMeshNodeId(currentNodeId)) {
+    return {
+      attempted: false,
+      updated: false,
+      nodeId: currentNodeId,
+      source: 'existing',
+      reason: 'already_has_mesh_node',
+      device
+    };
+  }
+
+  const discovery = await discoverMeshNodeIdForDevice(device, settings);
+  if (!discovery.found || !isLikelyMeshNodeId(discovery.nodeId)) {
+    return {
+      attempted: true,
+      updated: false,
+      nodeId: '',
+      source: discovery.source || '',
+      reason: discovery.reason || 'mesh_node_not_found',
+      debug: discovery.debug || null,
+      device
+    };
+  }
+
+  const updatePayload = {
+    meshNodeId: discovery.nodeId
+  };
+  if (!extractMeshNodeIdFromLaunchUrl(device.meshLaunchUrl || '')) {
+    updatePayload.meshLaunchUrl = '';
+  }
+  device = remoteControl.updateDevice(id, updatePayload, settings);
+  return {
+    attempted: true,
+    updated: true,
+    nodeId: discovery.nodeId,
+    source: discovery.source || 'mesh_api',
+    reason: 'updated',
+    debug: discovery.debug || null,
+    device
+  };
+}
+
+function sendRemoteControlError(res, err) {
+  const status = Number(err && err.status) || 500;
+  const code = err && err.code ? String(err.code) : 'remote_control_error';
+  const message = err && err.message ? String(err.message) : 'remote control error';
+  return res.status(status).json({
+    success: false,
+    code,
+    error: message
+  });
+}
+
+app.get('/api/remote/devices', (req, res) => {
+  try {
+    const settings = getRuntimeSettings();
+    const devices = remoteControl.listDevices(settings);
+    return res.json({
+      success: true,
+      devices,
+      count: devices.length
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.post('/api/remote/devices', async (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const settings = getRuntimeSettings();
+    const device = remoteControl.createDevice(payload, settings);
+
+    return res.json({
+      success: true,
+      device
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.put('/api/remote/devices/:id', (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const settings = getRuntimeSettings();
+    const device = remoteControl.updateDevice(req.params.id, payload, settings);
+    return res.json({
+      success: true,
+      device
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.delete('/api/remote/devices/:id', (req, res) => {
+  try {
+    remoteControl.deleteDevice(req.params.id);
+    return res.json({ success: true });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.post('/api/remote/devices/:id/code', (req, res) => {
+  try {
+    const settings = getRuntimeSettings();
+    const result = remoteControl.generateControlCode(req.params.id, settings);
+    return res.json({
+      success: true,
+      code: result.code,
+      payload: result.payload
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.post('/api/remote/import', async (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const code = String(payload.code || '').trim();
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        code: 'control_code_required',
+        error: 'code is required'
+      });
+    }
+    const settings = getRuntimeSettings();
+    const device = remoteControl.importControlCode(code, settings);
+    return res.json({
+      success: true,
+      device
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.post('/api/remote/devices/:id/mesh/auto-discover', async (req, res) => {
+  return res.status(410).json({
+    success: false,
+    code: 'meshcentral_removed',
+    error: 'MeshCentral 自动发现已移除，请改用 RustDesk ID/链接绑定。'
+  });
+});
+
+app.post('/api/remote/devices/:id/resolve', (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const settings = getRuntimeSettings();
+    const launch = remoteControl.resolveLaunch(req.params.id, payload, settings);
+    return res.json({
+      success: true,
+      launch
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.get('/api/remote/config', (req, res) => {
+  try {
+    const settings = getRuntimeSettings();
+    return res.json({
+      success: true,
+      config: {
+        cloudflarePublicHost: settings.cloudflarePublicHost || '',
+        cloudflarePathPrefix: settings.cloudflarePathPrefix || '',
+        rustdeskWebBaseUrl: settings.rustdeskWebBaseUrl || '',
+        rustdeskSchemeAuthority: settings.rustdeskSchemeAuthority || 'connect',
+        rustdeskPreferredRendezvous: settings.rustdeskPreferredRendezvous || getRustDeskLocalRendezvousCandidates(settings).join(',')
+      },
+      storePath: remoteControl.STORE_PATH
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.get('/api/remote/rustdesk/web-client-url', (req, res) => {
+  try {
+    const settings = getRuntimeSettings();
+    const raw = remoteSafeString(settings.rustdeskWebBaseUrl || '');
+    const url = raw ? normalizeRemoteHttpBase(raw, 'https://') : '';
+    return res.json({
+      success: true,
+      url
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.get('/api/remote/mesh/admin-url', (req, res) => {
+  return res.status(410).json({
+    success: false,
+    code: 'meshcentral_removed',
+    error: 'MeshCentral 后台入口已移除，请使用 RustDesk 客户端或 Web Client。'
+  });
+});
+
+app.get('/api/remote/mesh/auto-discover', (req, res) => {
+  return res.status(410).json({
+    success: false,
+    code: 'meshcentral_removed',
+    error: 'MeshCentral 自动发现接口已移除。'
+  });
+});
+
+app.get('/api/remote/rustdesk/health', (req, res) => {
+  try {
+    const settings = getRuntimeSettings();
+    const url = remoteSafeString(settings.rustdeskWebBaseUrl || '');
+    return res.json({
+      success: true,
+      rustdeskWebBaseUrl: url || ''
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.get('/api/remote/rustdesk/local-info', async (req, res) => {
+  try {
+    const launchFlag = remoteSafeString(req.query && req.query.launch).toLowerCase();
+    const launchIfNeeded = launchFlag === '1' || launchFlag === 'true' || launchFlag === 'yes';
+    const preferLogsFlag = remoteSafeString(req.query && req.query.preferLogs).toLowerCase();
+    const preferLogs = preferLogsFlag === '1' || preferLogsFlag === 'true' || preferLogsFlag === 'yes';
+    const rustdesk = await readLocalRustDeskInfo({ launchIfNeeded, preferLogs });
+    return res.json({
+      success: true,
+      rustdesk
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.get('/api/remote/bootstrap', (req, res) => {
+  try {
+    const settings = getRuntimeSettings();
+    const owner = remoteSafeString(req.query && req.query.owner) || getSystemUsernameSafe();
+    const deviceName = remoteSafeString(req.query && req.query.deviceName) || remoteToSlug(os.hostname(), 'device');
+    const local = buildDefaultLanUrl();
+    const previewPublicUrl = buildRemotePublicPreview(owner, deviceName, settings);
+
+    return res.json({
+      success: true,
+      bootstrap: {
+        systemUsername: owner,
+        defaultOwner: owner,
+        defaultDeviceName: deviceName,
+        lanIp: local.lanIp,
+        port: local.port,
+        lanUrl: local.lanUrl,
+        cloudflarePublicHost: settings.cloudflarePublicHost || '',
+        cloudflarePathPrefix: settings.cloudflarePathPrefix || '',
+        cloudflareTunnelToken: settings.cloudflareTunnelToken || '',
+        previewPublicUrl,
+        cloudflareRuntime: snapshotCloudflareTunnelRuntime()
+      }
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.get('/api/remote/cloudflare/status', (req, res) => {
+  return res.json({
+    success: true,
+    runtime: snapshotCloudflareTunnelRuntime()
+  });
+});
+
+app.post('/api/remote/cloudflare/start', async (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const settings = getRuntimeSettings();
+    const owner = remoteSafeString(payload.owner) || getSystemUsernameSafe();
+    const deviceName = remoteSafeString(payload.deviceName);
+    if (!owner || !deviceName) {
+      return res.status(400).json({
+        success: false,
+        code: 'owner_or_device_missing',
+        error: 'owner and deviceName are required'
+      });
+    }
+
+    const local = buildDefaultLanUrl();
+    const previewPublicUrl = buildRemotePublicPreview(owner, deviceName, settings);
+    const localUrl = local.lanUrl || `http://127.0.0.1:${getServerPortForRemote()}`;
+
+    const token = remoteSafeString(settings.cloudflareTunnelToken || '');
+    const hasToken = !!token;
+    const commands = buildCloudflareGuideCommands({
+      hasToken,
+      localUrl,
+      previewPublicUrl,
+      pathPrefix: settings.cloudflarePathPrefix || ''
+    });
+
+    let versionText = '';
+    try {
+      versionText = await execFileText('cloudflared', ['--version']);
+    } catch (checkErr) {
+      return res.status(400).json({
+        success: false,
+        code: 'cloudflared_missing',
+        error: '未检测到 cloudflared，请先安装 Cloudflare Tunnel CLI',
+        commands: [
+          'macOS: brew install cloudflared',
+          'Linux: 参考 Cloudflare 官方安装文档',
+          'Windows: winget install Cloudflare.cloudflared'
+        ],
+        previewPublicUrl
+      });
+    }
+
+    if (!hasToken) {
+      return res.json({
+        success: true,
+        guideOnly: true,
+        message: '已检测到 cloudflared。请先在 API Keys 填写 Cloudflare Tunnel Token，再点击本按钮自动启动隧道。',
+        version: versionText,
+        previewPublicUrl,
+        commands
+      });
+    }
+
+    const current = cloudflareTunnelRuntime.process;
+    if (current && !current.killed) {
+      return res.json({
+        success: true,
+        running: true,
+        message: 'Cloudflare Tunnel 已在运行',
+        previewPublicUrl,
+        runtime: snapshotCloudflareTunnelRuntime(),
+        commands
+      });
+    }
+
+    const { spawn } = require('child_process');
+    const proc = spawn('cloudflared', ['tunnel', '--no-autoupdate', 'run', '--token', token], {
+      cwd: __dirname,
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    cloudflareTunnelRuntime.process = proc;
+    cloudflareTunnelRuntime.pid = Number(proc.pid) || 0;
+    cloudflareTunnelRuntime.status = 'running';
+    cloudflareTunnelRuntime.startedAt = new Date().toISOString();
+    cloudflareTunnelRuntime.lastError = '';
+    cloudflareTunnelRuntime.logs = [];
+    appendCloudflareTunnelLog('cloudflared started');
+    appendCloudflareTunnelLog(`target local url: ${localUrl}`);
+    if (previewPublicUrl) {
+      appendCloudflareTunnelLog(`target public url: ${previewPublicUrl}`);
+    }
+
+    proc.stdout.on('data', (chunk) => {
+      appendCloudflareTunnelLog(String(chunk || '').trim());
+    });
+    proc.stderr.on('data', (chunk) => {
+      const text = String(chunk || '').trim();
+      appendCloudflareTunnelLog(text);
+    });
+    proc.on('close', (code) => {
+      appendCloudflareTunnelLog(`cloudflared exited with code ${code}`);
+      const stopping = cloudflareTunnelRuntime.status === 'stopping';
+      if (!stopping && Number(code) !== 0) {
+        cloudflareTunnelRuntime.lastError = `cloudflared exited with code ${code}`;
+        clearCloudflareTunnelRuntime('failed');
+      } else {
+        clearCloudflareTunnelRuntime('stopped');
+      }
+    });
+    proc.on('error', (err) => {
+      const message = remoteSafeString(err && err.message);
+      cloudflareTunnelRuntime.lastError = message || 'cloudflared process error';
+      appendCloudflareTunnelLog(`cloudflared error: ${cloudflareTunnelRuntime.lastError}`);
+      clearCloudflareTunnelRuntime('failed');
+    });
+
+    return res.json({
+      success: true,
+      running: true,
+      message: 'Cloudflare Tunnel 启动命令已执行',
+      previewPublicUrl,
+      runtime: snapshotCloudflareTunnelRuntime(),
+      commands
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
+});
+
+app.post('/api/remote/cloudflare/stop', (req, res) => {
+  try {
+    const proc = cloudflareTunnelRuntime.process;
+    if (!proc || proc.killed) {
+      clearCloudflareTunnelRuntime('idle');
+      return res.json({
+        success: true,
+        running: false,
+        message: 'Cloudflare Tunnel 未在运行'
+      });
+    }
+    try {
+      cloudflareTunnelRuntime.status = 'stopping';
+      proc.kill('SIGTERM');
+    } catch (_) {}
+    appendCloudflareTunnelLog('cloudflared stop requested');
+    clearCloudflareTunnelRuntime('stopped');
+    return res.json({
+      success: true,
+      running: false,
+      message: 'Cloudflare Tunnel 已停止'
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
   }
 });
 
@@ -13438,6 +16140,161 @@ app.get('/api/roundtable/rpm-profile', (req, res) => {
       }
     }
   });
+});
+
+app.get(/^\/rustdesk-web$/, (req, res) => {
+  return res.redirect(302, '/rustdesk-web/');
+});
+
+app.get(/^\/rustdesk-web\/(.*)$/, async (req, res) => {
+  try {
+    const pathPart = remoteSafeString(req.params && req.params[0]);
+    const rawOriginalUrl = remoteSafeString(req.originalUrl || '');
+    const queryIndex = rawOriginalUrl.indexOf('?');
+    const search = queryIndex >= 0 ? rawOriginalUrl.slice(queryIndex) : '';
+    const target = buildRustDeskWebProxyUrl(pathPart, search);
+
+    const upstream = await fetch(target.toString(), {
+      method: 'GET',
+      redirect: 'manual',
+      headers: {
+        accept: remoteSafeString(req.headers.accept) || '*/*',
+        'accept-language': remoteSafeString(req.headers['accept-language']) || '',
+        'user-agent': remoteSafeString(req.headers['user-agent']) || 'MecoStudio-RustDeskProxy'
+      }
+    });
+
+    if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+      const nextLocation = rewriteRustDeskWebRedirectLocation(upstream.headers.get('location'));
+      if (nextLocation) {
+        return res.redirect(upstream.status, nextLocation);
+      }
+    }
+
+    res.status(upstream.status);
+    const headerAllowList = [
+      'content-type',
+      'cache-control',
+      'etag',
+      'last-modified',
+      'expires',
+      'content-language',
+      'vary'
+    ];
+    for (const headerName of headerAllowList) {
+      const value = upstream.headers.get(headerName);
+      if (value) {
+        res.setHeader(headerName, value);
+      }
+    }
+
+    const contentType = remoteSafeString(upstream.headers.get('content-type')).toLowerCase();
+    if (contentType.includes('text/html')) {
+      const settings = getRuntimeSettings();
+      const localCandidates = getRustDeskLocalRendezvousCandidates(settings)
+        .filter((candidate) => candidate !== RUSTDESK_PUBLIC_RENDEZVOUS);
+      const shouldTryLocal = localCandidates.length > 0;
+      let preferredLocal = shouldTryLocal ? localCandidates[0] : '';
+      let initialRendezvous = RUSTDESK_PUBLIC_RENDEZVOUS;
+      if (shouldTryLocal) {
+        for (const candidate of localCandidates) {
+          const localReachable = await probeRustDeskServerTcp(candidate, 650);
+          if (localReachable) {
+            preferredLocal = candidate;
+            initialRendezvous = candidate;
+            break;
+          }
+        }
+      }
+      const rawHtml = await upstream.text();
+      return res.send(rewriteRustDeskWebHtml(rawHtml, {
+        localRendezvous: shouldTryLocal ? preferredLocal : '',
+        initialRendezvous
+      }));
+    }
+
+    const raw = await upstream.arrayBuffer();
+    return res.send(Buffer.from(raw));
+  } catch (e) {
+    console.warn(`[RemoteControl] rustdesk-web proxy failed: ${e.message || e}`);
+    return res.status(502).send('RustDesk Web 代理不可用');
+  }
+});
+
+app.get('/web', (req, res) => {
+  return res.redirect(302, '/index.html#agenttools');
+});
+
+app.get('/web/:owner/:device', (req, res) => {
+  try {
+    const owner = remoteToSlug(req.params.owner || '', 'user');
+    const device = remoteToSlug(req.params.device || '', 'dev');
+    const pathOnly = normalizeRemoteRoutePathForMatch(`/web/${owner}/${device}`);
+    const settings = getRuntimeSettings();
+    const bound = findBoundRemoteDeviceByPath(pathOnly, settings);
+    const targetRoute = bound && bound.routePath ? bound.routePath : pathOnly;
+    return res.redirect(302, buildRemoteEntryRedirectPath(targetRoute));
+  } catch (e) {
+    console.warn(`[RemoteControl] /web route resolve failed: ${e.message || e}`);
+    return res.redirect(302, '/index.html#agenttools');
+  }
+});
+
+app.get('/rustdesk', (req, res) => {
+  return res.redirect(302, '/index.html#agenttools');
+});
+
+app.get('/rustdesk/:owner/:device', (req, res) => {
+  try {
+    const owner = remoteToSlug(req.params.owner || '', 'user');
+    const device = remoteToSlug(req.params.device || '', 'dev');
+    const rustdeskPath = normalizeRemoteRoutePathForMatch(`/rustdesk/${owner}/${device}`);
+    const settings = getRuntimeSettings();
+    const bound = findBoundRemoteDeviceByPath(rustdeskPath, settings);
+    const targetRoute = bound && bound.routePath
+      ? bound.routePath
+      : normalizeRemoteRoutePathForMatch(`/web/${owner}/${device}`);
+    return res.redirect(302, buildRemoteEntryRedirectPath(targetRoute, { mode: 'rustdesk' }));
+  } catch (e) {
+    console.warn(`[RemoteControl] /rustdesk route resolve failed: ${e.message || e}`);
+    return res.redirect(302, '/index.html#agenttools');
+  }
+});
+
+// Backward compatibility for historical Mesh route.
+app.get('/mesh', (req, res) => {
+  return res.redirect(302, '/rustdesk');
+});
+
+app.get('/mesh/:owner/:device', (req, res) => {
+  const owner = remoteToSlug(req.params.owner || '', 'user');
+  const device = remoteToSlug(req.params.device || '', 'dev');
+  return res.redirect(302, `/rustdesk/${owner}/${device}`);
+});
+
+app.get(/.*/, (req, res, next) => {
+  try {
+    const pathOnly = normalizeRemoteRoutePathForMatch(req.path || req.originalUrl || '');
+    if (shouldSkipRemoteEntryPath(pathOnly)) {
+      return next();
+    }
+
+    const settings = getRuntimeSettings();
+    const device = findBoundRemoteDeviceByPath(pathOnly, settings);
+    if (!device) {
+      return next();
+    }
+
+    const mode = inferRemoteEntryMode(pathOnly, settings);
+    const target = buildRemoteEntryRedirectPath(
+      device.routePath || pathOnly,
+      mode === 'rustdesk' ? { mode: 'rustdesk' } : {}
+    );
+    return res.redirect(302, target);
+  } catch (e) {
+    console.warn(`[RemoteControl] public entry match failed: ${e.message || e}`);
+    return next();
+  }
 });
 
 const PORT = process.env.PORT || 3456;

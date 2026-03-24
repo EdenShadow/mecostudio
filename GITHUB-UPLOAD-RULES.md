@@ -34,6 +34,7 @@
 - `temp_uploads/*`
 - `data/rooms.json`
 - `data/room-covers/*`
+- `~/.meco-studio/remote-devices.json`（本机绑定设备清单，不入仓库）
 - `*.log`、调试临时输出
 - 本机密钥与本地设置（如 `data/app-settings.json`）
 
