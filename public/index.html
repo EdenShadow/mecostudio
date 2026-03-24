@@ -1095,6 +1095,8 @@
         const AT_HISTORY_MAX_PAGES = 20;
         const AT_HISTORY_TOTAL_LIMIT = AT_HISTORY_PAGE_SIZE * AT_HISTORY_MAX_PAGES;
         const AT_STATUS_PREF_KEY = 'meco.agenttools.runtimeStatus';
+        const AT_PENDING_AGENT_REQUESTS_KEY = 'meco.agenttools.pendingAgentRequests.v1';
+        const AT_PENDING_AGENT_REQUEST_TTL_MS = 30 * 60 * 1000;
         const AT_STATUS_POLL_INTERVAL_MS = 2500;
         let atCurrentAudioSource = null;
         let atAudioContext = null;
@@ -1471,6 +1473,7 @@
                     loading: false,
                     inFlight: false,
                     ttsStreamingActive: false,
+                    activePayload: null,
                     streamMessageIndex: null,
                     historyLoaded: false,
                     historyPage: 0,
@@ -1485,6 +1488,7 @@
                     loading: false,
                     inFlight: false,
                     ttsStreamingActive: false,
+                    activePayload: null,
                     streamMessageIndex: null,
                     historyLoaded: false,
                     historyPage: 0,
@@ -1498,6 +1502,7 @@
             if (typeof state.loading !== 'boolean') state.loading = false;
             if (typeof state.inFlight !== 'boolean') state.inFlight = false;
             if (typeof state.ttsStreamingActive !== 'boolean') state.ttsStreamingActive = false;
+            if (!state.activePayload || typeof state.activePayload !== 'object') state.activePayload = null;
             if (!Array.isArray(state.pendingQueue)) state.pendingQueue = [];
             if (typeof state.historyLoaded !== 'boolean') state.historyLoaded = false;
             if (!Number.isInteger(state.historyPage) || state.historyPage < 0) state.historyPage = 0;
@@ -1548,6 +1553,169 @@
                 state.streamMessageIndexByAgent = {};
             }
             return state;
+        }
+
+        function getLastUserMessageTextFromState(state) {
+            if (!state || !Array.isArray(state.messages)) return '';
+            for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+                const msg = state.messages[i];
+                if (!msg || msg.role !== 'user') continue;
+                return typeof msg.content === 'string' ? msg.content.trim() : '';
+            }
+            return '';
+        }
+
+        function sanitizePendingMessagePayload(payload) {
+            if (!payload || typeof payload !== 'object') return null;
+            const type = typeof payload.type === 'string' ? payload.type.trim() : '';
+            if (type !== 'message') return null;
+            const content = typeof payload.content === 'string' ? payload.content : '';
+            const files = Array.isArray(payload.files) ? payload.files : [];
+            const systemPaths = Array.isArray(payload.systemPaths) ? payload.systemPaths : [];
+            if (files.length > 0 || systemPaths.length > 0) {
+                return null;
+            }
+            return {
+                type: 'message',
+                content,
+                files: [],
+                systemPaths: []
+            };
+        }
+
+        function writePendingAgentRequestStore(store) {
+            try {
+                localStorage.setItem(AT_PENDING_AGENT_REQUESTS_KEY, JSON.stringify(store || { agents: {} }));
+            } catch (_) {}
+        }
+
+        function readPendingAgentRequestStore() {
+            let store = { agents: {} };
+            try {
+                const raw = localStorage.getItem(AT_PENDING_AGENT_REQUESTS_KEY);
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && typeof parsed === 'object') {
+                        store = parsed;
+                    }
+                }
+            } catch (_) {
+                store = { agents: {} };
+            }
+            if (!store.agents || typeof store.agents !== 'object') {
+                store.agents = {};
+            }
+            const now = Date.now();
+            let changed = false;
+            Object.keys(store.agents).forEach((agentId) => {
+                const item = store.agents[agentId];
+                const updatedAt = Number(item && item.updatedAt) || 0;
+                if (!updatedAt || (now - updatedAt) > AT_PENDING_AGENT_REQUEST_TTL_MS) {
+                    delete store.agents[agentId];
+                    changed = true;
+                }
+            });
+            if (changed) {
+                writePendingAgentRequestStore(store);
+            }
+            return store;
+        }
+
+        function clearPendingAgentRequestSnapshot(agentId) {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            if (!id) return;
+            const store = readPendingAgentRequestStore();
+            if (!store.agents[id]) return;
+            delete store.agents[id];
+            writePendingAgentRequestStore(store);
+        }
+
+        function getPendingAgentRequestSnapshot(agentId) {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            if (!id) return null;
+            const store = readPendingAgentRequestStore();
+            const snapshot = store.agents[id];
+            if (!snapshot || typeof snapshot !== 'object') return null;
+            return snapshot;
+        }
+
+        function syncAgentPendingRequestSnapshot(agentId) {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            if (!id) return;
+            const state = getAgentChatState(id);
+            const hasInFlight = !!state.inFlight || (Array.isArray(state.pendingQueue) && state.pendingQueue.length > 0);
+            const activePayload = sanitizePendingMessagePayload(state.activePayload);
+            const queuedPayload = Array.isArray(state.pendingQueue)
+                ? state.pendingQueue.map(sanitizePendingMessagePayload).find(Boolean)
+                : null;
+            const payload = activePayload || queuedPayload;
+
+            if (!hasInFlight || !payload) {
+                clearPendingAgentRequestSnapshot(id);
+                return;
+            }
+
+            const store = readPendingAgentRequestStore();
+            const now = Date.now();
+            const prev = store.agents[id];
+            store.agents[id] = {
+                payload,
+                userText: getLastUserMessageTextFromState(state),
+                inFlight: !!state.inFlight,
+                createdAt: Number(prev && prev.createdAt) || now,
+                updatedAt: now
+            };
+            writePendingAgentRequestStore(store);
+        }
+
+        function maybeRestorePendingAgentRequest(agentId) {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            if (!id) return false;
+            const state = getAgentChatState(id);
+            if (state.inFlight || state.pendingQueue.length > 0) return false;
+
+            const snapshot = getPendingAgentRequestSnapshot(id);
+            if (!snapshot) return false;
+            const payload = sanitizePendingMessagePayload(snapshot.payload);
+            if (!payload) {
+                clearPendingAgentRequestSnapshot(id);
+                return false;
+            }
+
+            const latest = state.messages.length > 0 ? state.messages[state.messages.length - 1] : null;
+            if (latest && latest.role === 'assistant') {
+                clearPendingAgentRequestSnapshot(id);
+                return false;
+            }
+
+            const snapshotUserText = typeof snapshot.userText === 'string' ? snapshot.userText.trim() : '';
+            if (snapshotUserText) {
+                const currentLastUserText = getLastUserMessageTextFromState(state);
+                if (currentLastUserText && currentLastUserText !== snapshotUserText) {
+                    clearPendingAgentRequestSnapshot(id);
+                    return false;
+                }
+                if (!currentLastUserText) {
+                    state.messages.push({
+                        role: 'user',
+                        content: snapshotUserText,
+                        reasoning: '',
+                        files: []
+                    });
+                }
+            }
+
+            state.pendingQueue.push(payload);
+            state.loading = true;
+            state.inFlight = false;
+            state.streamMessageIndex = null;
+            syncAgentPendingRequestSnapshot(id);
+            updateSidebarBusyIndicators();
+            if (currentAgentToolId === id) {
+                renderAgentToolsChat(id);
+            }
+            setTimeout(() => processAgentSendQueue(id), 0);
+            return true;
         }
 
         function ensureSentInputHistoryState(mapRef, rawKey) {
@@ -4860,11 +5028,14 @@
                     } finally {
                         state.historyLoaded = true;
                         state.historyLoading = false;
+                        maybeRestorePendingAgentRequest(agentId);
                         if (currentAgentToolId === agentId) {
                             renderAgentToolsChat(agentId);
                         }
                         updateSidebarBusyIndicators();
                     }
+                } else {
+                    maybeRestorePendingAgentRequest(agentId);
                 }
                 
             } catch (e) {
@@ -5521,6 +5692,8 @@
                     state.hasMoreHistory = false;
                     state.historyLoading = false;
                     state.pendingQueue = [];
+                    state.activePayload = null;
+                    syncAgentPendingRequestSnapshot(agentId);
                     if (currentAgentToolId === agentId) {
                         renderAgentToolsChat(agentId);
                     }
@@ -5557,6 +5730,7 @@
                     state.loading = false;
                     state.ttsStreamingActive = false;
                     state.streamMessageIndex = null;
+                    state.activePayload = null;
                     state.messages.push({
                         role: 'assistant',
                         content: '[Error: 连接中断，本轮回复未完成]',
@@ -6412,6 +6586,8 @@
             state.inFlight = false;
             state.loading = false;
             state.streamMessageIndex = null;
+            state.activePayload = null;
+            syncAgentPendingRequestSnapshot(agentId);
             updateSidebarBusyIndicators();
             if (currentAgentToolId === agentId) {
                 renderAgentToolsChat(agentId);
@@ -6430,6 +6606,8 @@
             state.inFlight = true;
             state.loading = true;
             state.streamMessageIndex = null;
+            state.activePayload = payload;
+            syncAgentPendingRequestSnapshot(agentId);
             updateSidebarBusyIndicators();
             if (currentAgentToolId === agentId) {
                 renderAgentToolsChat(agentId);
@@ -6444,6 +6622,8 @@
                 state.inFlight = false;
                 state.loading = false;
                 state.streamMessageIndex = null;
+                state.activePayload = null;
+                syncAgentPendingRequestSnapshot(agentId);
                 updateSidebarBusyIndicators();
                 state.messages.push({
                     role: 'assistant',
@@ -7112,6 +7292,8 @@
             state.hasMoreHistory = false;
             state.historyLoading = false;
             state.pendingQueue = [];
+            state.activePayload = null;
+            syncAgentPendingRequestSnapshot(agentId);
             if (currentAgentToolId === agentId) {
                 renderAgentToolsChat(agentId);
             }
@@ -7214,6 +7396,7 @@
                 files: localFiles
             });
             state.pendingQueue.push(payload);
+            syncAgentPendingRequestSnapshot(agentId);
             renderAgentToolsChat(agentId);
 
             if (input) {
