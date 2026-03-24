@@ -84,7 +84,7 @@ The data shows education is the key to development. Kobe, how did your approach 
 
 You are currently in a roundtable discussion.
 
-**Current Attendees:** Steve Jobs, Charlie Munger
+**Current Attendees:** Stephen Hawking, Steve Jobs, Kobe Bryant, Charlie Munger
 
 **STRICT RULE:** You may ONLY address or ask questions to the attendees listed above.
 Do NOT address Bill Gates, Kobe Bryant, Steve Jobs, or anyone else UNLESS they are in the list above.

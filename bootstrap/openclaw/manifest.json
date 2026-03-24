@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "createdAt": "2026-03-23T13:13:12.314Z",
+  "createdAt": "2026-03-24T23:08:37.029Z",
   "agents": [
     {
       "id": "eden",
@@ -70,14 +70,13 @@
       "kimi-search": true,
       "media-downloader": true,
       "persona-manager": true,
-      "secret-notes": true,
+      "secret-notes": "",
       "tikhub-api": true,
       "twitter-scraper": true,
       "x-grok": true
     }
   },
   "knowledgeRuleFolders": [
-    "1773841227413_8c4nvu_Pentagon_headhunting_Goldman",
-    "Pentagon_headhunting_Goldman"
+    "1773841227413_8c4nvu_Pentagon_headhunting_Goldman"
   ]
 }
