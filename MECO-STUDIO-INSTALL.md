@@ -37,6 +37,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 - 拉取或更新仓库至 `~/meco-studio`
 - 运行权限预检脚本（目录读写 + 网络连通 + OpenClaw 可用性）
 - 安装 npm 依赖
+- 自动安装 RustDesk 客户端：
+  - macOS：`scripts/install-rustdesk-client-mac.sh`
+  - Windows：`scripts/install-rustdesk-client-win.ps1`
+- 自动配置并启动 RustDesk 本地自建服务（hbbs/hbbr）：
+  - macOS/Linux：`scripts/setup-rustdesk-selfhost.sh`
+  - Windows：`scripts/setup-rustdesk-selfhost.ps1`
+- 自动执行 RustDesk 远控权限引导：
+  - macOS：`scripts/grant-rustdesk-permissions-mac.sh`
+  - Windows：`scripts/grant-rustdesk-permissions-win.ps1`
+- 自动安装并启动 Cloudflare Tunnel：
+  - macOS/Linux：`scripts/start-cloudflare-tunnel.sh`
+  - Windows：`scripts/start-cloudflare-tunnel.ps1`
 - 同步 bootstrap agents/skills/knowledge-rule-folders（幂等，不重复注册）
 - 同步策略为增量覆盖：仅覆盖同名文件 + 新增缺失文件，不删除本机自建智能体/skills/知识库目录
 - 同步 OpenClaw skills 开关状态（从 bootstrap manifest 读取；缺失状态默认开启）
@@ -67,6 +79,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 不会同步：
 - `data/rooms.json`
 - `data/room-covers/*`
+- `~/.meco-studio/remote-devices.json`
+- `data/remote-devices*.json`
 
 ## 提交铁律与版本号
 
@@ -150,11 +164,14 @@ MECO_OSS_ACCESS_KEY_ID="<your-oss-access-key-id>" \
 MECO_OSS_ACCESS_KEY_SECRET="<your-oss-access-key-secret>" \
 MECO_OPENAI_API_KEY="" \
 MECO_CLOUDFLARE_PUBLIC_HOST="https://mecoclaw.com" \
-MECO_CLOUDFLARE_TUNNEL_TOKEN="<your-cloudflare-tunnel-token>" \
+MECO_CLOUDFLARE_TUNNEL_TOKEN="<built-in-default-or-your-token>" \
+MECO_RUSTDESK_WEB_BASE_URL="/rustdesk-web/" \
+MECO_RUSTDESK_PREFERRED_RENDEZVOUS="127.0.0.1:21116,127.0.0.1:21118" \
 MECO_AUTO_INSTALL_CLOUDFLARED=1 \
-MECO_AUTO_INSTALL_MESHCENTRAL=1 \
-MECO_MESHCENTRAL_ADMIN_USER="eden_admin" \
-MECO_MESHCENTRAL_ADMIN_PASS="<strong-password>" \
+MECO_AUTO_INSTALL_RUSTDESK_CLIENT=1 \
+MECO_AUTO_SETUP_RUSTDESK_SELFHOST=1 \
+MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS=1 \
+MECO_AUTO_START_CLOUDFLARE_TUNNEL=1 \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
@@ -173,11 +190,14 @@ $env:MECO_OSS_BUCKET = "cfplusvideo"
 $env:MECO_OSS_ACCESS_KEY_ID = "<your-oss-access-key-id>"
 $env:MECO_OSS_ACCESS_KEY_SECRET = "<your-oss-access-key-secret>"
 $env:MECO_CLOUDFLARE_PUBLIC_HOST = "https://mecoclaw.com"
-$env:MECO_CLOUDFLARE_TUNNEL_TOKEN = "<your-cloudflare-tunnel-token>"
+$env:MECO_CLOUDFLARE_TUNNEL_TOKEN = "<built-in-default-or-your-token>"
+$env:MECO_RUSTDESK_WEB_BASE_URL = "/rustdesk-web/"
+$env:MECO_RUSTDESK_PREFERRED_RENDEZVOUS = "127.0.0.1:21116,127.0.0.1:21118"
 $env:MECO_AUTO_INSTALL_CLOUDFLARED = "1"
-$env:MECO_AUTO_INSTALL_MESHCENTRAL = "1"
-$env:MECO_MESHCENTRAL_ADMIN_USER = "eden_admin"
-$env:MECO_MESHCENTRAL_ADMIN_PASS = "<strong-password>"
+$env:MECO_AUTO_INSTALL_RUSTDESK_CLIENT = "1"
+$env:MECO_AUTO_SETUP_RUSTDESK_SELFHOST = "1"
+$env:MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS = "1"
+$env:MECO_AUTO_START_CLOUDFLARE_TUNNEL = "1"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
 ```
 
@@ -258,6 +278,10 @@ post_install_auto:
   - "bootstrap openclaw kimi-code auth profile to avoid moonshot 401 mismatch"
   - "write openclaw model + provider defaults (kimi-coding/k2p5)"
   - "install kimi cli"
+  - "install RustDesk client (macOS/Windows)"
+  - "setup RustDesk self-host server (hbbs/hbbr) and set client rendezvous"
+  - "run RustDesk local permission guidance (screen/accessibility/firewall)"
+  - "install cloudflared and auto start tunnel with preset token"
   - "install skills runtime deps (python + node, including whisper)"
   - "sync OpenClaw skills + Kimi CLI skills"
   - "sync OpenClaw agents/workspaces + local data-agents"
@@ -278,5 +302,6 @@ bash scripts/openclaw-permission-preflight.sh
 - Do not commit real API keys/AccessKeys to repository files.
 - Private deployment preset may include default Cloudflare/Mesh bootstrap values; rotate immediately before sharing/forking.
 - Configure secrets only via local UI settings or environment variables.
+- Remote bind store is local only (`~/.meco-studio/remote-devices.json`), and `.gitignore` blocks `remote-devices*.json`.
 - Rotate keys immediately if any leakage is suspected.
 - UI 保存的密钥默认写入 `~/.meco-studio/app-settings.json`（不在仓库目录）。

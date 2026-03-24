@@ -43,8 +43,13 @@ $HotTopicsRoot = Get-EnvOrDefault -Name 'HOT_TOPICS_ROOT' -Default (Join-Path $e
 $MecoCloudflarePublicHost = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_PUBLIC_HOST' -Default 'https://mecoclaw.com'
 $MecoCloudflarePathPrefix = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_PATH_PREFIX' -Default ''
 $MecoCloudflareTunnelToken = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_TUNNEL_TOKEN' -Default 'eyJhIjoiNzMyNGQ3ZjU3MGY5MzBlMjRjODRlYTY2ZmNkM2IwYjUiLCJ0IjoiYTk1OTZiMDgtNDZjOC00NmRlLWIzZGYtN2NjYjQ4OTJhM2NkIiwicyI6Ik5EWmlaREV4TjJFdFpXRXdNeTAwWlRNNExXSTJZakF0TWpFek5HRmlNVEl4WXpCaiJ9'
-$MecoRustdeskWebBaseUrl = Get-EnvOrDefault -Name 'MECO_RUSTDESK_WEB_BASE_URL' -Default 'https://rustdesk.com/web/'
+$MecoRustdeskWebBaseUrl = Get-EnvOrDefault -Name 'MECO_RUSTDESK_WEB_BASE_URL' -Default '/rustdesk-web/'
+$MecoRustdeskPreferredRendezvous = Get-EnvOrDefault -Name 'MECO_RUSTDESK_PREFERRED_RENDEZVOUS' -Default '127.0.0.1:21116,127.0.0.1:21118'
 $MecoAutoInstallCloudflared = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_CLOUDFLARED' -Default '1'
+$MecoAutoInstallRustdeskClient = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_RUSTDESK_CLIENT' -Default '1'
+$MecoAutoSetupRustdeskSelfhost = Get-EnvOrDefault -Name 'MECO_AUTO_SETUP_RUSTDESK_SELFHOST' -Default '1'
+$MecoAutoGrantRustdeskPermissions = Get-EnvOrDefault -Name 'MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS' -Default '1'
+$MecoAutoStartCloudflareTunnel = Get-EnvOrDefault -Name 'MECO_AUTO_START_CLOUDFLARE_TUNNEL' -Default '1'
 $MecoAutoInstallMeshcentral = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_MESHCENTRAL' -Default '0'
 $MecoMeshNodeBin = Get-EnvOrDefault -Name 'MECO_MESH_NODE_BIN' -Default ''
 $MecoMeshcentralCert = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_CERT' -Default 'mecoclaw.com'
@@ -256,6 +261,128 @@ function Ensure-Cloudflared {
   }
   if (-not (Test-Cmd 'cloudflared')) {
     Write-Warn 'cloudflared command still not found in PATH'
+  }
+}
+
+function Invoke-RepoPowerShellScript {
+  param(
+    [Parameter(Mandatory = $true)][string]$RelativePath,
+    [Parameter()][hashtable]$Env = @{}
+  )
+
+  $scriptPath = Join-Path $MecoInstallDir $RelativePath
+  if (-not (Test-Path $scriptPath)) {
+    Write-Warn "helper script missing: $scriptPath"
+    return $false
+  }
+
+  $oldValues = @{}
+  foreach ($key in $Env.Keys) {
+    $oldValues[$key] = [Environment]::GetEnvironmentVariable($key)
+    [Environment]::SetEnvironmentVariable($key, [string]$Env[$key])
+  }
+
+  try {
+    & $scriptPath
+    return $true
+  }
+  catch {
+    Write-Warn "helper script failed: $scriptPath ($($_.Exception.Message))"
+    return $false
+  }
+  finally {
+    foreach ($key in $Env.Keys) {
+      [Environment]::SetEnvironmentVariable($key, $oldValues[$key])
+    }
+  }
+}
+
+function Ensure-RustDeskClient {
+  if ($MecoAutoInstallRustdeskClient -ne '1') {
+    Write-Log "Skip RustDesk client install (MECO_AUTO_INSTALL_RUSTDESK_CLIENT=$MecoAutoInstallRustdeskClient)"
+    return
+  }
+
+  Write-Log 'Ensuring RustDesk client (Windows)...'
+  $ok = Invoke-RepoPowerShellScript -RelativePath 'scripts\install-rustdesk-client-win.ps1'
+  if ($ok) {
+    Write-Log 'RustDesk client ready'
+  }
+  else {
+    Write-Warn 'RustDesk client install script failed (continue install)'
+  }
+}
+
+function Setup-RustDeskSelfhost {
+  if ($MecoAutoSetupRustdeskSelfhost -ne '1') {
+    Write-Log "Skip RustDesk self-host setup (MECO_AUTO_SETUP_RUSTDESK_SELFHOST=$MecoAutoSetupRustdeskSelfhost)"
+    return
+  }
+
+  $host = Get-EnvOrDefault -Name 'MECO_RUSTDESK_SELFHOST_HOST' -Default '127.0.0.1'
+  $hbbsPort = Get-EnvOrDefault -Name 'MECO_RUSTDESK_SELFHOST_HBBS_PORT' -Default '21116'
+  $hbbrPort = Get-EnvOrDefault -Name 'MECO_RUSTDESK_SELFHOST_HBBR_PORT' -Default '21117'
+  $wsPort = Get-EnvOrDefault -Name 'MECO_RUSTDESK_SELFHOST_WS_PORT' -Default '21118'
+  $serverHome = Get-EnvOrDefault -Name 'MECO_RUSTDESK_SERVER_HOME' -Default (Join-Path $env:USERPROFILE '.meco-studio\rustdesk-server')
+
+  Write-Log 'Configuring RustDesk self-host (hbbs/hbbr)...'
+  $ok = Invoke-RepoPowerShellScript -RelativePath 'scripts\setup-rustdesk-selfhost.ps1' -Env @{
+    RUSTDESK_RENDEZVOUS_HOST = $host
+    RUSTDESK_HBBS_PORT = $hbbsPort
+    RUSTDESK_HBBR_PORT = $hbbrPort
+    RUSTDESK_WS_PORT = $wsPort
+    RUSTDESK_SERVER_HOME = $serverHome
+  }
+  if ($ok) {
+    Write-Log 'RustDesk self-host ready'
+  }
+  else {
+    Write-Warn 'RustDesk self-host setup failed (continue install)'
+  }
+}
+
+function Grant-RustDeskPermissions {
+  if ($MecoAutoGrantRustdeskPermissions -ne '1') {
+    Write-Log "Skip RustDesk permission guidance (MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS=$MecoAutoGrantRustdeskPermissions)"
+    return
+  }
+
+  Write-Log 'Running RustDesk permission guidance...'
+  $ok = Invoke-RepoPowerShellScript -RelativePath 'scripts\grant-rustdesk-permissions-win.ps1'
+  if ($ok) {
+    Write-Log 'RustDesk permission guidance executed'
+  }
+  else {
+    Write-Warn 'RustDesk permission guidance failed (continue install)'
+  }
+}
+
+function Start-CloudflareTunnelRuntime {
+  if ($MecoAutoStartCloudflareTunnel -ne '1') {
+    Write-Log "Skip cloudflare tunnel autostart (MECO_AUTO_START_CLOUDFLARE_TUNNEL=$MecoAutoStartCloudflareTunnel)"
+    return
+  }
+
+  if ([string]::IsNullOrWhiteSpace($MecoCloudflareTunnelToken)) {
+    Write-Warn 'Cloudflare tunnel token is empty, skip cloudflare tunnel autostart'
+    return
+  }
+
+  Ensure-Cloudflared
+  if (-not (Test-Cmd 'cloudflared')) {
+    Write-Warn 'cloudflared missing, skip cloudflare tunnel autostart'
+    return
+  }
+
+  Write-Log 'Starting Cloudflare tunnel runtime...'
+  $ok = Invoke-RepoPowerShellScript -RelativePath 'scripts\start-cloudflare-tunnel.ps1' -Env @{
+    MECO_CLOUDFLARE_TUNNEL_TOKEN = $MecoCloudflareTunnelToken
+  }
+  if ($ok) {
+    Write-Log 'Cloudflare tunnel runtime started'
+  }
+  else {
+    Write-Warn 'Cloudflare tunnel runtime start failed (continue install)'
   }
 }
 
@@ -640,6 +767,7 @@ function Configure-MecoRuntimeSettings {
     cloudflareTunnelToken = $MecoCloudflareTunnelToken
     rustdeskWebBaseUrl = $MecoRustdeskWebBaseUrl
     rustdeskSchemeAuthority = 'connect'
+    rustdeskPreferredRendezvous = $MecoRustdeskPreferredRendezvous
   }
 
   foreach ($key in $patch.Keys) {
@@ -963,6 +1091,9 @@ function Main {
   Ensure-KimiCli
   Install-NpmDependencies
   Ensure-Cloudflared
+  Ensure-RustDeskClient
+  Setup-RustDeskSelfhost
+  Grant-RustDeskPermissions
   Ensure-HotTopicsKnowledgeBase
   Ensure-HotTopicsSkill
   Sync-OpenclawSkillSwitchesFromManifest
@@ -972,6 +1103,7 @@ function Main {
   Configure-MecoRuntimeSettings -KimiApiKey $MecoKimiCodingApiKey -OpenclawModelApiKey $effectiveModelKey
   Reset-RuntimeState
   Start-Service
+  Start-CloudflareTunnelRuntime
 
   Write-Log 'Install/upgrade done.'
 }

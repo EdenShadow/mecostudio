@@ -32,8 +32,13 @@ HOT_TOPICS_ROOT="${HOT_TOPICS_ROOT:-$HOME/Documents/知识库/热门话题}"
 MECO_CLOUDFLARE_PUBLIC_HOST="${MECO_CLOUDFLARE_PUBLIC_HOST:-https://mecoclaw.com}"
 MECO_CLOUDFLARE_PATH_PREFIX="${MECO_CLOUDFLARE_PATH_PREFIX:-}"
 MECO_CLOUDFLARE_TUNNEL_TOKEN="${MECO_CLOUDFLARE_TUNNEL_TOKEN:-eyJhIjoiNzMyNGQ3ZjU3MGY5MzBlMjRjODRlYTY2ZmNkM2IwYjUiLCJ0IjoiYTk1OTZiMDgtNDZjOC00NmRlLWIzZGYtN2NjYjQ4OTJhM2NkIiwicyI6Ik5EWmlaREV4TjJFdFpXRXdNeTAwWlRNNExXSTJZakF0TWpFek5HRmlNVEl4WXpCaiJ9}"
-MECO_RUSTDESK_WEB_BASE_URL="${MECO_RUSTDESK_WEB_BASE_URL:-https://rustdesk.com/web/}"
+MECO_RUSTDESK_WEB_BASE_URL="${MECO_RUSTDESK_WEB_BASE_URL:-/rustdesk-web/}"
+MECO_RUSTDESK_PREFERRED_RENDEZVOUS="${MECO_RUSTDESK_PREFERRED_RENDEZVOUS:-127.0.0.1:21116,127.0.0.1:21118}"
 MECO_AUTO_INSTALL_CLOUDFLARED="${MECO_AUTO_INSTALL_CLOUDFLARED:-1}"
+MECO_AUTO_INSTALL_RUSTDESK_CLIENT="${MECO_AUTO_INSTALL_RUSTDESK_CLIENT:-1}"
+MECO_AUTO_SETUP_RUSTDESK_SELFHOST="${MECO_AUTO_SETUP_RUSTDESK_SELFHOST:-1}"
+MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS="${MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS:-1}"
+MECO_AUTO_START_CLOUDFLARE_TUNNEL="${MECO_AUTO_START_CLOUDFLARE_TUNNEL:-1}"
 MECO_AUTO_INSTALL_MESHCENTRAL="${MECO_AUTO_INSTALL_MESHCENTRAL:-0}"
 MECO_MESH_NODE_BIN="${MECO_MESH_NODE_BIN:-}"
 MECO_MESHCENTRAL_CERT="${MECO_MESHCENTRAL_CERT:-mecoclaw.com}"
@@ -281,6 +286,114 @@ ensure_cloudflared() {
     warn "cloudflared not found and brew unavailable, please install cloudflared manually"
   fi
   command -v cloudflared >/dev/null 2>&1 || warn "cloudflared command still not found in PATH"
+}
+
+run_repo_bash_script() {
+  local rel_path="$1"
+  shift || true
+  local script_path="$MECO_INSTALL_DIR/$rel_path"
+  if [[ ! -f "$script_path" ]]; then
+    warn "helper script missing: $script_path"
+    return 1
+  fi
+  if [[ -x "$script_path" ]]; then
+    "$script_path" "$@"
+  else
+    bash "$script_path" "$@"
+  fi
+}
+
+ensure_rustdesk_client() {
+  if [[ "$MECO_AUTO_INSTALL_RUSTDESK_CLIENT" != "1" ]]; then
+    log "Skip RustDesk client install (MECO_AUTO_INSTALL_RUSTDESK_CLIENT=$MECO_AUTO_INSTALL_RUSTDESK_CLIENT)"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Darwin)
+      log "Ensuring RustDesk client (macOS)..."
+      if run_repo_bash_script "scripts/install-rustdesk-client-mac.sh"; then
+        log "RustDesk client ready"
+      else
+        warn "RustDesk client install script failed (continuing)"
+      fi
+      ;;
+    *)
+      warn "RustDesk client auto-install is currently implemented for macOS in this shell script. Use PowerShell installer on Windows."
+      ;;
+  esac
+}
+
+setup_rustdesk_selfhost() {
+  if [[ "$MECO_AUTO_SETUP_RUSTDESK_SELFHOST" != "1" ]]; then
+    log "Skip RustDesk self-host setup (MECO_AUTO_SETUP_RUSTDESK_SELFHOST=$MECO_AUTO_SETUP_RUSTDESK_SELFHOST)"
+    return 0
+  fi
+
+  local host hbbs_port ws_port
+  host="${MECO_RUSTDESK_SELFHOST_HOST:-127.0.0.1}"
+  hbbs_port="${MECO_RUSTDESK_SELFHOST_HBBS_PORT:-21116}"
+  ws_port="${MECO_RUSTDESK_SELFHOST_WS_PORT:-21118}"
+
+  log "Configuring RustDesk self-host (hbbs/hbbr)..."
+  if RUSTDESK_RENDEZVOUS_HOST="$host" \
+     RUSTDESK_HBBS_PORT="$hbbs_port" \
+     RUSTDESK_HBBR_PORT="${MECO_RUSTDESK_SELFHOST_HBBR_PORT:-21117}" \
+     RUSTDESK_WS_PORT="$ws_port" \
+     RUSTDESK_SERVER_HOME="${MECO_RUSTDESK_SERVER_HOME:-$HOME/.meco-studio/rustdesk-server}" \
+     run_repo_bash_script "scripts/setup-rustdesk-selfhost.sh"; then
+    log "RustDesk self-host ready"
+  else
+    warn "RustDesk self-host setup failed (continuing)"
+  fi
+}
+
+grant_rustdesk_permissions() {
+  if [[ "$MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS" != "1" ]]; then
+    log "Skip RustDesk permission guidance (MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS=$MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS)"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Darwin)
+      log "Opening RustDesk permission guidance (macOS)..."
+      if run_repo_bash_script "scripts/grant-rustdesk-permissions-mac.sh"; then
+        log "RustDesk permission guidance executed"
+      else
+        warn "RustDesk permission guidance failed (continuing)"
+      fi
+      ;;
+    *)
+      warn "RustDesk permission helper is currently implemented for macOS in this shell script. Use PowerShell installer on Windows."
+      ;;
+  esac
+}
+
+start_cloudflare_tunnel_runtime() {
+  if [[ "$MECO_AUTO_START_CLOUDFLARE_TUNNEL" != "1" ]]; then
+    log "Skip cloudflare tunnel autostart (MECO_AUTO_START_CLOUDFLARE_TUNNEL=$MECO_AUTO_START_CLOUDFLARE_TUNNEL)"
+    return 0
+  fi
+
+  if [[ -z "$MECO_CLOUDFLARE_TUNNEL_TOKEN" ]]; then
+    warn "Cloudflare tunnel token empty, skip cloudflare tunnel autostart"
+    return 0
+  fi
+
+  ensure_cloudflared
+
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    warn "cloudflared missing, skip cloudflare tunnel autostart"
+    return 0
+  fi
+
+  log "Starting Cloudflare tunnel runtime..."
+  if MECO_CLOUDFLARE_TUNNEL_TOKEN="$MECO_CLOUDFLARE_TUNNEL_TOKEN" \
+     run_repo_bash_script "scripts/start-cloudflare-tunnel.sh"; then
+    log "Cloudflare tunnel runtime started"
+  else
+    warn "Cloudflare tunnel runtime start failed (continuing)"
+  fi
 }
 
 patch_meshcentral_installmodules_compat() {
@@ -724,7 +837,8 @@ configure_meco_runtime_settings() {
       cloudflarePathPrefix: String(process.argv[16] || "").trim(),
       cloudflareTunnelToken: String(process.argv[17] || "").trim(),
       rustdeskWebBaseUrl: String(process.argv[18] || "").trim(),
-      rustdeskSchemeAuthority: String(process.argv[19] || "").trim() || "connect"
+      rustdeskSchemeAuthority: String(process.argv[19] || "").trim() || "connect",
+      rustdeskPreferredRendezvous: String(process.argv[20] || "").trim() || "127.0.0.1:21116,127.0.0.1:21118"
     };
 
     let current = {};
@@ -760,7 +874,8 @@ configure_meco_runtime_settings() {
     "$MECO_CLOUDFLARE_PATH_PREFIX" \
     "$MECO_CLOUDFLARE_TUNNEL_TOKEN" \
     "$MECO_RUSTDESK_WEB_BASE_URL" \
-    "connect"
+    "connect" \
+    "$MECO_RUSTDESK_PREFERRED_RENDEZVOUS"
 
   log "Updated Meco runtime settings: $settings_path"
 }
@@ -1325,6 +1440,9 @@ main() {
   run_permissions_preflight
   install_dependencies
   ensure_cloudflared
+  ensure_rustdesk_client
+  setup_rustdesk_selfhost
+  grant_rustdesk_permissions
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets
   ensure_hot_topics_skill
@@ -1336,6 +1454,7 @@ main() {
   reset_runtime_state
   restart_openclaw_if_update
   start_service
+  start_cloudflare_tunnel_runtime
   log "Install/upgrade done."
 }
 

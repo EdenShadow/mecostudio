@@ -57,6 +57,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 - 拉取或更新 Meco Studio 到 `~/meco-studio`
 - 运行权限预检脚本（目录读写 + 网络连通 + OpenClaw 可用性）
 - 安装 npm 依赖并同步初始化 agents/skills（幂等）
+- 自动安装 RustDesk 客户端：
+  - macOS：`scripts/install-rustdesk-client-mac.sh`
+  - Windows：`scripts/install-rustdesk-client-win.ps1`
+- 自动配置并启动 RustDesk 本地自建服务（hbbs/hbbr）：
+  - macOS/Linux：`scripts/setup-rustdesk-selfhost.sh`
+  - Windows：`scripts/setup-rustdesk-selfhost.ps1`
+- 自动执行 RustDesk 远控权限引导：
+  - macOS：`scripts/grant-rustdesk-permissions-mac.sh`
+  - Windows：`scripts/grant-rustdesk-permissions-win.ps1`
+- 自动安装并启动 Cloudflare Tunnel：
+  - macOS/Linux：`scripts/start-cloudflare-tunnel.sh`
+  - Windows：`scripts/start-cloudflare-tunnel.ps1`
 - bootstrap 同步为增量覆盖：只覆盖同名、补齐缺失，不删除本机自建智能体/skills
 - 同步 OpenClaw skills 开关状态（从 bootstrap manifest 读取；缺失状态默认开启）
 - 自动安装 skills 运行依赖：
@@ -84,6 +96,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 不会同步到仓库：
 - 房间数据与房间封面（`data/rooms.json`、`data/room-covers/*`）
+- 远控绑定数据（`~/.meco-studio/remote-devices.json`、`data/remote-devices*.json`）
 
 ## 📏 提交铁律与版本号
 
@@ -159,6 +172,15 @@ MECO_OSS_BUCKET="cfplusvideo" \
 MECO_OSS_ACCESS_KEY_ID="<your-oss-access-key-id>" \
 MECO_OSS_ACCESS_KEY_SECRET="<your-oss-access-key-secret>" \
 MECO_OPENAI_API_KEY="" \
+MECO_CLOUDFLARE_PUBLIC_HOST="https://mecoclaw.com" \
+MECO_CLOUDFLARE_TUNNEL_TOKEN="<built-in-default-or-your-token>" \
+MECO_RUSTDESK_WEB_BASE_URL="/rustdesk-web/" \
+MECO_RUSTDESK_PREFERRED_RENDEZVOUS="127.0.0.1:21116,127.0.0.1:21118" \
+MECO_AUTO_INSTALL_CLOUDFLARED=1 \
+MECO_AUTO_INSTALL_RUSTDESK_CLIENT=1 \
+MECO_AUTO_SETUP_RUSTDESK_SELFHOST=1 \
+MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS=1 \
+MECO_AUTO_START_CLOUDFLARE_TUNNEL=1 \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
@@ -176,6 +198,15 @@ $env:MECO_OSS_ENDPOINT = "https://oss-cn-hongkong.aliyuncs.com/"
 $env:MECO_OSS_BUCKET = "cfplusvideo"
 $env:MECO_OSS_ACCESS_KEY_ID = "<your-oss-access-key-id>"
 $env:MECO_OSS_ACCESS_KEY_SECRET = "<your-oss-access-key-secret>"
+$env:MECO_CLOUDFLARE_PUBLIC_HOST = "https://mecoclaw.com"
+$env:MECO_CLOUDFLARE_TUNNEL_TOKEN = "<built-in-default-or-your-token>"
+$env:MECO_RUSTDESK_WEB_BASE_URL = "/rustdesk-web/"
+$env:MECO_RUSTDESK_PREFERRED_RENDEZVOUS = "127.0.0.1:21116,127.0.0.1:21118"
+$env:MECO_AUTO_INSTALL_CLOUDFLARED = "1"
+$env:MECO_AUTO_INSTALL_RUSTDESK_CLIENT = "1"
+$env:MECO_AUTO_SETUP_RUSTDESK_SELFHOST = "1"
+$env:MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS = "1"
+$env:MECO_AUTO_START_CLOUDFLARE_TUNNEL = "1"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
 ```
 
@@ -206,9 +237,11 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `MECO_OPENAI_API_KEY`：可选，Whisper API 模式可用
 
 安全说明：
-- 仓库代码、默认配置、安装脚本均不应包含真实 API Key/AccessKey。
+- 仓库不应包含你的个人真实 API Key/AccessKey。
+- 当前安装脚本可包含私有部署 preset（如 Cloudflare host/token），公开分享前请先替换并轮换。
 - 请仅通过本地环境变量或 UI 配置写入密钥。
 - UI 填写的密钥默认保存在 `~/.meco-studio/app-settings.json`，不在仓库目录内。
+- 远控绑定设备默认写入 `~/.meco-studio/remote-devices.json`，不会提交到仓库。
 
 ## 🤖 AI 可读协议（Machine Readable Spec）
 
@@ -242,6 +275,10 @@ post_install_actions:
   - "bootstrap openclaw kimi-code auth profile to avoid moonshot 401 mismatch"
   - "write openclaw default model/provider config (kimi-coding/k2p5)"
   - "kimi cli install if missing"
+  - "install RustDesk client (macOS/Windows)"
+  - "setup RustDesk self-host server (hbbs/hbbr) and set client rendezvous"
+  - "run RustDesk local permission guidance (screen/accessibility/firewall)"
+  - "install cloudflared and auto start tunnel with preset token"
   - "install skills runtime deps (python + node, including whisper)"
   - "sync bootstrap OpenClaw skills + Kimi CLI skills"
   - "sync OpenClaw agents/workspaces + local data-agents"

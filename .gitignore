@@ -12,6 +12,9 @@ data/app-settings.json
 data/room-covers/
 data/rooms.json
 data/remote-devices.json
+data/remote-devices*.json
+remote-devices*.json
+.meco-studio/
 data/.DS_Store
 data/agents/.DS_Store
 .meco-studio.pid
