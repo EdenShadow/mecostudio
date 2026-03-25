@@ -51,13 +51,18 @@
       password: '',
       bindingId: ''
     },
-    dockFocusModeEnabled: true
+    dockFocusModeEnabled: true,
+    dockTabDragSourceId: '',
+    dockTabDragTargetId: '',
+    dockTabDragInsertAfter: false,
+    suppressDockClickUntil: 0
   };
 
   const els = {};
   const REMOTE_CF_FORM_CACHE_KEY = 'meco.remote.cloudflareForm.v1';
   const REMOTE_LOCAL_PROFILE_CACHE_KEY = 'meco.remote.localProfile.v1';
   const REMOTE_DOCK_FOCUS_MODE_KEY = 'meco.remote.dockFocusMode.v1';
+  const REMOTE_DOCK_DEVICE_ORDER_KEY = 'meco.remote.deviceOrder.v1';
 
   function q(id) {
     return document.getElementById(id);
@@ -270,6 +275,69 @@
     try {
       localStorage.setItem(REMOTE_DOCK_FOCUS_MODE_KEY, enabled ? '1' : '0');
     } catch (_) {}
+  }
+
+  function normalizeDeviceOrderList(list) {
+    const seen = new Set();
+    const normalized = [];
+    const items = Array.isArray(list) ? list : [];
+    for (let i = 0; i < items.length; i += 1) {
+      const id = toSafeString(items[i]);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      normalized.push(id);
+    }
+    return normalized;
+  }
+
+  function readDockDeviceOrderPref() {
+    try {
+      const raw = localStorage.getItem(REMOTE_DOCK_DEVICE_ORDER_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return normalizeDeviceOrderList(parsed);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function writeDockDeviceOrderPref(deviceIds = []) {
+    try {
+      localStorage.setItem(REMOTE_DOCK_DEVICE_ORDER_KEY, JSON.stringify(normalizeDeviceOrderList(deviceIds)));
+    } catch (_) {}
+  }
+
+  function applySavedDeviceOrder(devices = []) {
+    const list = Array.isArray(devices) ? devices.slice() : [];
+    if (!list.length) {
+      writeDockDeviceOrderPref([]);
+      return [];
+    }
+
+    const order = readDockDeviceOrderPref();
+    if (!order.length) {
+      writeDockDeviceOrderPref(list.map((device) => toSafeString(device && device.id)));
+      return list;
+    }
+
+    const indexMap = new Map();
+    order.forEach((id, idx) => {
+      indexMap.set(id, idx);
+    });
+    list.sort((a, b) => {
+      const idA = toSafeString(a && a.id);
+      const idB = toSafeString(b && b.id);
+      const idxA = indexMap.has(idA) ? indexMap.get(idA) : Number.MAX_SAFE_INTEGER;
+      const idxB = indexMap.has(idB) ? indexMap.get(idB) : Number.MAX_SAFE_INTEGER;
+      if (idxA !== idxB) return idxA - idxB;
+      return 0;
+    });
+    writeDockDeviceOrderPref(list.map((device) => toSafeString(device && device.id)));
+    return list;
+  }
+
+  function persistCurrentDeviceOrder() {
+    writeDockDeviceOrderPref(state.devices.map((device) => toSafeString(device && device.id)));
   }
 
   function setBindTab(tab) {
@@ -833,7 +901,8 @@
   async function loadDevices() {
     const res = await fetch('/api/remote/devices', { cache: 'no-store' });
     const body = await readJson(res, '加载远控设备失败');
-    state.devices = Array.isArray(body.devices) ? body.devices : [];
+    const devices = Array.isArray(body.devices) ? body.devices : [];
+    state.devices = applySavedDeviceOrder(devices);
     state.devicesLoaded = true;
     renderDockTabs();
     renderBindDeviceList();
@@ -842,6 +911,9 @@
 
   function renderDockTabs() {
     if (!els.dockTabs) return;
+    clearDockTabDragMarkers();
+    state.dockTabDragTargetId = '';
+    state.dockTabDragInsertAfter = false;
     if (!state.devices.length) {
       els.dockTabs.innerHTML = '<span class="text-xs text-gray-500 px-2">暂无设备，点击“绑定设备”开始</span>';
       updateWindowLayerBounds();
@@ -869,7 +941,7 @@
       const localFlag = isLocal
         ? '<span class="text-[10px] px-1.5 py-0.5 rounded border border-blue-400/40 text-blue-200 bg-blue-500/10">本机</span>'
         : '';
-      return `<button type="button" data-action="open" data-device-id="${escapeHtml(device.id)}" class="${classes}">${dot}<span>${label}</span>${localFlag}</button>`;
+      return `<button type="button" draggable="true" data-action="open" data-device-id="${escapeHtml(device.id)}" class="${classes}">${dot}<span>${label}</span>${localFlag}</button>`;
     }).join('');
 
     els.dockTabs.innerHTML = html;
@@ -1680,12 +1752,19 @@
     }
   }
 
-  function bringSessionToFront(session) {
+  function bringSessionToFront(session, options = {}) {
     if (!session || !session.el) return;
+    const prevActiveId = toSafeString(state.activeSessionId);
     state.zCounter = Math.max(120, Number(state.zCounter) || 120) + 1;
     session.zIndex = state.zCounter;
     session.el.style.zIndex = String(session.zIndex);
     state.activeSessionId = session.id;
+    if (options.skipUiRefresh) return;
+    if (prevActiveId !== toSafeString(session.id) || options.forceUiRefresh) {
+      renderDockTabs();
+      renderBindDeviceList();
+      updateWorkspaceFocusMode();
+    }
   }
 
   function applySessionRect(session, rect = null) {
@@ -1812,9 +1891,6 @@
     session.minimized = false;
     session.el.classList.remove('hidden');
     bringSessionToFront(session);
-    renderDockTabs();
-    renderBindDeviceList();
-    updateWorkspaceFocusMode();
   }
 
   function closeSession(sessionId) {
@@ -1886,6 +1962,7 @@
     const iframe = document.createElement('iframe');
     iframe.className = 'absolute inset-0 w-full h-full border-0 bg-black';
     iframe.setAttribute('allowfullscreen', 'true');
+    iframe.setAttribute('tabindex', '0');
     iframe.dataset.deviceId = toSafeString(device && device.id);
     iframe.dataset.mode = toSafeString(launch && launch.sessionMode);
     iframe.src = toSafeString(launch && launch.url);
@@ -1941,6 +2018,9 @@
     win.addEventListener('mousedown', () => {
       bringSessionToFront(session);
     });
+    iframe.addEventListener('focus', () => {
+      bringSessionToFront(session, { forceUiRefresh: true });
+    });
 
     const modeWebBtn = session.modeWebBtn;
     if (modeWebBtn) {
@@ -1995,9 +2075,6 @@
     applySessionRect(session, rect);
     updateSessionModeSwitchState(session);
     bringSessionToFront(session);
-    renderDockTabs();
-    renderBindDeviceList();
-    updateWorkspaceFocusMode();
     return session;
   }
 
@@ -2278,7 +2355,139 @@
     state.prevBodyCursor = '';
   }
 
+  function clearDockTabDragMarkers() {
+    if (!els.dockTabs) return;
+    const tabs = els.dockTabs.querySelectorAll('button[data-action="open"][data-device-id]');
+    tabs.forEach((tab) => {
+      tab.style.boxShadow = '';
+      tab.classList.remove('opacity-40');
+    });
+  }
+
+  function resetDockTabDragState() {
+    state.dockTabDragSourceId = '';
+    state.dockTabDragTargetId = '';
+    state.dockTabDragInsertAfter = false;
+    clearDockTabDragMarkers();
+  }
+
+  function reorderDeviceTabs(sourceId, targetId, insertAfter) {
+    const source = toSafeString(sourceId);
+    const target = toSafeString(targetId);
+    if (!source || !state.devices.length) return false;
+
+    const list = state.devices.slice();
+    const sourceIndex = list.findIndex((item) => toSafeString(item && item.id) === source);
+    if (sourceIndex < 0) return false;
+
+    const sourceItem = list[sourceIndex];
+    list.splice(sourceIndex, 1);
+
+    if (!target) {
+      list.push(sourceItem);
+    } else {
+      let targetIndex = list.findIndex((item) => toSafeString(item && item.id) === target);
+      if (targetIndex < 0) {
+        list.push(sourceItem);
+      } else {
+        if (insertAfter) targetIndex += 1;
+        const safeIndex = Math.max(0, Math.min(targetIndex, list.length));
+        list.splice(safeIndex, 0, sourceItem);
+      }
+    }
+
+    const changed = list.some((item, idx) => toSafeString(item && item.id) !== toSafeString(state.devices[idx] && state.devices[idx].id));
+    if (!changed) return false;
+    state.devices = list;
+    persistCurrentDeviceOrder();
+    renderDockTabs();
+    renderBindDeviceList();
+    return true;
+  }
+
+  function onDockTabsDragStart(event) {
+    const tab = event.target && event.target.closest('button[data-action="open"][data-device-id]');
+    if (!tab) return;
+    const deviceId = toSafeString(tab.getAttribute('data-device-id'));
+    if (!deviceId) return;
+    state.dockTabDragSourceId = deviceId;
+    state.dockTabDragTargetId = '';
+    state.dockTabDragInsertAfter = false;
+    clearDockTabDragMarkers();
+    tab.classList.add('opacity-40');
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      try {
+        event.dataTransfer.setData('text/plain', deviceId);
+      } catch (_) {}
+    }
+  }
+
+  function onDockTabsDragOver(event) {
+    if (!state.dockTabDragSourceId) return;
+    event.preventDefault();
+    const tab = event.target && event.target.closest('button[data-action="open"][data-device-id]');
+    clearDockTabDragMarkers();
+    const sourceTab = els.dockTabs
+      ? Array.from(els.dockTabs.querySelectorAll('button[data-action="open"][data-device-id]'))
+        .find((item) => toSafeString(item.getAttribute('data-device-id')) === state.dockTabDragSourceId)
+      : null;
+    if (sourceTab) sourceTab.classList.add('opacity-40');
+    if (!tab) {
+      state.dockTabDragTargetId = '';
+      state.dockTabDragInsertAfter = false;
+      return;
+    }
+    const targetId = toSafeString(tab.getAttribute('data-device-id'));
+    if (!targetId || targetId === state.dockTabDragSourceId) {
+      state.dockTabDragTargetId = '';
+      state.dockTabDragInsertAfter = false;
+      return;
+    }
+    const rect = tab.getBoundingClientRect();
+    const insertAfter = event.clientX > (rect.left + rect.width / 2);
+    state.dockTabDragTargetId = targetId;
+    state.dockTabDragInsertAfter = insertAfter;
+    tab.style.boxShadow = insertAfter
+      ? 'inset -2px 0 0 rgba(74, 222, 128, 0.9)'
+      : 'inset 2px 0 0 rgba(74, 222, 128, 0.9)';
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+  }
+
+  function onDockTabsDrop(event) {
+    if (!state.dockTabDragSourceId) return;
+    event.preventDefault();
+    const sourceId = state.dockTabDragSourceId;
+    let targetId = state.dockTabDragTargetId;
+    let insertAfter = !!state.dockTabDragInsertAfter;
+    const tab = event.target && event.target.closest('button[data-action="open"][data-device-id]');
+    if (tab) {
+      const id = toSafeString(tab.getAttribute('data-device-id'));
+      if (id === sourceId) {
+        resetDockTabDragState();
+        return;
+      }
+      if (id && id !== sourceId) {
+        targetId = id;
+        const rect = tab.getBoundingClientRect();
+        insertAfter = event.clientX > (rect.left + rect.width / 2);
+      }
+    }
+    const changed = reorderDeviceTabs(sourceId, targetId, insertAfter);
+    resetDockTabDragState();
+    if (changed) {
+      state.suppressDockClickUntil = Date.now() + 220;
+    }
+  }
+
+  function onDockTabsDragEnd() {
+    resetDockTabDragState();
+  }
+
   async function onDockTabsClick(event) {
+    if (Date.now() < (Number(state.suppressDockClickUntil) || 0)) return;
     const btn = event.target && event.target.closest('button[data-action="open"][data-device-id]');
     if (!btn) return;
     const deviceId = btn.getAttribute('data-device-id') || '';
@@ -2491,6 +2700,10 @@
     }
     if (els.dockTabs) {
       els.dockTabs.addEventListener('click', onDockTabsClick);
+      els.dockTabs.addEventListener('dragstart', onDockTabsDragStart);
+      els.dockTabs.addEventListener('dragover', onDockTabsDragOver);
+      els.dockTabs.addEventListener('drop', onDockTabsDrop);
+      els.dockTabs.addEventListener('dragend', onDockTabsDragEnd);
     }
     if (els.bindDeviceList) {
       els.bindDeviceList.addEventListener('click', onBindListClick);

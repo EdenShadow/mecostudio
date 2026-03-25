@@ -3316,7 +3316,6 @@
             if (!list) return;
             list.innerHTML = '';
             if (!Array.isArray(atChannels) || atChannels.length === 0) {
-                list.innerHTML = '<div class="meco-sidebar-empty px-3 py-2 text-xs text-gray-600">No channels yet</div>';
                 return;
             }
 
@@ -7970,9 +7969,7 @@
                     title="Create Channel"
                     onclick="openChannelCreateModal()">add</button>
         </div>
-        <div id="sidebar-channel-list" class="px-4 space-y-1">
-            <div class="meco-sidebar-empty px-3 py-2 text-xs text-gray-600">No channels yet</div>
-        </div>
+        <div id="sidebar-channel-list" class="px-4 space-y-1"></div>
         <div class="mt-auto px-4 py-6">
             <a class="meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-600 cursor-not-allowed rounded-xl transition-colors opacity-50 pointer-events-none" data-tooltip="Settings" title="Settings" href="javascript:void(0)">
                 <span class="material-icons-outlined">settings</span>
