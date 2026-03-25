@@ -1736,7 +1736,11 @@
 
   function updateSessionModeSwitchState(session) {
     if (!session) return;
-    const mode = toSafeString(session.mode).toLowerCase() === 'rustdesk' ? 'rustdesk' : 'web';
+    const pendingMode = toSafeString(session.pendingMode).toLowerCase();
+    const rawMode = session.switching && (pendingMode === 'rustdesk' || pendingMode === 'web')
+      ? pendingMode
+      : toSafeString(session.mode).toLowerCase();
+    const mode = rawMode === 'rustdesk' ? 'rustdesk' : 'web';
     const title = `${getDeviceLabel(session.device)} · ${(session.device && session.device.routePath) ? session.device.routePath : ''}`;
     if (session.titleEl) session.titleEl.textContent = title;
     if (session.badgeEl) session.badgeEl.textContent = mode === 'rustdesk' ? 'RUSTDESK' : 'WEB';
@@ -1750,6 +1754,74 @@
       session.modeRustdeskBtn.classList.toggle('text-cyan-200', mode === 'rustdesk');
       session.modeRustdeskBtn.classList.toggle('text-gray-300', mode !== 'rustdesk');
     }
+  }
+
+  function setSessionLoadingState(session, loading, message = '', options = {}) {
+    if (!session || !session.loadingEl) return;
+    const isError = !!(options && options.error);
+    if (!loading) {
+      session.loadingEl.classList.add('hidden');
+      session.loadingEl.dataset.error = '0';
+      return;
+    }
+    const text = toSafeString(message) || '正在加载...';
+    if (session.loadingTextEl) {
+      session.loadingTextEl.textContent = text;
+      session.loadingTextEl.classList.toggle('text-red-200', isError);
+      session.loadingTextEl.classList.toggle('text-gray-100', !isError);
+    }
+    if (session.loadingSpinnerEl) {
+      session.loadingSpinnerEl.classList.toggle('hidden', isError);
+    }
+    if (session.loadingErrorIconEl) {
+      session.loadingErrorIconEl.classList.toggle('hidden', !isError);
+    }
+    session.loadingEl.dataset.error = isError ? '1' : '0';
+    session.loadingEl.classList.remove('hidden');
+  }
+
+  function setSessionIframeSource(session, url, mode, loadingMessage = '') {
+    if (!session || !session.iframe) return;
+    const safeUrl = toSafeString(url) || 'about:blank';
+    const nextMode = mode === 'rustdesk' ? 'rustdesk' : 'web';
+    session.pendingLoadToken = (Number(session.pendingLoadToken) || 0) + 1;
+    session.iframe.dataset.loadToken = String(session.pendingLoadToken);
+    session.iframe.dataset.mode = nextMode;
+    setSessionLoadingState(session, true, loadingMessage || '正在连接远控...');
+    session.iframe.src = safeUrl;
+  }
+
+  function prefetchSessionModeLaunch(session, targetMode) {
+    if (!session) return;
+    const mode = targetMode === 'rustdesk' ? 'rustdesk' : 'web';
+    if (!session.prefetchingModes) {
+      session.prefetchingModes = { web: false, rustdesk: false };
+    }
+    const cached = session.launchCache && session.launchCache[mode];
+    if (cached && toSafeString(cached.url)) return;
+    if (session.prefetchingModes[mode]) return;
+
+    const device = getDeviceById(session.deviceId) || session.device;
+    if (!device || !device.id) return;
+    session.prefetchingModes[mode] = true;
+
+    const task = mode === 'rustdesk'
+      ? resolveRustdeskLaunch(device)
+      : resolveWebLaunch(device);
+
+    Promise.resolve(task)
+      .then((launch) => {
+        const url = toSafeString(launch && launch.url);
+        if (!url) return;
+        if (!session.launchCache) session.launchCache = {};
+        session.launchCache[mode] = { ...(launch || {}), sessionMode: mode, url };
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (session.prefetchingModes) {
+          session.prefetchingModes[mode] = false;
+        }
+      });
   }
 
   function bringSessionToFront(session, options = {}) {
@@ -1965,12 +2037,22 @@
     iframe.setAttribute('tabindex', '0');
     iframe.dataset.deviceId = toSafeString(device && device.id);
     iframe.dataset.mode = toSafeString(launch && launch.sessionMode);
-    iframe.src = toSafeString(launch && launch.url);
+    iframe.src = toSafeString(launch && launch.url) || 'about:blank';
+    const loading = document.createElement('div');
+    loading.className = 'absolute inset-0 z-[3] hidden flex items-start justify-center pt-3 bg-black/50 backdrop-blur-[1px] pointer-events-auto';
+    loading.innerHTML = `
+      <div class="max-w-[72%] rounded-lg border border-white/15 bg-black/75 px-3 py-2 text-xs text-gray-100 flex items-center gap-2 shadow-xl">
+        <span data-role="loading-spinner" class="inline-flex w-4 h-4 rounded-full border-2 border-cyan-300/40 border-t-cyan-200 animate-spin"></span>
+        <span data-role="loading-error-icon" class="hidden material-icons-round text-red-300 text-sm">error</span>
+        <span data-role="loading-text" class="leading-5">正在连接远控...</span>
+      </div>
+    `;
     const resizeHandle = document.createElement('div');
     resizeHandle.className = 'absolute right-0 bottom-0 w-5 h-5 cursor-nwse-resize';
     resizeHandle.dataset.action = 'resize';
     resizeHandle.innerHTML = '<span class="absolute right-1 bottom-1 block w-3 h-3 border-r-2 border-b-2 border-white/35"></span>';
     body.appendChild(iframe);
+    body.appendChild(loading);
     body.appendChild(resizeHandle);
 
     win.appendChild(header);
@@ -1992,12 +2074,30 @@
       modeWebBtn: header.querySelector('[data-action="mode-web"]'),
       modeRustdeskBtn: header.querySelector('[data-action="mode-rustdesk"]'),
       fullBtnIcon: header.querySelector('[data-action="full"] .material-icons-round'),
+      loadingEl: loading,
+      loadingTextEl: loading.querySelector('[data-role="loading-text"]'),
+      loadingSpinnerEl: loading.querySelector('[data-role="loading-spinner"]'),
+      loadingErrorIconEl: loading.querySelector('[data-role="loading-error-icon"]'),
       rect,
       fullscreen: false,
       prevRect: null,
       minimized: false,
-      switching: false
+      switching: false,
+      pendingMode: '',
+      pendingLoadToken: 0,
+      launchCache: {},
+      prefetchingModes: { web: false, rustdesk: false }
     };
+
+    iframe.addEventListener('load', () => {
+      const iframeToken = Number(iframe.dataset.loadToken || 0);
+      const activeToken = Number(session.pendingLoadToken || 0);
+      if (!iframeToken || iframeToken !== activeToken) return;
+      setSessionLoadingState(session, false);
+    });
+    iframe.addEventListener('error', () => {
+      setSessionLoadingState(session, true, '页面加载失败，请重试', { error: true });
+    });
 
     header.addEventListener('mousedown', (event) => {
       const target = event.target;
@@ -2025,7 +2125,7 @@
     const modeWebBtn = session.modeWebBtn;
     if (modeWebBtn) {
       modeWebBtn.addEventListener('click', () => {
-        switchSessionMode(session.id, 'web').catch((e) => {
+        switchSessionMode(session.id, 'web', { forceReconnect: false }).catch((e) => {
           alert(`切换到 Web 失败: ${e.message || e}`);
         });
       });
@@ -2033,7 +2133,7 @@
     const modeRustdeskBtn = session.modeRustdeskBtn;
     if (modeRustdeskBtn) {
       modeRustdeskBtn.addEventListener('click', () => {
-        switchSessionMode(session.id, 'rustdesk').catch((e) => {
+        switchSessionMode(session.id, 'rustdesk', { forceReconnect: false }).catch((e) => {
           alert(`切换到 RustDesk 失败: ${e.message || e}`);
         });
       });
@@ -2072,6 +2172,21 @@
     });
 
     state.sessions.set(session.id, session);
+    const initialMode = toSafeString(launch && launch.sessionMode).toLowerCase() === 'rustdesk' ? 'rustdesk' : 'web';
+    const initialUrl = toSafeString(launch && launch.url);
+    const hasInitialUrl = !!initialUrl && !/^about:blank$/i.test(initialUrl);
+    if (hasInitialUrl) {
+      session.launchCache[initialMode] = { ...(launch || {}), sessionMode: initialMode, url: initialUrl };
+      setSessionIframeSource(
+        session,
+        initialUrl,
+        initialMode,
+        initialMode === 'rustdesk' ? '正在打开 RustDesk...' : '正在打开 Web...'
+      );
+    } else {
+      setSessionLoadingState(session, true, initialMode === 'rustdesk' ? '正在准备 RustDesk...' : '正在准备 Web...');
+    }
+    prefetchSessionModeLaunch(session, initialMode === 'rustdesk' ? 'web' : 'rustdesk');
     applySessionRect(session, rect);
     updateSessionModeSwitchState(session);
     bringSessionToFront(session);
@@ -2191,32 +2306,68 @@
     return { ...launch, sessionMode: 'rustdesk', url: embedUrl };
   }
 
-  async function switchSessionMode(sessionId, targetMode) {
+  async function switchSessionMode(sessionId, targetMode, options = {}) {
     const session = state.sessions.get(sessionId);
     if (!session) return;
     const nextMode = targetMode === 'rustdesk' ? 'rustdesk' : 'web';
-    if (session.mode === nextMode) {
-      activateSession(session.id);
-      return;
+    const forceReconnect = !!(options && options.forceReconnect);
+    const currentMode = toSafeString(session.mode).toLowerCase() === 'rustdesk' ? 'rustdesk' : 'web';
+    const hasSessionError = session.loadingEl && session.loadingEl.dataset && session.loadingEl.dataset.error === '1';
+    if (currentMode === nextMode) {
+      if (!forceReconnect) {
+        if (hasSessionError) {
+          // Retry same mode when previous attempt failed.
+        } else {
+          activateSession(session.id);
+          return;
+        }
+      }
     }
     if (session.switching) return;
     session.switching = true;
+    session.pendingMode = nextMode;
+    updateSessionModeSwitchState(session);
+    setSessionLoadingState(session, true, nextMode === 'rustdesk' ? '正在切换到 RustDesk...' : '正在切换到 Web...');
+    activateSession(session.id);
     try {
       const device = getDeviceById(session.deviceId) || session.device;
       if (!device || !device.id) throw new Error('设备不存在');
-      const launch = nextMode === 'rustdesk'
-        ? await resolveRustdeskLaunch(device)
-        : await resolveWebLaunch(device);
+      let launch = null;
+      const cached = (!forceReconnect && !hasSessionError)
+        ? (session.launchCache && session.launchCache[nextMode] ? session.launchCache[nextMode] : null)
+        : null;
+      if (cached && toSafeString(cached.url)) {
+        launch = { ...cached };
+      } else {
+        launch = nextMode === 'rustdesk'
+          ? await resolveRustdeskLaunch(device)
+          : await resolveWebLaunch(device);
+      }
       session.mode = nextMode;
+      session.pendingMode = '';
       session.device = device;
       session.launch = launch;
       session.url = toSafeString(launch.url);
-      if (session.iframe) {
-        session.iframe.dataset.mode = nextMode;
-        session.iframe.src = session.url;
+      if (!session.launchCache) session.launchCache = {};
+      if (session.url) {
+        session.launchCache[nextMode] = { ...launch, sessionMode: nextMode, url: session.url };
       }
+      if (session.iframe) {
+        setSessionIframeSource(
+          session,
+          session.url,
+          nextMode,
+          nextMode === 'rustdesk' ? '正在进入 RustDesk...' : '正在进入 Web...'
+        );
+      }
+      prefetchSessionModeLaunch(session, nextMode === 'rustdesk' ? 'web' : 'rustdesk');
       updateSessionModeSwitchState(session);
       activateSession(session.id);
+    } catch (error) {
+      session.pendingMode = '';
+      updateSessionModeSwitchState(session);
+      setSessionLoadingState(session, true, `切换失败：${toSafeString(error && error.message) || '未知错误'}`, { error: true });
+      throw error;
     } finally {
       session.switching = false;
     }
@@ -2226,6 +2377,7 @@
     if (!deviceId) return;
     const forceModeRaw = toSafeString(options.forceMode).toLowerCase();
     const targetMode = forceModeRaw === 'rustdesk' ? 'rustdesk' : 'web';
+    const forceReconnect = !!options.forceReconnect;
 
     const device = getDeviceById(deviceId);
     if (!device) {
@@ -2239,19 +2391,22 @@
       if (session.minimized) {
         activateSession(session.id);
       }
-      if (session.mode !== targetMode) {
-        await switchSessionMode(session.id, targetMode);
+      const hasError = session.loadingEl && session.loadingEl.dataset && session.loadingEl.dataset.error === '1';
+      if (session.mode !== targetMode || forceReconnect || hasError) {
+        await switchSessionMode(session.id, targetMode, { forceReconnect: forceReconnect || hasError });
       } else {
         activateSession(session.id);
       }
       return;
     }
 
-    const launch = targetMode === 'rustdesk'
-      ? await resolveRustdeskLaunch(device)
-      : await resolveWebLaunch(device);
-    session = createSession(device, launch);
+    session = createSession(device, {
+      sessionMode: targetMode,
+      url: 'about:blank',
+      mode: targetMode
+    });
     activateSession(session.id);
+    await switchSessionMode(session.id, targetMode, { forceReconnect: true });
   }
 
   async function tryAutoOpenRemoteRoute() {
@@ -2529,7 +2684,7 @@
         return;
       }
       if (action === 'open-rustdesk') {
-        await openDeviceSession(deviceId, { forceMode: 'rustdesk' });
+        await openDeviceSession(deviceId, { forceMode: 'rustdesk', forceReconnect: true });
         closeBindModal();
         return;
       }

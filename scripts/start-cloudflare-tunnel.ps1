@@ -55,6 +55,11 @@ $CloudflareRuntimeDir = Get-EnvOrDefault -Name 'CLOUDFLARE_RUNTIME_DIR' -Default
 $CloudflareLogFile = Get-EnvOrDefault -Name 'CLOUDFLARE_LOG_FILE' -Default (Join-Path $CloudflareRuntimeDir 'tunnel.log')
 $CloudflareErrFile = Get-EnvOrDefault -Name 'CLOUDFLARE_ERR_FILE' -Default (Join-Path $CloudflareRuntimeDir 'tunnel.err.log')
 $CloudflarePidFile = Get-EnvOrDefault -Name 'CLOUDFLARE_PID_FILE' -Default (Join-Path $CloudflareRuntimeDir 'tunnel.pid')
+$CloudflareProtocol = Get-EnvOrDefault -Name 'CLOUDFLARE_PROTOCOL' -Default 'http2'
+$CloudflareEdgeIpVersion = Get-EnvOrDefault -Name 'CLOUDFLARE_EDGE_IP_VERSION' -Default '4'
+# Ignore legacy ~/.cloudflared/config.yml to avoid loading stale named-tunnel creds.
+$CloudflareConfigFile = Get-EnvOrDefault -Name 'CLOUDFLARE_CONFIG_FILE' -Default 'NUL'
+$CloudflareLocalUrl = Get-EnvOrDefault -Name 'CLOUDFLARE_LOCAL_URL' -Default 'http://127.0.0.1:3456'
 
 if ([string]::IsNullOrWhiteSpace($CloudflareTunnelToken)) {
   Throw-Fail 'Cloudflare tunnel token is empty.'
@@ -92,7 +97,7 @@ if (Test-Path $CloudflarePidFile) {
   Remove-Item -Force -Path $CloudflarePidFile -ErrorAction SilentlyContinue
 }
 
-$proc = Start-Process -FilePath $cloudflaredExe -ArgumentList @('tunnel', '--no-autoupdate', 'run', '--token', $CloudflareTunnelToken) -RedirectStandardOutput $CloudflareLogFile -RedirectStandardError $CloudflareErrFile -PassThru
+$proc = Start-Process -FilePath $cloudflaredExe -ArgumentList @('--config', $CloudflareConfigFile, 'tunnel', '--edge-ip-version', $CloudflareEdgeIpVersion, '--protocol', $CloudflareProtocol, '--no-autoupdate', 'run', '--token', $CloudflareTunnelToken, '--url', $CloudflareLocalUrl) -RedirectStandardOutput $CloudflareLogFile -RedirectStandardError $CloudflareErrFile -PassThru
 Set-Content -Path $CloudflarePidFile -Value $proc.Id -Encoding UTF8
 
 Start-Sleep -Seconds 1

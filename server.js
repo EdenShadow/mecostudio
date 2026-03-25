@@ -6756,7 +6756,22 @@ app.post('/api/remote/cloudflare/start', async (req, res) => {
     }
 
     const { spawn } = require('child_process');
-    const proc = spawn('cloudflared', ['tunnel', '--no-autoupdate', 'run', '--token', token], {
+    const configSink = process.platform === 'win32' ? 'NUL' : '/dev/null';
+    const proc = spawn('cloudflared', [
+      '--config',
+      configSink,
+      'tunnel',
+      '--edge-ip-version',
+      '4',
+      '--protocol',
+      'http2',
+      '--no-autoupdate',
+      'run',
+      '--token',
+      token,
+      '--url',
+      localUrl
+    ], {
       cwd: __dirname,
       env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe']

@@ -19,6 +19,11 @@ CLOUDFLARE_TUNNEL_TOKEN="${MECO_CLOUDFLARE_TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOK
 CLOUDFLARE_RUNTIME_DIR="${CLOUDFLARE_RUNTIME_DIR:-$HOME/.meco-studio/cloudflare}"
 CLOUDFLARE_LOG_FILE="${CLOUDFLARE_LOG_FILE:-$CLOUDFLARE_RUNTIME_DIR/tunnel.log}"
 CLOUDFLARE_PID_FILE="${CLOUDFLARE_PID_FILE:-$CLOUDFLARE_RUNTIME_DIR/tunnel.pid}"
+CLOUDFLARE_PROTOCOL="${CLOUDFLARE_PROTOCOL:-http2}"
+CLOUDFLARE_EDGE_IP_VERSION="${CLOUDFLARE_EDGE_IP_VERSION:-4}"
+# Ignore legacy ~/.cloudflared/config.yml to avoid loading stale named-tunnel creds.
+CLOUDFLARE_CONFIG_FILE="${CLOUDFLARE_CONFIG_FILE:-/dev/null}"
+CLOUDFLARE_LOCAL_URL="${CLOUDFLARE_LOCAL_URL:-http://127.0.0.1:3456}"
 
 [[ -n "$CLOUDFLARE_TUNNEL_TOKEN" ]] || die 'Cloudflare tunnel token is empty'
 
@@ -42,7 +47,7 @@ if [[ -f "$CLOUDFLARE_PID_FILE" ]]; then
   rm -f "$CLOUDFLARE_PID_FILE"
 fi
 
-nohup cloudflared tunnel --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN" >> "$CLOUDFLARE_LOG_FILE" 2>&1 &
+nohup cloudflared --config "$CLOUDFLARE_CONFIG_FILE" tunnel --edge-ip-version "$CLOUDFLARE_EDGE_IP_VERSION" --protocol "$CLOUDFLARE_PROTOCOL" --no-autoupdate run --token "$CLOUDFLARE_TUNNEL_TOKEN" --url "$CLOUDFLARE_LOCAL_URL" >> "$CLOUDFLARE_LOG_FILE" 2>&1 &
 new_pid=$!
 echo "$new_pid" > "$CLOUDFLARE_PID_FILE"
 
