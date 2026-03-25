@@ -49,6 +49,7 @@ $MecoAutoInstallCloudflared = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_CLOUDFLA
 $MecoAutoInstallRustdeskClient = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_RUSTDESK_CLIENT' -Default '1'
 $MecoAutoSetupRustdeskSelfhost = Get-EnvOrDefault -Name 'MECO_AUTO_SETUP_RUSTDESK_SELFHOST' -Default '0'
 $MecoAutoGrantRustdeskPermissions = Get-EnvOrDefault -Name 'MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS' -Default '1'
+$MecoAutoNormalizeRustdeskNetwork = Get-EnvOrDefault -Name 'MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK' -Default '1'
 $MecoAutoStartCloudflareTunnel = Get-EnvOrDefault -Name 'MECO_AUTO_START_CLOUDFLARE_TUNNEL' -Default '1'
 $MecoServicePort = [int](Get-EnvOrDefault -Name 'MECO_SERVICE_PORT' -Default '3456')
 $MecoServicePortScanMax = [int](Get-EnvOrDefault -Name 'MECO_SERVICE_PORT_SCAN_MAX' -Default '20')
@@ -356,6 +357,22 @@ function Grant-RustDeskPermissions {
   }
   else {
     Write-Warn 'RustDesk permission guidance failed (continue install)'
+  }
+}
+
+function Normalize-RustDeskNetwork {
+  if ($MecoAutoNormalizeRustdeskNetwork -ne '1') {
+    Write-Log "Skip RustDesk network normalization (MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK=$MecoAutoNormalizeRustdeskNetwork)"
+    return
+  }
+
+  Write-Log 'Normalizing RustDesk network config (LAN IP + stale virtual IP cleanup)...'
+  $ok = Invoke-RepoPowerShellScript -RelativePath 'scripts\normalize-rustdesk-network-win.ps1'
+  if ($ok) {
+    Write-Log 'RustDesk network normalization completed'
+  }
+  else {
+    Write-Warn 'RustDesk network normalization failed (continue install)'
   }
 }
 
@@ -1298,6 +1315,7 @@ function Main {
   Ensure-Cloudflared
   Ensure-RustDeskClient
   Setup-RustDeskSelfhost
+  Normalize-RustDeskNetwork
   Grant-RustDeskPermissions
   Ensure-HotTopicsKnowledgeBase
   Ensure-HotTopicsSkill

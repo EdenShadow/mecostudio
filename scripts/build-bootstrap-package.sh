@@ -17,6 +17,45 @@ die() {
   exit 1
 }
 
+sync_docs_version_stamp() {
+  local version_file="$REPO_ROOT/VERSION"
+  local version="0.0.1"
+  if [[ -f "$version_file" ]]; then
+    version="$(tr -d '[:space:]' < "$version_file" 2>/dev/null || true)"
+    [[ -n "$version" ]] || version="0.0.1"
+  fi
+
+  node - "$version" "$REPO_ROOT/README.md" "$REPO_ROOT/MECO-STUDIO-INSTALL.md" <<'NODE'
+const fs = require('fs');
+
+const version = String(process.argv[2] || '').trim() || '0.0.1';
+const files = process.argv.slice(3);
+const stampLine = `> 文档版本：\`${version}\``;
+const stampRe = /^>\s*文档版本：`[^`]+`$/m;
+
+for (const file of files) {
+  if (!file || !fs.existsSync(file)) continue;
+  const raw = fs.readFileSync(file, 'utf8');
+  let next = raw;
+  if (stampRe.test(next)) {
+    next = next.replace(stampRe, stampLine);
+  } else {
+    const lines = next.split(/\r?\n/);
+    const titleIndex = lines.findIndex((line) => /^#\s+/.test(line));
+    if (titleIndex >= 0) {
+      lines.splice(titleIndex + 1, 0, '', stampLine);
+      next = lines.join('\n');
+    } else {
+      next = `${stampLine}\n\n${next}`;
+    }
+  }
+  if (next !== raw) fs.writeFileSync(file, next, 'utf8');
+}
+NODE
+
+  log "Synced docs version stamp: $version"
+}
+
 extract_first_json() {
   node -e '
     const fs = require("fs");
@@ -306,6 +345,7 @@ copy_workspace_profile() {
 main() {
   command -v rsync >/dev/null 2>&1 || die "missing command: rsync"
   command -v node >/dev/null 2>&1 || die "missing command: node"
+  sync_docs_version_stamp
 
   mkdir -p "$BOOTSTRAP_DIR"
   mkdir -p "$BOOTSTRAP_DIR/data-agents" "$BOOTSTRAP_DIR/workspaces" "$BOOTSTRAP_DIR/openclaw-agents" "$BOOTSTRAP_DIR/skills/openclaw" "$BOOTSTRAP_DIR/skills/config"

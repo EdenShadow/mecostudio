@@ -49,6 +49,45 @@ sync_local_version_file() {
   fi
 }
 
+sync_docs_version_stamp() {
+  local version
+  version="$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || true)"
+  [[ -n "$version" ]] || version="0.0.1"
+
+  node - "$version" "$REPO_ROOT/README.md" "$REPO_ROOT/MECO-STUDIO-INSTALL.md" <<'NODE'
+const fs = require('fs');
+
+const version = String(process.argv[2] || '').trim() || '0.0.1';
+const files = process.argv.slice(3);
+const stampLine = `> 文档版本：\`${version}\``;
+const stampRe = /^>\s*文档版本：`[^`]+`$/m;
+
+for (const file of files) {
+  if (!file || !fs.existsSync(file)) continue;
+  const raw = fs.readFileSync(file, 'utf8');
+  let next = raw;
+  if (stampRe.test(next)) {
+    next = next.replace(stampRe, stampLine);
+  } else {
+    const lines = next.split(/\r?\n/);
+    if (lines.length === 0) lines.push('');
+    const titleIndex = lines.findIndex((line) => /^#\s+/.test(line));
+    if (titleIndex >= 0) {
+      lines.splice(titleIndex + 1, 0, '', stampLine);
+      next = lines.join('\n');
+    } else {
+      next = `${stampLine}\n\n${next}`;
+    }
+  }
+  if (next !== raw) {
+    fs.writeFileSync(file, next, 'utf8');
+  }
+}
+NODE
+
+  log "Synced docs version stamp: $version"
+}
+
 print_packaging_iron_law_scope() {
   log "Packaging iron-law scope (must verify on each package/release):"
   log "  1) OpenClaw: bootstrap/openclaw/workspaces/* + bootstrap/openclaw/openclaw-agents/*/agent/*"
@@ -69,6 +108,7 @@ enforce_no_room_runtime_tracking() {
 main() {
   ensure_version_file
   set_version_if_provided
+  sync_docs_version_stamp
   (cd "$REPO_ROOT" && bash scripts/build-bootstrap-package.sh)
   enforce_no_room_runtime_tracking
   sync_local_version_file

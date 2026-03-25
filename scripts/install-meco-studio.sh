@@ -43,6 +43,8 @@ MECO_COLIMA_DISK="${MECO_COLIMA_DISK:-20}"
 MECO_AUTO_INSTALL_RUSTDESK_CLIENT="${MECO_AUTO_INSTALL_RUSTDESK_CLIENT:-1}"
 MECO_AUTO_SETUP_RUSTDESK_SELFHOST="${MECO_AUTO_SETUP_RUSTDESK_SELFHOST:-0}"
 MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS="${MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS:-1}"
+MECO_AUTO_CONFIGURE_CLASH_RUSTDESK_DIRECT="${MECO_AUTO_CONFIGURE_CLASH_RUSTDESK_DIRECT:-1}"
+MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK="${MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK:-1}"
 MECO_AUTO_START_CLOUDFLARE_TUNNEL="${MECO_AUTO_START_CLOUDFLARE_TUNNEL:-1}"
 MECO_SERVICE_PORT="${MECO_SERVICE_PORT:-3456}"
 MECO_SERVICE_PORT_SCAN_MAX="${MECO_SERVICE_PORT_SCAN_MAX:-20}"
@@ -457,6 +459,48 @@ grant_rustdesk_permissions() {
       ;;
     *)
       warn "RustDesk permission helper is currently implemented for macOS in this shell script. Use PowerShell installer on Windows."
+      ;;
+  esac
+}
+
+configure_clash_rustdesk_direct() {
+  if [[ "$MECO_AUTO_CONFIGURE_CLASH_RUSTDESK_DIRECT" != "1" ]]; then
+    log "Skip ClashX RustDesk DIRECT rule setup (MECO_AUTO_CONFIGURE_CLASH_RUSTDESK_DIRECT=$MECO_AUTO_CONFIGURE_CLASH_RUSTDESK_DIRECT)"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Darwin)
+      log "Configuring ClashX/ClashX Pro RustDesk DIRECT rules (if Clash is installed)..."
+      if run_repo_bash_script "scripts/configure-clash-rustdesk-direct-mac.sh"; then
+        log "ClashX RustDesk DIRECT rule setup completed"
+      else
+        warn "ClashX RustDesk DIRECT rule setup failed (continuing)"
+      fi
+      ;;
+    *)
+      log "Skip ClashX RustDesk DIRECT rule setup on non-macOS"
+      ;;
+  esac
+}
+
+normalize_rustdesk_network() {
+  if [[ "$MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK" != "1" ]]; then
+    log "Skip RustDesk network normalization (MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK=$MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK)"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Darwin)
+      log "Normalizing RustDesk network config (LAN IP + stale virtual IP cleanup)..."
+      if run_repo_bash_script "scripts/normalize-rustdesk-network-mac.sh"; then
+        log "RustDesk network normalization completed"
+      else
+        warn "RustDesk network normalization failed (continuing)"
+      fi
+      ;;
+    *)
+      log "Skip RustDesk network normalization on non-macOS in shell installer (Windows handled by PowerShell installer)"
       ;;
   esac
 }
@@ -1662,6 +1706,8 @@ main() {
   ensure_cloudflared
   ensure_rustdesk_client
   setup_rustdesk_selfhost
+  configure_clash_rustdesk_direct
+  normalize_rustdesk_network
   grant_rustdesk_permissions
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets

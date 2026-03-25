@@ -4206,6 +4206,7 @@ function normalizeRemoteHttpBase(raw, defaultProtocol = 'https://') {
 const RUSTDESK_WEB_PROXY_BASE_URL = 'https://rustdesk.com/web/';
 const RUSTDESK_PUBLIC_RENDEZVOUS = 'rs-ny.rustdesk.com:21116';
 const RUSTDESK_DEFAULT_LOCAL_RENDEZVOUS = '';
+const RUSTDESK_DEFAULT_PUBLIC_RENDEZVOUS_CANDIDATES = 'rs-ny.rustdesk.com:21116,rs.rustdesk.com:21116,rs-sg.rustdesk.com:21116,rs-cn.rustdesk.com:21116';
 
 function parseRustDeskServerTarget(value, defaultPort = 21116) {
   const raw = remoteSafeString(value);
@@ -4268,20 +4269,48 @@ function splitRustDeskRendezvousCandidates(raw) {
     .filter(Boolean);
 }
 
-function getRustDeskLocalRendezvousCandidates(settings = {}) {
-  const fromSettings = splitRustDeskRendezvousCandidates(settings.rustdeskPreferredRendezvous || '');
-  const fallback = splitRustDeskRendezvousCandidates(RUSTDESK_DEFAULT_LOCAL_RENDEZVOUS);
-  const merged = fromSettings.length > 0 ? [...fromSettings, ...fallback] : fallback;
-  const picked = [];
+function normalizeRustDeskRendezvousCandidates(list = []) {
+  const out = [];
   const seen = new Set();
-  for (const item of merged) {
+  for (const item of list) {
     const parsed = parseRustDeskServerTarget(item);
     if (!parsed || !parsed.normalized) continue;
     if (seen.has(parsed.normalized)) continue;
     seen.add(parsed.normalized);
-    picked.push(parsed.normalized);
+    out.push(parsed.normalized);
   }
-  return picked;
+  return out;
+}
+
+function isLikelyLocalRustDeskServer(target) {
+  const parsed = parseRustDeskServerTarget(target);
+  if (!parsed || !parsed.host) return false;
+  const host = remoteSafeString(parsed.host).toLowerCase();
+  if (!host) return false;
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+  return isPrivateIpv4(host);
+}
+
+function getRustDeskLocalRendezvousCandidates(settings = {}) {
+  const fromSettings = splitRustDeskRendezvousCandidates(settings.rustdeskPreferredRendezvous || '');
+  const fallback = splitRustDeskRendezvousCandidates(RUSTDESK_DEFAULT_LOCAL_RENDEZVOUS);
+  const merged = fromSettings.length > 0 ? [...fromSettings, ...fallback] : fallback;
+  return normalizeRustDeskRendezvousCandidates(merged);
+}
+
+function getRustDeskPublicRendezvousCandidates(settings = {}) {
+  const fromSettings = splitRustDeskRendezvousCandidates(settings.rustdeskPreferredRendezvous || '')
+    .filter((item) => !isLikelyLocalRustDeskServer(item));
+  const fromEnv = splitRustDeskRendezvousCandidates(
+    process.env.MECO_RUSTDESK_PUBLIC_RENDEZVOUS_CANDIDATES || RUSTDESK_DEFAULT_PUBLIC_RENDEZVOUS_CANDIDATES
+  );
+  const merged = [
+    // Prefer built-in/env public rendezvous first; stale settings candidates append at tail.
+    ...fromEnv,
+    RUSTDESK_PUBLIC_RENDEZVOUS,
+    ...fromSettings
+  ];
+  return normalizeRustDeskRendezvousCandidates(merged);
 }
 
 function buildRustDeskWebProxyUrl(pathPart = '', search = '') {
@@ -4311,10 +4340,20 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
   const html = String(rawHtml || '');
   if (!html) return html;
   const localRendezvous = remoteSafeString(options.localRendezvous || '');
-  const initialRendezvous = remoteSafeString(options.initialRendezvous || '') || RUSTDESK_PUBLIC_RENDEZVOUS;
+  const publicCandidates = normalizeRustDeskRendezvousCandidates(
+    Array.isArray(options.publicCandidates)
+      ? options.publicCandidates
+      : splitRustDeskRendezvousCandidates(options.publicCandidates || '')
+  );
+  const effectivePublicCandidates = publicCandidates.length > 0
+    ? publicCandidates
+    : [RUSTDESK_PUBLIC_RENDEZVOUS];
+  const publicRendezvous = effectivePublicCandidates[0] || RUSTDESK_PUBLIC_RENDEZVOUS;
+  const initialRendezvous = remoteSafeString(options.initialRendezvous || '') || publicRendezvous;
   const serverKey = remoteSafeString(options.serverKey || '');
-  const injectServerKey = !!(serverKey && initialRendezvous && initialRendezvous !== RUSTDESK_PUBLIC_RENDEZVOUS);
-  const injectedPublicRendezvous = JSON.stringify(RUSTDESK_PUBLIC_RENDEZVOUS);
+  const injectServerKey = !!(serverKey && initialRendezvous && !effectivePublicCandidates.includes(initialRendezvous));
+  const injectedPublicRendezvous = JSON.stringify(publicRendezvous);
+  const injectedPublicCandidates = JSON.stringify(effectivePublicCandidates);
   const injectedLocalRendezvous = JSON.stringify(localRendezvous);
   const injectedInitialRendezvous = JSON.stringify(initialRendezvous);
   const injectedServerKey = JSON.stringify(injectServerKey ? serverKey : '');
@@ -4383,11 +4422,23 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '  };',
     '  const keyRendezvous = "wc-custom-rendezvous-server";',
     `  const publicRendezvous = ${injectedPublicRendezvous};`,
+    `  const rawPublicCandidates = ${injectedPublicCandidates};`,
     `  const localRendezvous = ${injectedLocalRendezvous};`,
     `  let rendezvousServer = ${injectedInitialRendezvous};`,
     `  let mecoKey = ${injectedServerKey};`,
     '  let mecoLocalKey = mecoKey;',
     '  const normalizeServer = (v) => normalize(v).replace(/^wss?:\\/\\//i, "").replace(/^https?:\\/\\//i, "").replace(/\\/+$/g, "");',
+    '  const publicCandidates = Array.isArray(rawPublicCandidates)',
+    '    ? rawPublicCandidates.map((item) => normalizeServer(item)).filter(Boolean)',
+    '    : [];',
+    '  if (!publicCandidates.length) {',
+    '    const fallbackPublic = normalizeServer(publicRendezvous);',
+    '    if (fallbackPublic) publicCandidates.push(fallbackPublic);',
+    '  }',
+    '  const isPublicCandidate = (value) => {',
+    '    const normalized = normalizeServer(value);',
+    '    return !!(normalized && publicCandidates.includes(normalized));',
+    '  };',
     '  const syncWebClientKeyStorage = () => {',
     '    try {',
     '      if (mecoKey) localStorage.setItem("wc-key", mecoKey);',
@@ -4395,12 +4446,13 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '    } catch (_) {}',
     '  };',
     '  const setRendezvousServer = (value) => {',
-    '    const next = normalizeServer(value) || publicRendezvous;',
+    '    const fallbackPublic = publicCandidates[0] || normalizeServer(publicRendezvous) || "";',
+    '    const next = normalizeServer(value) || fallbackPublic;',
     '    rendezvousServer = next;',
     '    try { localStorage.setItem(keyRendezvous, next); } catch (_) {}',
     '  };',
     '  const shouldFallbackRendezvous = () => {',
-    '    if (!rendezvousServer || rendezvousServer === publicRendezvous) return false;',
+    '    if (!rendezvousServer) return false;',
     '    const text = normalize((document.body && document.body.innerText) || "").toLowerCase();',
     '    return /failed to connect to rendezvous server|rendezvous server|连接.*rendezvous/.test(text);',
     '  };',
@@ -4515,8 +4567,9 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '      return false;',
     '    }',
     '  };',
-    '  const switchToPublicRendezvous = () => {',
-    '    if (rendezvousServer !== publicRendezvous) setRendezvousServer(publicRendezvous);',
+    '  const switchToPublicRendezvous = (target = "") => {',
+    '    const next = normalizeServer(target) || publicCandidates[0] || normalizeServer(publicRendezvous);',
+    '    if (next && rendezvousServer !== next) setRendezvousServer(next);',
     '    mecoKey = "";',
     '    syncWebClientKeyStorage();',
     '    if (hasRustDeskBridge()) {',
@@ -4526,9 +4579,11 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '  };',
     '  const LOCAL_RENDEZVOUS_TIMEOUT_MS = 9000;',
     '  const RECONNECT_COOLDOWN_MS = 700;',
+    '  const PUBLIC_SWITCH_COOLDOWN_MS = 2000;',
     '  let localRendezvousDeadlineAt = Date.now() + LOCAL_RENDEZVOUS_TIMEOUT_MS;',
-    '  let didFallbackToPublic = rendezvousServer === publicRendezvous;',
+    '  let didFallbackToPublic = isPublicCandidate(rendezvousServer);',
     '  let reconnectRequestedAt = 0;',
+    '  let publicSwitchAt = 0;',
     '  const resetAutoConnectAttempts = () => {',
     '    connectAttempts = 0;',
     '    loginAttempts = 0;',
@@ -4548,8 +4603,23 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '      callSetByName("connect", "");',
     '    }',
     '  };',
+    '  const switchToNextPublicRendezvous = () => {',
+    '    if (publicCandidates.length <= 1) return false;',
+    '    const now = Date.now();',
+    '    if (now - publicSwitchAt < PUBLIC_SWITCH_COOLDOWN_MS) return false;',
+    '    publicSwitchAt = now;',
+    '    const current = normalizeServer(rendezvousServer);',
+    '    const idx = publicCandidates.indexOf(current);',
+    '    const next = publicCandidates[(idx >= 0 ? idx + 1 : 0) % publicCandidates.length] || "";',
+    '    if (!next || next === current) return false;',
+    '    switchToPublicRendezvous(next);',
+    '    didFallbackToPublic = true;',
+    '    resetAutoConnectAttempts();',
+    '    requestReconnect();',
+    '    return true;',
+    '  };',
     '  const triggerPublicFallback = () => {',
-    '    if (rendezvousServer === publicRendezvous) return false;',
+    '    if (isPublicCandidate(rendezvousServer)) return false;',
     '    switchToPublicRendezvous();',
     '    didFallbackToPublic = true;',
     '    resetAutoConnectAttempts();',
@@ -4612,7 +4682,7 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '      const nextServerKey = normalize(info.serverKey);',
     '      if (nextServerKey) {',
     '        mecoLocalKey = nextServerKey;',
-    '        if (rendezvousServer !== publicRendezvous) {',
+    '        if (!isPublicCandidate(rendezvousServer)) {',
     '          mecoKey = nextServerKey;',
     '          syncWebClientKeyStorage();',
     '        }',
@@ -4626,7 +4696,7 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '      bridgeLoginAttempts = 0;',
     '      connectAttempts = 0;',
     '      loginAttempts = 0;',
-    '      if (rendezvousServer !== publicRendezvous && !didFallbackToPublic) {',
+    '      if (!isPublicCandidate(rendezvousServer) && !didFallbackToPublic) {',
     '        localRendezvousDeadlineAt = Date.now() + LOCAL_RENDEZVOUS_TIMEOUT_MS;',
     '      }',
     '    } catch (_) {}',
@@ -4846,16 +4916,18 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '    try {',
     '      if (shouldFallbackRendezvous()) {',
     '        if (!triggerPublicFallback()) {',
-    '          resetAutoConnectAttempts();',
-    '          requestReconnect();',
+    '          if (!switchToNextPublicRendezvous()) {',
+    '            resetAutoConnectAttempts();',
+    '            requestReconnect();',
+    '          }',
     '        }',
     '      }',
     '      if (hasOfflineDialog()) {',
-    '        triggerPublicFallback();',
+    '        if (!triggerPublicFallback()) switchToNextPublicRendezvous();',
     '        requestReconnect();',
     '      }',
     '      if (hasIdNotExistDialog()) {',
-    '        triggerPublicFallback();',
+    '        if (!triggerPublicFallback()) switchToNextPublicRendezvous();',
     '        requestReconnect();',
     '      }',
     '      if (hasWrongPasswordDialog()) {',
@@ -4866,7 +4938,7 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '          refreshPasswordFromLocalInfo();',
     '        }',
     '      }',
-    '      if (mecoAutoConnect && mecoId && rendezvousServer !== publicRendezvous && !didFallbackToPublic) {',
+    '      if (mecoAutoConnect && mecoId && !isPublicCandidate(rendezvousServer) && !didFallbackToPublic) {',
     '        const statusNum = getConnStatusNum();',
     '        if (statusNum > 0) {',
     '          localRendezvousDeadlineAt = Date.now() + LOCAL_RENDEZVOUS_TIMEOUT_MS;',
@@ -16738,11 +16810,13 @@ app.get(/^\/rustdesk-web\/(.*)$/, async (req, res) => {
     const contentType = remoteSafeString(upstream.headers.get('content-type')).toLowerCase();
     if (contentType.includes('text/html')) {
       const settings = getRuntimeSettings();
+      const publicCandidates = getRustDeskPublicRendezvousCandidates(settings);
+      const publicCandidateSet = new Set(publicCandidates);
       const localCandidates = getRustDeskLocalRendezvousCandidates(settings)
-        .filter((candidate) => candidate !== RUSTDESK_PUBLIC_RENDEZVOUS);
+        .filter((candidate) => !publicCandidateSet.has(candidate));
       const shouldTryLocal = localCandidates.length > 0;
       let preferredLocal = shouldTryLocal ? localCandidates[0] : '';
-      let initialRendezvous = RUSTDESK_PUBLIC_RENDEZVOUS;
+      let initialRendezvous = publicCandidates[0] || RUSTDESK_PUBLIC_RENDEZVOUS;
       if (shouldTryLocal) {
         for (const candidate of localCandidates) {
           const localReachable = await probeRustDeskServerTcp(candidate, 650);
@@ -16758,6 +16832,7 @@ app.get(/^\/rustdesk-web\/(.*)$/, async (req, res) => {
       return res.send(rewriteRustDeskWebHtml(rawHtml, {
         localRendezvous: shouldTryLocal ? preferredLocal : '',
         initialRendezvous,
+        publicCandidates,
         serverKey
       }));
     }

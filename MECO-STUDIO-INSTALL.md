@@ -1,5 +1,7 @@
 # Meco Studio 安装 / 升级 / API Key 一体文档（AI 可读）
 
+> 文档版本：`0.0.6`
+
 ## 一行安装（Install）
 
 ```bash
@@ -45,6 +47,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
   - macOS/Linux：`scripts/setup-rustdesk-selfhost.sh`
   - Windows：`scripts/setup-rustdesk-selfhost.ps1`
   - 启用方式：`MECO_AUTO_SETUP_RUSTDESK_SELFHOST=1`
+- 如果检测到 macOS 安装了 ClashX/ClashX Pro，会自动写入 RustDesk 直连规则（可关闭）
+- 自动修正 RustDesk `local-ip-addr`（剔除 `26.x` 等虚拟网卡地址并写入真实局域网 IP），并重启 RustDesk 生效
 - 自动执行 RustDesk 远控权限引导：
   - macOS：`scripts/grant-rustdesk-permissions-mac.sh`
   - Windows：`scripts/grant-rustdesk-permissions-win.ps1`
@@ -176,6 +180,8 @@ MECO_AUTO_INSTALL_DOCKER=1 \
 MECO_AUTO_INSTALL_RUSTDESK_CLIENT=1 \
 MECO_AUTO_SETUP_RUSTDESK_SELFHOST=0 \
 MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS=1 \
+MECO_AUTO_CONFIGURE_CLASH_RUSTDESK_DIRECT=1 \
+MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK=1 \
 MECO_AUTO_START_CLOUDFLARE_TUNNEL=1 \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
@@ -204,6 +210,8 @@ $env:MECO_AUTO_INSTALL_DOCKER = "1"
 $env:MECO_AUTO_INSTALL_RUSTDESK_CLIENT = "1"
 $env:MECO_AUTO_SETUP_RUSTDESK_SELFHOST = "0"
 $env:MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS = "1"
+$env:MECO_AUTO_CONFIGURE_CLASH_RUSTDESK_DIRECT = "1"
+$env:MECO_AUTO_NORMALIZE_RUSTDESK_NETWORK = "1"
 $env:MECO_AUTO_START_CLOUDFLARE_TUNNEL = "1"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
 ```
@@ -288,6 +296,8 @@ post_install_auto:
   - "install kimi cli"
   - "install RustDesk client (macOS/Windows)"
   - "prefer RustDesk public rendezvous by default; optional self-host setup via env switch"
+  - "if ClashX/ClashX Pro is installed on macOS, auto-patch RustDesk DIRECT rules in clash config"
+  - "normalize RustDesk local-ip-addr to real LAN IP and remove stale virtual adapter IPs (26.x etc)"
   - "run RustDesk local permission guidance (screen/accessibility/firewall)"
   - "install cloudflared and auto start tunnel with preset token"
   - "install skills runtime deps (python + node, including whisper)"

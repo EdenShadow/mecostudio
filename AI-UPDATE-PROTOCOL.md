@@ -49,6 +49,14 @@ upgrade_plan:
     action: "ensure kimi cli installed"
     expected: "kimi 命令可用"
 
+  - step: "configure_clash_rustdesk_direct_if_needed"
+    action: "if macOS has ClashX/ClashX Pro, auto-patch RustDesk DIRECT rules"
+    expected: "RustDesk traffic avoids proxy detours; reduce 'not ready / network error' cases"
+
+  - step: "normalize_rustdesk_local_ip"
+    action: "rewrite RustDesk local-ip-addr to real LAN IP and remove stale virtual IPs (26.x), then restart RustDesk"
+    expected: "improve LAN P2P hit rate; reduce fallback relay latency"
+
   - step: "sync_bootstrap_assets"
     action: "overlay bootstrap assets to target paths"
     assets:
@@ -105,6 +113,10 @@ operator_commands:
   package_sync_before_commit: "bash scripts/sync-bootstrap-and-version.sh"
   package_sync_with_bump: "bash scripts/sync-bootstrap-and-version.sh <x.y.z>"
   permission_preflight: "bash scripts/openclaw-permission-preflight.sh"
+
+packaging_behavior:
+  rules:
+    - "每次打包会自动把 VERSION 同步到 README.md 与 MECO-STUDIO-INSTALL.md 的 `文档版本` 标记"
 ```
 
 ## Notes for AI Agent

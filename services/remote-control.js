@@ -613,7 +613,29 @@ function importControlCode(code, settings = {}) {
     password: payload.rustdeskPassword || payload.rustdeskOneTimePassword || payload.password,
     importedFromCode: true
   };
-  return createDevice(candidate, settings);
+  try {
+    return createDevice(candidate, settings);
+  } catch (err) {
+    if (!err || err.code !== 'duplicate_route') {
+      throw err;
+    }
+    const store = readStore();
+    const normalized = normalizeDevicePayload(candidate, settings, null);
+    const routeKey = `${toSafeString(normalized.ownerSlug)}/${toSafeString(normalized.deviceSlug)}`;
+    const targetRustdeskId = toSafeString(normalized.rustdeskId || normalized.meshNodeId).replace(/\s+/g, '');
+
+    const existing = store.devices.find((dev) => {
+      if (!dev || typeof dev !== 'object') return false;
+      const curRouteKey = `${toSafeString(dev.ownerSlug)}/${toSafeString(dev.deviceSlug)}`;
+      if (routeKey && curRouteKey === routeKey) return true;
+      const curRustdeskId = toSafeString(dev.rustdeskId || dev.meshNodeId).replace(/\s+/g, '');
+      return !!(targetRustdeskId && curRustdeskId && targetRustdeskId === curRustdeskId);
+    });
+    if (!existing || !toSafeString(existing.id)) {
+      throw err;
+    }
+    return updateDevice(existing.id, candidate, settings);
+  }
 }
 
 function resolveLaunch(id, options = {}, settings = {}) {
