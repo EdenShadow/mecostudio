@@ -40,9 +40,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 - 自动安装 RustDesk 客户端：
   - macOS：`scripts/install-rustdesk-client-mac.sh`
   - Windows：`scripts/install-rustdesk-client-win.ps1`
-- 自动配置并启动 RustDesk 本地自建服务（hbbs/hbbr）：
+- RustDesk 默认优先官方公网服务（安装时会清理旧 localhost 自建优先配置）
+- 可选配置 RustDesk 本地自建服务（默认关闭）：
   - macOS/Linux：`scripts/setup-rustdesk-selfhost.sh`
   - Windows：`scripts/setup-rustdesk-selfhost.ps1`
+  - 启用方式：`MECO_AUTO_SETUP_RUSTDESK_SELFHOST=1`
 - 自动执行 RustDesk 远控权限引导：
   - macOS：`scripts/grant-rustdesk-permissions-mac.sh`
   - Windows：`scripts/grant-rustdesk-permissions-win.ps1`
@@ -57,9 +59,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
   - Node：自动扫描 OpenClaw/config skills 的 `package.json` 并安装
 - 初始化 `~/Documents/知识库/热门话题` 及分类目录（只补齐缺失，不覆盖已有内容）
 - 默认清空测试房间数据（`data/rooms.json = []`）
+- 自动确保 OpenClaw Gateway 已启动，并检查 `/v1/chat/completions` 端点可用
 - 启动服务（默认 `http://127.0.0.1:3456`）
+- 启动服务时自动处理端口冲突（优先回收旧 meco 进程，必要时切换可用端口）
 - 自动写入远控默认配置（Cloudflare host/token + RustDesk Web 地址）
-- 若为升级流程：完成后自动重启 OpenClaw Gateway 与 Meco Studio
 - 同步版本号文件：`VERSION` -> `~/.meco-studio/VERSION`
 
 ## Git 同步范围（安装/更新自动下发）
@@ -166,10 +169,12 @@ MECO_OPENAI_API_KEY="" \
 MECO_CLOUDFLARE_PUBLIC_HOST="https://mecoclaw.com" \
 MECO_CLOUDFLARE_TUNNEL_TOKEN="<built-in-default-or-your-token>" \
 MECO_RUSTDESK_WEB_BASE_URL="/rustdesk-web/" \
-MECO_RUSTDESK_PREFERRED_RENDEZVOUS="127.0.0.1:21116,127.0.0.1:21118" \
+MECO_RUSTDESK_PREFERRED_RENDEZVOUS="" \
+MECO_RUSTDESK_SELFHOST_BACKEND="docker" \
 MECO_AUTO_INSTALL_CLOUDFLARED=1 \
+MECO_AUTO_INSTALL_DOCKER=1 \
 MECO_AUTO_INSTALL_RUSTDESK_CLIENT=1 \
-MECO_AUTO_SETUP_RUSTDESK_SELFHOST=1 \
+MECO_AUTO_SETUP_RUSTDESK_SELFHOST=0 \
 MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS=1 \
 MECO_AUTO_START_CLOUDFLARE_TUNNEL=1 \
 HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
@@ -192,10 +197,12 @@ $env:MECO_OSS_ACCESS_KEY_SECRET = "<your-oss-access-key-secret>"
 $env:MECO_CLOUDFLARE_PUBLIC_HOST = "https://mecoclaw.com"
 $env:MECO_CLOUDFLARE_TUNNEL_TOKEN = "<built-in-default-or-your-token>"
 $env:MECO_RUSTDESK_WEB_BASE_URL = "/rustdesk-web/"
-$env:MECO_RUSTDESK_PREFERRED_RENDEZVOUS = "127.0.0.1:21116,127.0.0.1:21118"
+$env:MECO_RUSTDESK_PREFERRED_RENDEZVOUS = ""
+$env:MECO_RUSTDESK_SELFHOST_BACKEND = "auto"
 $env:MECO_AUTO_INSTALL_CLOUDFLARED = "1"
+$env:MECO_AUTO_INSTALL_DOCKER = "1"
 $env:MECO_AUTO_INSTALL_RUSTDESK_CLIENT = "1"
-$env:MECO_AUTO_SETUP_RUSTDESK_SELFHOST = "1"
+$env:MECO_AUTO_SETUP_RUSTDESK_SELFHOST = "0"
 $env:MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS = "1"
 $env:MECO_AUTO_START_CLOUDFLARE_TUNNEL = "1"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex"
@@ -277,9 +284,10 @@ post_install_auto:
   - "auto discover openclaw http/ws/token from local config"
   - "bootstrap openclaw kimi-code auth profile to avoid moonshot 401 mismatch"
   - "write openclaw model + provider defaults (kimi-coding/k2p5)"
+  - "ensure OpenClaw gateway is running and chat-completions endpoint is ready"
   - "install kimi cli"
   - "install RustDesk client (macOS/Windows)"
-  - "setup RustDesk self-host server (hbbs/hbbr) and set client rendezvous"
+  - "prefer RustDesk public rendezvous by default; optional self-host setup via env switch"
   - "run RustDesk local permission guidance (screen/accessibility/firewall)"
   - "install cloudflared and auto start tunnel with preset token"
   - "install skills runtime deps (python + node, including whisper)"
@@ -287,7 +295,7 @@ post_install_auto:
   - "sync OpenClaw agents/workspaces + local data-agents"
   - "sync rule knowledge folders to upload root"
   - "init hot-topics folders"
-  - "restart OpenClaw gateway and Meco Studio on upgrade"
+  - "start/restart OpenClaw gateway + Meco Studio with port-conflict handling"
   - "sync repo VERSION to ~/.meco-studio/VERSION"
 ```
 

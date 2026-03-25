@@ -73,6 +73,30 @@ function normalizeLaunchUrl(raw) {
   return normalizeHttpUrl(value, { defaultProtocol: 'https://' }) || '';
 }
 
+function parseRustDeskSchemeLaunch(rawUrl) {
+  const text = toSafeString(rawUrl);
+  if (!/^rustdesk:\/\//i.test(text)) {
+    return { id: '', password: '', key: '' };
+  }
+  try {
+    const parsed = new URL(text);
+    const rawId = decodeURIComponent(
+      String(parsed.pathname || '')
+        .replace(/^\/+/, '')
+        .split('/')
+        .filter(Boolean)
+        .pop() || ''
+    );
+    return {
+      id: toSafeString(rawId).replace(/\s+/g, ''),
+      password: toSafeString(parsed.searchParams.get('password') || ''),
+      key: toSafeString(parsed.searchParams.get('key') || '')
+    };
+  } catch (_) {
+    return { id: '', password: '', key: '' };
+  }
+}
+
 function normalizeHostBase(raw) {
   const normalized = normalizeHttpUrl(raw, { defaultProtocol: 'https://' });
   return trimTrailingSlash(normalized);
@@ -235,21 +259,61 @@ function normalizeDevicePayload(input = {}, settings = {}, existing = null) {
   const rustdeskLaunchUrl = hasRustDeskLaunchUrl
     ? (normalizeLaunchUrl(rawRustDeskLaunchUrl || '') || '')
     : (normalizeLaunchUrl(rawRustDeskLaunchUrl || '') || '');
+  const parsedLaunch = parseRustDeskSchemeLaunch(rustdeskLaunchUrl);
 
-  const hasRustDeskId = hasOwn(input, 'rustdeskId') || hasOwn(input, 'meshNodeId');
-  const rustdeskId = toSafeString(
+  let rustdeskId = toSafeString(
     hasOwn(input, 'rustdeskId')
       ? input.rustdeskId
       : (hasOwn(input, 'meshNodeId') ? input.meshNodeId : (existing ? (existing.rustdeskId || existing.meshNodeId) : ''))
-  );
+  ).replace(/\s+/g, '');
+  if (!rustdeskId) {
+    rustdeskId = toSafeString(parsedLaunch.id).replace(/\s+/g, '');
+  }
 
-  const password = toSafeString(
+  let password = toSafeString(
     hasOwn(input, 'rustdeskPassword')
       ? input.rustdeskPassword
       : (
         hasOwn(input, 'password')
           ? input.password
           : (hasOwn(input, 'accessPassword') ? input.accessPassword : (existing ? existing.password : ''))
+      )
+  );
+  if (!password) {
+    password = toSafeString(parsedLaunch.password);
+  }
+
+  let rustdeskKey = toSafeString(
+    hasOwn(input, 'rustdeskKey')
+      ? input.rustdeskKey
+      : (
+        hasOwn(input, 'meshKey')
+          ? input.meshKey
+          : (
+            hasOwn(input, 'key')
+              ? input.key
+              : (existing ? (existing.rustdeskKey || existing.meshKey) : '')
+          )
+      )
+  );
+  if (!rustdeskKey) {
+    rustdeskKey = toSafeString(parsedLaunch.key);
+  }
+
+  const explicitRustdeskKey = hasOwn(input, 'rustdeskKey') || hasOwn(input, 'meshKey') || hasOwn(input, 'key');
+  const explicitRustdeskPrivateKey = hasOwn(input, 'rustdeskPrivateKey') || hasOwn(input, 'meshPrivateKey') || hasOwn(input, 'privateKey');
+
+  const rustdeskPrivateKey = toSafeString(
+    hasOwn(input, 'rustdeskPrivateKey')
+      ? input.rustdeskPrivateKey
+      : (
+        hasOwn(input, 'meshPrivateKey')
+          ? input.meshPrivateKey
+          : (
+            hasOwn(input, 'privateKey')
+              ? input.privateKey
+              : (existing ? (existing.rustdeskPrivateKey || existing.meshPrivateKey) : '')
+          )
       )
   );
 
@@ -266,7 +330,13 @@ function normalizeDevicePayload(input = {}, settings = {}, existing = null) {
     ),
     lanUrl,
     publicUrl,
-    meshNodeId: hasRustDeskId ? rustdeskId : toSafeString(existing ? existing.meshNodeId : ''),
+    meshNodeId: rustdeskId || toSafeString(existing ? existing.meshNodeId : ''),
+    meshKey: explicitRustdeskKey
+      ? rustdeskKey
+      : (rustdeskKey || toSafeString(existing ? existing.meshKey : '')),
+    meshPrivateKey: explicitRustdeskPrivateKey
+      ? rustdeskPrivateKey
+      : (rustdeskPrivateKey || toSafeString(existing ? existing.meshPrivateKey : '')),
     meshDomain: toSafeString(
       hasOwn(input, 'meshDomain')
         ? input.meshDomain
@@ -275,6 +345,12 @@ function normalizeDevicePayload(input = {}, settings = {}, existing = null) {
     meshLaunchUrl: rustdeskLaunchUrl,
     rustdeskId,
     rustdeskLaunchUrl,
+    rustdeskKey: explicitRustdeskKey
+      ? rustdeskKey
+      : (rustdeskKey || toSafeString(existing ? (existing.rustdeskKey || existing.meshKey) : '')),
+    rustdeskPrivateKey: explicitRustdeskPrivateKey
+      ? rustdeskPrivateKey
+      : (rustdeskPrivateKey || toSafeString(existing ? (existing.rustdeskPrivateKey || existing.meshPrivateKey) : '')),
     password,
     meta: {
       importedFromCode: !!(input && input.importedFromCode)
@@ -298,6 +374,10 @@ function buildMeshLaunchUrl(device, settings = {}) {
   if (isLikelyRustDeskId(rawRustDeskId)) {
     const authority = toSafeString(settings.rustdeskSchemeAuthority || 'connect') || 'connect';
     const params = new URLSearchParams();
+    const key = toSafeString(device.rustdeskKey || device.meshKey || '');
+    if (key) {
+      params.set('key', key);
+    }
     const password = toSafeString(device.password || '');
     if (password) {
       params.set('password', password);
@@ -317,6 +397,8 @@ function toPublicDeviceView(device, settings = {}, options = {}) {
   const resolvedMeshLaunchUrl = buildMeshLaunchUrl(device, settings);
   const meshDesktopReady = !!toSafeString(resolvedMeshLaunchUrl);
   const rustdeskId = toSafeString(device.rustdeskId || device.meshNodeId);
+  const rustdeskKey = toSafeString(device.rustdeskKey || device.meshKey);
+  const rustdeskPrivateKey = toSafeString(device.rustdeskPrivateKey || device.meshPrivateKey);
 
   const view = {
     id: toSafeString(device.id),
@@ -329,12 +411,16 @@ function toPublicDeviceView(device, settings = {}, options = {}) {
     lanUrl: toSafeString(device.lanUrl),
     publicUrl: toSafeString(derivedPublicUrl || device.publicUrl),
     meshNodeId: rustdeskId,
+    meshKey: rustdeskKey,
     meshDomain: toSafeString(device.meshDomain),
     meshLaunchUrl: resolvedMeshLaunchUrl,
     meshDesktopReady: !!meshDesktopReady,
     rustdeskId,
     rustdeskLaunchUrl: resolvedMeshLaunchUrl,
+    rustdeskKey,
     rustdeskReady: !!meshDesktopReady,
+    hasRustdeskKey: !!rustdeskKey,
+    hasRustdeskPrivateKey: !!rustdeskPrivateKey,
     hasPassword: !!toSafeString(device.password),
     passwordMasked: toSafeString(device.password) ? '******' : '',
     importedFromCode: !!(device.meta && device.meta.importedFromCode),
@@ -344,6 +430,8 @@ function toPublicDeviceView(device, settings = {}, options = {}) {
 
   if (includeSensitive) {
     view.password = toSafeString(device.password);
+    view.rustdeskPrivateKey = rustdeskPrivateKey;
+    view.meshPrivateKey = rustdeskPrivateKey;
   }
 
   return view;
@@ -485,10 +573,14 @@ function generateControlCode(id, settings = {}) {
     lanUrl: device.lanUrl,
     publicUrl: device.publicUrl,
     meshNodeId: device.meshNodeId,
+    meshKey: device.rustdeskKey || device.meshKey || '',
+    meshPrivateKey: device.rustdeskPrivateKey || device.meshPrivateKey || '',
     meshDomain: device.meshDomain,
     meshLaunchUrl: device.meshLaunchUrl,
     rustdeskId: device.rustdeskId || device.meshNodeId,
     rustdeskLaunchUrl: device.rustdeskLaunchUrl || device.meshLaunchUrl,
+    rustdeskKey: device.rustdeskKey || device.meshKey || '',
+    rustdeskPrivateKey: device.rustdeskPrivateKey || device.meshPrivateKey || '',
     rustdeskPassword: device.password,
     rustdeskOneTimePassword: device.password,
     rustdeskRememberPassword: !!toSafeString(device.password),
@@ -512,8 +604,12 @@ function importControlCode(code, settings = {}) {
     lanUrl: payload.lanUrl,
     publicUrl: payload.publicUrl,
     meshNodeId: payload.rustdeskId || payload.meshNodeId,
+    meshKey: payload.rustdeskKey || payload.meshKey || payload.key,
+    meshPrivateKey: payload.rustdeskPrivateKey || payload.meshPrivateKey || payload.privateKey,
     meshDomain: payload.meshDomain,
     meshLaunchUrl: payload.rustdeskLaunchUrl || payload.meshLaunchUrl,
+    rustdeskKey: payload.rustdeskKey || payload.meshKey || payload.key,
+    rustdeskPrivateKey: payload.rustdeskPrivateKey || payload.meshPrivateKey || payload.privateKey,
     password: payload.rustdeskPassword || payload.rustdeskOneTimePassword || payload.password,
     importedFromCode: true
   };

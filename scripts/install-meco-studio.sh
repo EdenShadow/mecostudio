@@ -33,12 +33,19 @@ MECO_CLOUDFLARE_PUBLIC_HOST="${MECO_CLOUDFLARE_PUBLIC_HOST:-https://mecoclaw.com
 MECO_CLOUDFLARE_PATH_PREFIX="${MECO_CLOUDFLARE_PATH_PREFIX:-}"
 MECO_CLOUDFLARE_TUNNEL_TOKEN="${MECO_CLOUDFLARE_TUNNEL_TOKEN:-eyJhIjoiNzMyNGQ3ZjU3MGY5MzBlMjRjODRlYTY2ZmNkM2IwYjUiLCJ0IjoiYTk1OTZiMDgtNDZjOC00NmRlLWIzZGYtN2NjYjQ4OTJhM2NkIiwicyI6Ik5EWmlaREV4TjJFdFpXRXdNeTAwWlRNNExXSTJZakF0TWpFek5HRmlNVEl4WXpCaiJ9}"
 MECO_RUSTDESK_WEB_BASE_URL="${MECO_RUSTDESK_WEB_BASE_URL:-/rustdesk-web/}"
-MECO_RUSTDESK_PREFERRED_RENDEZVOUS="${MECO_RUSTDESK_PREFERRED_RENDEZVOUS:-127.0.0.1:21116,127.0.0.1:21118}"
+MECO_RUSTDESK_PREFERRED_RENDEZVOUS="${MECO_RUSTDESK_PREFERRED_RENDEZVOUS:-}"
+MECO_RUSTDESK_SELFHOST_BACKEND="${MECO_RUSTDESK_SELFHOST_BACKEND:-}"
 MECO_AUTO_INSTALL_CLOUDFLARED="${MECO_AUTO_INSTALL_CLOUDFLARED:-1}"
+MECO_AUTO_INSTALL_DOCKER="${MECO_AUTO_INSTALL_DOCKER:-1}"
+MECO_COLIMA_CPU="${MECO_COLIMA_CPU:-2}"
+MECO_COLIMA_MEMORY="${MECO_COLIMA_MEMORY:-4}"
+MECO_COLIMA_DISK="${MECO_COLIMA_DISK:-20}"
 MECO_AUTO_INSTALL_RUSTDESK_CLIENT="${MECO_AUTO_INSTALL_RUSTDESK_CLIENT:-1}"
-MECO_AUTO_SETUP_RUSTDESK_SELFHOST="${MECO_AUTO_SETUP_RUSTDESK_SELFHOST:-1}"
+MECO_AUTO_SETUP_RUSTDESK_SELFHOST="${MECO_AUTO_SETUP_RUSTDESK_SELFHOST:-0}"
 MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS="${MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS:-1}"
 MECO_AUTO_START_CLOUDFLARE_TUNNEL="${MECO_AUTO_START_CLOUDFLARE_TUNNEL:-1}"
+MECO_SERVICE_PORT="${MECO_SERVICE_PORT:-3456}"
+MECO_SERVICE_PORT_SCAN_MAX="${MECO_SERVICE_PORT_SCAN_MAX:-20}"
 MECO_AUTO_INSTALL_MESHCENTRAL="${MECO_AUTO_INSTALL_MESHCENTRAL:-0}"
 MECO_MESH_NODE_BIN="${MECO_MESH_NODE_BIN:-}"
 MECO_MESHCENTRAL_CERT="${MECO_MESHCENTRAL_CERT:-mecoclaw.com}"
@@ -130,6 +137,22 @@ kill_and_wait() {
     sleep 1
     i=$((i + 1))
   done
+}
+
+list_listen_pids_on_port() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u || true
+    return 0
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp 2>/dev/null \
+      | grep -E "[[:space:]]:${port}[[:space:]]" \
+      | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' \
+      | sort -u || true
+    return 0
+  fi
+  return 0
 }
 
 extract_first_json() {
@@ -288,6 +311,62 @@ ensure_cloudflared() {
   command -v cloudflared >/dev/null 2>&1 || warn "cloudflared command still not found in PATH"
 }
 
+ensure_docker_runtime() {
+  if [[ "$MECO_AUTO_INSTALL_DOCKER" != "1" ]]; then
+    log "Skip Docker install (MECO_AUTO_INSTALL_DOCKER=$MECO_AUTO_INSTALL_DOCKER)"
+    return 0
+  fi
+
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+      log "Installing Docker CLI + Colima via Homebrew..."
+      brew install docker docker-compose colima >/dev/null || warn "brew install docker/docker-compose/colima failed"
+    else
+      warn "docker not found and brew unavailable, please install Docker/Colima manually"
+    fi
+  fi
+
+  if command -v colima >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+    if ! docker info >/dev/null 2>&1; then
+      log "Starting Colima runtime..."
+      if ! colima status >/dev/null 2>&1; then
+        colima start --cpu "$MECO_COLIMA_CPU" --memory "$MECO_COLIMA_MEMORY" --disk "$MECO_COLIMA_DISK" >/dev/null 2>&1 || warn "colima start failed"
+      fi
+    fi
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+      log "Fallback: installing Docker Desktop via Homebrew cask..."
+      brew install --cask docker >/dev/null || warn "brew install --cask docker failed"
+    fi
+  fi
+
+  if [[ -d "/Applications/Docker.app" ]] && ! docker info >/dev/null 2>&1; then
+    open -ga "/Applications/Docker.app" >/dev/null 2>&1 || true
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "docker command still not found in PATH"
+    return 0
+  fi
+
+  local i=0
+  while (( i < 45 )); do
+    if docker info >/dev/null 2>&1; then
+      log "Docker daemon ready"
+      return 0
+    fi
+    sleep 2
+    i=$((i + 1))
+  done
+  warn "docker daemon not ready yet; RustDesk docker self-host may fail this run"
+}
+
 run_repo_bash_script() {
   local rel_path="$1"
   shift || true
@@ -330,16 +409,29 @@ setup_rustdesk_selfhost() {
     return 0
   fi
 
-  local host hbbs_port ws_port
+  local host hbbs_port ws_port backend
   host="${MECO_RUSTDESK_SELFHOST_HOST:-127.0.0.1}"
   hbbs_port="${MECO_RUSTDESK_SELFHOST_HBBS_PORT:-21116}"
   ws_port="${MECO_RUSTDESK_SELFHOST_WS_PORT:-21118}"
+  backend="${MECO_RUSTDESK_SELFHOST_BACKEND:-}"
+  if [[ -z "$backend" ]]; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      backend="docker"
+    else
+      backend="auto"
+    fi
+  fi
 
-  log "Configuring RustDesk self-host (hbbs/hbbr)..."
+  if [[ "$backend" == "docker" || "$backend" == "auto" ]]; then
+    ensure_docker_runtime
+  fi
+
+  log "Configuring RustDesk self-host (backend=$backend)..."
   if RUSTDESK_RENDEZVOUS_HOST="$host" \
      RUSTDESK_HBBS_PORT="$hbbs_port" \
      RUSTDESK_HBBR_PORT="${MECO_RUSTDESK_SELFHOST_HBBR_PORT:-21117}" \
      RUSTDESK_WS_PORT="$ws_port" \
+     RUSTDESK_SELFHOST_BACKEND="$backend" \
      RUSTDESK_SERVER_HOME="${MECO_RUSTDESK_SERVER_HOME:-$HOME/.meco-studio/rustdesk-server}" \
      run_repo_bash_script "scripts/setup-rustdesk-selfhost.sh"; then
     log "RustDesk self-host ready"
@@ -771,7 +863,22 @@ configure_openclaw_defaults() {
 
     if (!conf.gateway || typeof conf.gateway !== "object") conf.gateway = {};
     if (!conf.gateway.port) conf.gateway.port = 18789;
+    if (!conf.gateway.mode) conf.gateway.mode = "local";
+    if (!conf.gateway.bind) conf.gateway.bind = "loopback";
     if (!conf.gateway.auth || typeof conf.gateway.auth !== "object") conf.gateway.auth = {};
+    if (!conf.gateway.controlUi || typeof conf.gateway.controlUi !== "object") conf.gateway.controlUi = {};
+    if (!Array.isArray(conf.gateway.controlUi.allowedOrigins) || conf.gateway.controlUi.allowedOrigins.length === 0) {
+      conf.gateway.controlUi.allowedOrigins = ["*"];
+    }
+    if (!conf.gateway.http || typeof conf.gateway.http !== "object") conf.gateway.http = {};
+    if (!conf.gateway.http.endpoints || typeof conf.gateway.http.endpoints !== "object") conf.gateway.http.endpoints = {};
+    if (!conf.gateway.http.endpoints.chatCompletions || typeof conf.gateway.http.endpoints.chatCompletions !== "object" || Array.isArray(conf.gateway.http.endpoints.chatCompletions)) {
+      conf.gateway.http.endpoints.chatCompletions = {};
+    }
+    conf.gateway.http.endpoints.chatCompletions.enabled = true;
+    if (Object.prototype.hasOwnProperty.call(conf.gateway.http.endpoints.chatCompletions, "images")) {
+      delete conf.gateway.http.endpoints.chatCompletions.images;
+    }
 
     if (!conf.agents || typeof conf.agents !== "object") conf.agents = {};
     if (!conf.agents.defaults || typeof conf.agents.defaults !== "object") conf.agents.defaults = {};
@@ -838,7 +945,7 @@ configure_meco_runtime_settings() {
       cloudflareTunnelToken: String(process.argv[17] || "").trim(),
       rustdeskWebBaseUrl: String(process.argv[18] || "").trim(),
       rustdeskSchemeAuthority: String(process.argv[19] || "").trim() || "connect",
-      rustdeskPreferredRendezvous: String(process.argv[20] || "").trim() || "127.0.0.1:21116,127.0.0.1:21118"
+      rustdeskPreferredRendezvous: String(process.argv[20] || "").trim()
     };
 
     let current = {};
@@ -855,6 +962,8 @@ configure_meco_runtime_settings() {
       if (v) next[k] = v;
       else if (!Object.prototype.hasOwnProperty.call(next, k)) next[k] = "";
     }
+    // Installer defaults should be authoritative for rendezvous preference.
+    next.rustdeskPreferredRendezvous = patch.rustdeskPreferredRendezvous;
     fs.writeFileSync(path, JSON.stringify(next, null, 2) + "\n");
   ' "$settings_path" \
     "$MECO_OPENCLAW_MODEL" \
@@ -976,19 +1085,77 @@ run_permissions_preflight() {
 }
 
 restart_openclaw_if_update() {
-  if [[ "$MECO_IS_UPDATE" != "1" ]]; then
-    return 0
-  fi
   if ! command -v openclaw >/dev/null 2>&1; then
-    warn "OpenClaw command not found, skip gateway restart"
+    warn "OpenClaw command not found, skip gateway startup check"
     return 0
   fi
 
-  log "Update mode detected: restarting OpenClaw gateway..."
+  local gateway_port
+  gateway_port="$(node -e '
+    const fs = require("fs");
+    const p = process.argv[1];
+    let port = 18789;
+    try {
+      if (fs.existsSync(p)) {
+        const conf = JSON.parse(fs.readFileSync(p, "utf8") || "{}");
+        const configured = Number((((conf || {}).gateway || {}).port) || 0);
+        if (configured > 0) port = configured;
+      }
+    } catch (_) {}
+    process.stdout.write(String(port));
+  ' "$OPENCLAW_ROOT/openclaw.json" 2>/dev/null || printf '18789')"
+  [[ -n "$gateway_port" ]] || gateway_port="18789"
+
+  if [[ "$MECO_IS_UPDATE" == "1" ]]; then
+    log "Update mode detected: restarting OpenClaw gateway..."
+  else
+    log "Ensuring OpenClaw gateway is running..."
+  fi
+
   if openclaw gateway restart >/dev/null 2>&1; then
     log "OpenClaw gateway restarted"
+  elif openclaw gateway start >/dev/null 2>&1; then
+    log "OpenClaw gateway started"
   else
-    warn "OpenClaw gateway restart failed (continuing)"
+    warn "OpenClaw gateway restart/start failed, trying background run fallback..."
+    local runtime_dir pid_file log_file old_pid
+    runtime_dir="$HOME/.meco-studio/openclaw"
+    pid_file="$runtime_dir/gateway.pid"
+    log_file="$runtime_dir/gateway.log"
+    mkdir -p "$runtime_dir"
+
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" 2>/dev/null; then
+      log "OpenClaw gateway fallback already running (pid=$old_pid)"
+    else
+      nohup openclaw gateway run --allow-unconfigured --bind loopback --port "$gateway_port" >> "$log_file" 2>&1 &
+      local fallback_pid=$!
+      printf '%s\n' "$fallback_pid" > "$pid_file"
+      sleep 1
+      if kill -0 "$fallback_pid" 2>/dev/null; then
+        log "OpenClaw gateway fallback started (pid=$fallback_pid)"
+      else
+        warn "OpenClaw gateway fallback run failed (continuing)"
+        return 0
+      fi
+    fi
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    local probe_url
+    probe_url="http://127.0.0.1:${gateway_port}/v1/chat/completions"
+    local i=1
+    local status_code=""
+    while (( i <= MECO_HEALTHCHECK_RETRIES )); do
+      status_code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$probe_url" || true)"
+      if [[ "$status_code" != "000" && "$status_code" != "404" ]]; then
+        log "OpenClaw gateway endpoint ready: $probe_url (status=$status_code)"
+        return 0
+      fi
+      sleep "$MECO_HEALTHCHECK_INTERVAL_SEC"
+      i=$((i + 1))
+    done
+    warn "OpenClaw gateway endpoint /v1/chat/completions not ready (url=$probe_url, last_status=${status_code:-unknown})"
   fi
 }
 
@@ -1375,6 +1542,7 @@ start_service() {
   fi
 
   local pid_file="$MECO_INSTALL_DIR/.meco-studio.pid"
+  local port_file="$MECO_INSTALL_DIR/.meco-studio.port"
   local node_bin
   node_bin="$(command -v node || true)"
   [[ -n "$node_bin" ]] || die "node command not found while starting service"
@@ -1397,10 +1565,56 @@ start_service() {
     done <<< "$stale_pids"
   fi
 
+  local service_port
+  service_port="${MECO_SERVICE_PORT:-3456}"
+  if ! [[ "$service_port" =~ ^[0-9]+$ ]]; then
+    warn "Invalid MECO_SERVICE_PORT=$service_port, fallback to 3456"
+    service_port="3456"
+  fi
+
+  local listeners
+  listeners="$(list_listen_pids_on_port "$service_port")"
+  if [[ -n "$listeners" ]]; then
+    local conflict_exists=0
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      local cmdline
+      cmdline="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+      if [[ "$cmdline" == *"node"* && "$cmdline" == *"server.js"* ]]; then
+        log "Stopping process on port $service_port (pid=$pid): $cmdline"
+        kill_and_wait "$pid" 5
+      else
+        conflict_exists=1
+      fi
+    done <<< "$listeners"
+
+    listeners="$(list_listen_pids_on_port "$service_port")"
+    if [[ -n "$listeners" ]]; then
+      if (( conflict_exists == 1 )); then
+        warn "Port $service_port is occupied by non-meco process, trying next available port..."
+      fi
+      local candidate="$service_port"
+      local attempts=0
+      while [[ -n "$(list_listen_pids_on_port "$candidate")" ]]; do
+        attempts=$((attempts + 1))
+        candidate=$((candidate + 1))
+        if (( attempts > MECO_SERVICE_PORT_SCAN_MAX )); then
+          while IFS= read -r pid; do
+            [[ -n "$pid" ]] || continue
+            warn "Port conflict pid=$pid: $(ps -p "$pid" -o command= 2>/dev/null || printf '<unknown>')"
+          done <<< "$listeners"
+          die "Unable to allocate service port near ${MECO_SERVICE_PORT:-3456}. Set MECO_SERVICE_PORT manually and retry."
+        fi
+      done
+      warn "Service port switched from ${MECO_SERVICE_PORT:-3456} to $candidate"
+      service_port="$candidate"
+    fi
+  fi
+
   log "Starting meco-studio service..."
   (
     cd "$MECO_INSTALL_DIR"
-    nohup "$node_bin" server.js > server.log 2>&1 &
+    PORT="$service_port" nohup "$node_bin" server.js > server.log 2>&1 &
     echo $! > "$pid_file"
   )
 
@@ -1413,8 +1627,11 @@ start_service() {
   if command -v curl >/dev/null 2>&1; then
     local i=1
     while (( i <= MECO_HEALTHCHECK_RETRIES )); do
-      if curl -fsS "http://127.0.0.1:3456/api/status" >/dev/null 2>&1; then
-        log "Service started. pid=$new_pid, url=http://127.0.0.1:3456"
+      if curl -fsS "http://127.0.0.1:${service_port}/api/status" >/dev/null 2>&1; then
+        printf '%s\n' "$service_port" > "$port_file"
+        mkdir -p "$HOME/.meco-studio"
+        printf '%s\n' "$service_port" > "$HOME/.meco-studio/service-port"
+        log "Service started. pid=$new_pid, url=http://127.0.0.1:${service_port}"
         return 0
       fi
       sleep "$MECO_HEALTHCHECK_INTERVAL_SEC"
@@ -1423,7 +1640,10 @@ start_service() {
     die "service process is running but healthcheck failed, check $MECO_INSTALL_DIR/server.log"
   fi
 
-  log "Service started (curl not found, skipped healthcheck). pid=$new_pid, url=http://127.0.0.1:3456"
+  printf '%s\n' "$service_port" > "$port_file"
+  mkdir -p "$HOME/.meco-studio"
+  printf '%s\n' "$service_port" > "$HOME/.meco-studio/service-port"
+  log "Service started (curl not found, skipped healthcheck). pid=$new_pid, url=http://127.0.0.1:${service_port}"
 }
 
 main() {

@@ -31,7 +31,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   cloudflareTunnelToken: '',
   rustdeskWebBaseUrl: '/rustdesk-web/',
   rustdeskSchemeAuthority: 'connect',
-  rustdeskPreferredRendezvous: '127.0.0.1:21116,127.0.0.1:21118'
+  rustdeskPreferredRendezvous: ''
 });
 
 const SETTINGS_FIELDS = Object.freeze(Object.keys(DEFAULT_SETTINGS));

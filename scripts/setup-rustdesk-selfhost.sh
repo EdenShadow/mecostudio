@@ -20,13 +20,56 @@ RUSTDESK_RENDEZVOUS_HOST="${RUSTDESK_RENDEZVOUS_HOST:-127.0.0.1}"
 RUSTDESK_HBBS_PORT="${RUSTDESK_HBBS_PORT:-21116}"
 RUSTDESK_HBBR_PORT="${RUSTDESK_HBBR_PORT:-21117}"
 RUSTDESK_WS_PORT="${RUSTDESK_WS_PORT:-21118}"
+RUSTDESK_HBBS_NAT_PORT="${RUSTDESK_HBBS_NAT_PORT:-21115}"
+RUSTDESK_HBBR_WS_PORT="${RUSTDESK_HBBR_WS_PORT:-21119}"
 RUSTDESK_SERVER_AUTOSTART="${RUSTDESK_SERVER_AUTOSTART:-1}"
 RUSTDESK_SERVER_DOWNLOAD="${RUSTDESK_SERVER_DOWNLOAD:-1}"
 RUSTDESK_SERVER_RELEASE_API="${RUSTDESK_SERVER_RELEASE_API:-https://api.github.com/repos/rustdesk/rustdesk-server/releases/latest}"
 RUSTDESK_CONFIG_PATH_OVERRIDE="${RUSTDESK_CONFIG_PATH_OVERRIDE:-}"
+RUSTDESK_SELFHOST_BACKEND="${RUSTDESK_SELFHOST_BACKEND:-auto}" # auto|binary|docker
+RUSTDESK_DOCKER_IMAGE="${RUSTDESK_DOCKER_IMAGE:-rustdesk/rustdesk-server:latest}"
+RUSTDESK_DOCKER_PROJECT="${RUSTDESK_DOCKER_PROJECT:-meco-rustdesk}"
+RUSTDESK_DOCKER_COMPOSE_FILE="${RUSTDESK_DOCKER_COMPOSE_FILE:-$RUSTDESK_SERVER_HOME/docker-compose.yml}"
+RUSTDESK_DOCKER_DATA_DIR="${RUSTDESK_DOCKER_DATA_DIR:-$RUSTDESK_SERVER_HOME/docker-data}"
+RUSTDESK_DOCKER_AUTOSTART_DESKTOP="${RUSTDESK_DOCKER_AUTOSTART_DESKTOP:-1}"
 
 HBBS_BIN=""
 HBBR_BIN=""
+RUSTDESK_RUNTIME_MODE=""
+
+write_runtime_json() {
+  local mode="$1"
+  cat > "$RUSTDESK_SERVER_HOME/runtime.json" <<JSON
+{
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "mode": "$mode",
+  "hbbs": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBS_PORT",
+  "hbbr": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBR_PORT",
+  "ws": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_WS_PORT",
+  "preferredRendezvous": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBS_PORT,$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_WS_PORT"
+}
+JSON
+}
+
+load_server_public_key() {
+  if [[ -n "${RUSTDESK_SERVER_PUBLIC_KEY:-}" ]]; then
+    return 0
+  fi
+  local candidates=(
+    "$RUSTDESK_SERVER_HOME/id_ed25519.pub"
+    "$RUSTDESK_DOCKER_DATA_DIR/id_ed25519.pub"
+  )
+  local p key_text
+  for p in "${candidates[@]}"; do
+    [[ -f "$p" ]] || continue
+    key_text="$(tr -d '\r\n' < "$p" 2>/dev/null || true)"
+    if [[ -n "$key_text" ]]; then
+      RUSTDESK_SERVER_PUBLIC_KEY="$key_text"
+      export RUSTDESK_SERVER_PUBLIC_KEY
+      return 0
+    fi
+  done
+}
 
 find_server_bins() {
   local hbbs_candidates=()
@@ -75,15 +118,24 @@ pick_release_asset_url() {
     const payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
     const assets = Array.isArray(payload.assets) ? payload.assets : [];
 
+    const hasDarwin = osName.includes("darwin");
+    const hasLinux = osName.includes("linux");
+    const hasWindows = osName.includes("win");
+    const strictOsMatch = hasDarwin || hasLinux || hasWindows;
+
     const osRe = (() => {
-      if (osName.includes("darwin")) return /(darwin|mac|osx|apple)/i;
-      if (osName.includes("linux")) return /linux/i;
+      if (hasDarwin) return /(darwin|mac|osx|apple)/i;
+      if (hasLinux) return /linux/i;
+      if (hasWindows) return /windows/i;
       return /.*/i;
     })();
 
+    const hasArm = archName.includes("arm") || archName.includes("aarch");
+    const hasX64 = archName.includes("x86_64") || archName.includes("amd64") || archName.includes("x64");
+    const strictArchMatch = hasArm || hasX64;
     const archRe = (() => {
-      if (archName.includes("arm") || archName.includes("aarch")) return /(arm64|aarch64)/i;
-      if (archName.includes("x86_64") || archName.includes("amd64")) return /(x86_64|amd64|x64)/i;
+      if (hasArm) return /(arm64|aarch64)/i;
+      if (hasX64) return /(x86_64|amd64|x64)/i;
       return /.*/i;
     })();
 
@@ -92,16 +144,23 @@ pick_release_asset_url() {
       .filter((a) => a && typeof a === "object" && typeof a.name === "string" && typeof a.browser_download_url === "string")
       .map((a) => {
         const name = a.name;
+        const osMatched = osRe.test(name);
+        const archMatched = archRe.test(name);
+        const extMatched = extRe.test(name);
+        if (strictOsMatch && !osMatched) return null;
+        if (strictArchMatch && !archMatched) return null;
+        if (!extMatched) return null;
         let score = 0;
         if (/rustdesk-server/i.test(name)) score += 50;
-        if (osRe.test(name)) score += 30;
-        if (archRe.test(name)) score += 30;
-        if (extRe.test(name)) score += 20;
+        if (osMatched) score += 30;
+        if (archMatched) score += 30;
+        if (extMatched) score += 20;
         if (/symbols|debug|sha|checksums?/i.test(name)) score -= 40;
         if (/\.zip$/i.test(name)) score += 2;
         if (/\.tar\.gz$/i.test(name) || /\.tgz$/i.test(name)) score += 1;
         return { score, name, url: a.browser_download_url };
       })
+      .filter(Boolean)
       .filter((item) => item.score >= 60)
       .sort((a, b) => b.score - a.score);
 
@@ -124,6 +183,10 @@ download_server_bins() {
 
   asset_url="$(pick_release_asset_url || true)"
   if [[ -z "$asset_url" ]]; then
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      warn "latest rustdesk-server release does not provide macOS hbbs/hbbr package"
+      warn "use Docker on macOS for self-host service"
+    fi
     warn "cannot resolve rustdesk-server release asset URL"
     rm -rf "$tmp_dir"
     return 1
@@ -177,7 +240,7 @@ download_server_bins() {
   return 0
 }
 
-stop_running_server() {
+stop_running_server_binary() {
   local pid_file pid
   for pid_file in "$RUSTDESK_SERVER_HOME/hbbs.pid" "$RUSTDESK_SERVER_HOME/hbbr.pid"; do
     [[ -f "$pid_file" ]] || continue
@@ -194,10 +257,10 @@ stop_running_server() {
   done
 }
 
-start_server() {
+start_server_binary() {
   mkdir -p "$RUSTDESK_SERVER_HOME/logs"
 
-  stop_running_server
+  stop_running_server_binary
 
   (
     cd "$RUSTDESK_SERVER_HOME"
@@ -224,17 +287,127 @@ start_server() {
     die "hbbs/hbbr exited unexpectedly, check $RUSTDESK_SERVER_HOME/logs"
   fi
 
-  cat > "$RUSTDESK_SERVER_HOME/runtime.json" <<JSON
-{
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "hbbs": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBS_PORT",
-  "hbbr": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBR_PORT",
-  "ws": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_WS_PORT",
-  "preferredRendezvous": "$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBS_PORT,$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_WS_PORT"
+  RUSTDESK_RUNTIME_MODE="binary"
+  write_runtime_json "binary"
+  log "RustDesk self-host started (binary)"
+  log "hbbs=$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBS_PORT, hbbr=$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBR_PORT"
 }
-JSON
 
-  log "RustDesk self-host started"
+docker_compose_available() {
+  if docker compose version >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+run_docker_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose -p "$RUSTDESK_DOCKER_PROJECT" -f "$RUSTDESK_DOCKER_COMPOSE_FILE" "$@"
+    return $?
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose -p "$RUSTDESK_DOCKER_PROJECT" -f "$RUSTDESK_DOCKER_COMPOSE_FILE" "$@"
+    return $?
+  fi
+  return 1
+}
+
+ensure_docker_daemon() {
+  command -v docker >/dev/null 2>&1 || {
+    warn "docker command not found"
+    return 1
+  }
+  docker_compose_available || {
+    warn "docker compose command not found"
+    return 1
+  }
+  if docker info >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" && "$RUSTDESK_DOCKER_AUTOSTART_DESKTOP" == "1" ]]; then
+    if [[ -d "/Applications/Docker.app" ]]; then
+      log "Docker daemon not ready, launching Docker Desktop..."
+      open -ga "/Applications/Docker.app" >/dev/null 2>&1 || true
+      local i=0
+      while (( i < 90 )); do
+        if docker info >/dev/null 2>&1; then
+          return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+      done
+    fi
+  fi
+
+  warn "docker daemon not ready"
+  return 1
+}
+
+write_docker_compose_file() {
+  mkdir -p "$RUSTDESK_SERVER_HOME" "$RUSTDESK_DOCKER_DATA_DIR"
+  cat > "$RUSTDESK_DOCKER_COMPOSE_FILE" <<YAML
+services:
+  hbbr:
+    image: ${RUSTDESK_DOCKER_IMAGE}
+    command: hbbr
+    restart: unless-stopped
+    ports:
+      - "${RUSTDESK_HBBR_PORT}:21117"
+      - "${RUSTDESK_HBBR_WS_PORT}:21119"
+    volumes:
+      - "${RUSTDESK_DOCKER_DATA_DIR}:/root"
+
+  hbbs:
+    image: ${RUSTDESK_DOCKER_IMAGE}
+    command: hbbs -r ${RUSTDESK_RENDEZVOUS_HOST}:${RUSTDESK_HBBR_PORT}
+    restart: unless-stopped
+    depends_on:
+      - hbbr
+    ports:
+      - "${RUSTDESK_HBBS_NAT_PORT}:21115"
+      - "${RUSTDESK_HBBS_PORT}:21116"
+      - "${RUSTDESK_HBBS_PORT}:21116/udp"
+      - "${RUSTDESK_WS_PORT}:21118"
+    volumes:
+      - "${RUSTDESK_DOCKER_DATA_DIR}:/root"
+YAML
+}
+
+stop_running_server_docker() {
+  command -v docker >/dev/null 2>&1 || return 0
+  docker_compose_available || return 0
+  [[ -f "$RUSTDESK_DOCKER_COMPOSE_FILE" ]] || return 0
+  run_docker_compose down --remove-orphans >/dev/null 2>&1 || true
+}
+
+start_server_docker() {
+  stop_running_server_binary
+  write_docker_compose_file
+  stop_running_server_docker
+
+  run_docker_compose up -d --remove-orphans >/dev/null
+
+  local i=0
+  local key_file="$RUSTDESK_DOCKER_DATA_DIR/id_ed25519.pub"
+  while (( i < 30 )); do
+    if [[ -f "$key_file" ]]; then
+      break
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+
+  if ! run_docker_compose ps >/dev/null 2>&1; then
+    die "docker compose services not healthy"
+  fi
+
+  RUSTDESK_RUNTIME_MODE="docker"
+  write_runtime_json "docker"
+  log "RustDesk self-host started (docker)"
   log "hbbs=$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBS_PORT, hbbr=$RUSTDESK_RENDEZVOUS_HOST:$RUSTDESK_HBBR_PORT"
 }
 
@@ -248,6 +421,7 @@ find_rustdesk_config_path() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
     candidates+=(
       "$HOME/Library/Preferences/com.carriez.rustdesk/RustDesk2.toml"
+      "$HOME/Library/Preferences/com.carriez.RustDesk/RustDesk2.toml"
       "$HOME/Library/Preferences/com.carriez.rustdesk/RustDesk.toml"
     )
   fi
@@ -326,9 +500,7 @@ configure_local_rustdesk_client() {
   log "Configured RustDesk client rendezvous: $rendezvous_value ($cfg_path)"
 }
 
-main() {
-  mkdir -p "$RUSTDESK_SERVER_HOME" "$RUSTDESK_SERVER_BIN_DIR"
-
+try_binary_backend() {
   find_server_bins
   if [[ -z "$HBBS_BIN" || -z "$HBBR_BIN" ]]; then
     log "hbbs/hbbr not found locally, trying auto download..."
@@ -337,18 +509,73 @@ main() {
     fi
   fi
 
-  [[ -n "$HBBS_BIN" ]] || die "hbbs not found; install rustdesk-server or place binary in $RUSTDESK_SERVER_BIN_DIR"
-  [[ -n "$HBBR_BIN" ]] || die "hbbr not found; install rustdesk-server or place binary in $RUSTDESK_SERVER_BIN_DIR"
+  [[ -n "$HBBS_BIN" ]] || return 1
+  [[ -n "$HBBR_BIN" ]] || return 1
 
   log "Using hbbs: $HBBS_BIN"
   log "Using hbbr: $HBBR_BIN"
-  configure_local_rustdesk_client
-
   if [[ "$RUSTDESK_SERVER_AUTOSTART" == "1" ]]; then
-    start_server
+    start_server_binary
   else
+    RUSTDESK_RUNTIME_MODE="binary"
+    write_runtime_json "binary"
     log "Skip auto start (RUSTDESK_SERVER_AUTOSTART=$RUSTDESK_SERVER_AUTOSTART)"
   fi
+  return 0
+}
+
+try_docker_backend() {
+  ensure_docker_daemon || return 1
+  if [[ "$RUSTDESK_SERVER_AUTOSTART" == "1" ]]; then
+    start_server_docker
+  else
+    write_docker_compose_file
+    RUSTDESK_RUNTIME_MODE="docker"
+    write_runtime_json "docker"
+    log "Skip auto start (RUSTDESK_SERVER_AUTOSTART=$RUSTDESK_SERVER_AUTOSTART)"
+  fi
+  return 0
+}
+
+main() {
+  mkdir -p "$RUSTDESK_SERVER_HOME" "$RUSTDESK_SERVER_BIN_DIR"
+
+  local backend os_name
+  os_name="$(uname -s)"
+  backend="$(printf '%s' "$RUSTDESK_SELFHOST_BACKEND" | tr '[:upper:]' '[:lower:]')"
+  [[ -n "$backend" ]] || backend="auto"
+
+  case "$backend" in
+    auto)
+      if [[ "$os_name" == "Darwin" ]]; then
+        if ! try_docker_backend && ! try_binary_backend; then
+          die "self-host startup failed (docker and binary backends both unavailable)"
+        fi
+      else
+        if ! try_binary_backend && ! try_docker_backend; then
+          die "self-host startup failed (binary and docker backends both unavailable)"
+        fi
+      fi
+      ;;
+    docker)
+      try_docker_backend || die "self-host startup failed (docker backend unavailable)"
+      ;;
+    binary)
+      try_binary_backend || die "self-host startup failed (binary backend unavailable)"
+      ;;
+    *)
+      die "unsupported RUSTDESK_SELFHOST_BACKEND=$backend (allowed: auto|docker|binary)"
+      ;;
+  esac
+
+  load_server_public_key
+  configure_local_rustdesk_client
+  if [[ -n "${RUSTDESK_SERVER_PUBLIC_KEY:-}" ]]; then
+    log "RustDesk server public key detected and injected into client config"
+  else
+    warn "RustDesk server public key not found yet; client key field unchanged"
+  fi
+  log "RustDesk self-host ready (mode=${RUSTDESK_RUNTIME_MODE:-unknown})"
 }
 
 main "$@"

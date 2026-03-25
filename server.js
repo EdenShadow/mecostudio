@@ -953,11 +953,42 @@ function patchOpenClawConfigCompat() {
     if (!fs.existsSync(OPENCLAW_CONFIG_PATH)) return;
     const raw = fs.readFileSync(OPENCLAW_CONFIG_PATH, 'utf-8');
     const parsed = JSON.parse(raw);
-    const chatCompletions = parsed?.gateway?.http?.endpoints?.chatCompletions;
-    if (!chatCompletions || !Object.prototype.hasOwnProperty.call(chatCompletions, 'images')) return;
-    delete chatCompletions.images;
+    let changed = false;
+
+    if (!parsed.gateway || typeof parsed.gateway !== 'object') {
+      parsed.gateway = {};
+      changed = true;
+    }
+    if (!parsed.gateway.http || typeof parsed.gateway.http !== 'object') {
+      parsed.gateway.http = {};
+      changed = true;
+    }
+    if (!parsed.gateway.http.endpoints || typeof parsed.gateway.http.endpoints !== 'object') {
+      parsed.gateway.http.endpoints = {};
+      changed = true;
+    }
+    if (
+      !parsed.gateway.http.endpoints.chatCompletions ||
+      typeof parsed.gateway.http.endpoints.chatCompletions !== 'object' ||
+      Array.isArray(parsed.gateway.http.endpoints.chatCompletions)
+    ) {
+      parsed.gateway.http.endpoints.chatCompletions = {};
+      changed = true;
+    }
+
+    const chatCompletions = parsed.gateway.http.endpoints.chatCompletions;
+    if (chatCompletions.enabled !== true) {
+      chatCompletions.enabled = true;
+      changed = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(chatCompletions, 'images')) {
+      delete chatCompletions.images;
+      changed = true;
+    }
+
+    if (!changed) return;
     fs.writeFileSync(OPENCLAW_CONFIG_PATH, `${JSON.stringify(parsed, null, 2)}\n`, 'utf-8');
-    console.log('[OpenClawCompat] removed unsupported config: gateway.http.endpoints.chatCompletions.images');
+    console.log('[OpenClawCompat] normalized gateway.http.endpoints.chatCompletions');
   } catch (e) {
     console.warn(`[OpenClawCompat] patch failed: ${e.message}`);
   }
@@ -3530,7 +3561,10 @@ const cloudflareTunnelRuntime = {
 const REMOTE_PUBLIC_PATH_SEGMENT = 'web';
 const REMOTE_RUSTDESK_PATH_SEGMENT = 'rustdesk';
 const RUSTDESK_APP_BUNDLE_PATH = '/Applications/RustDesk.app';
-const RUSTDESK_PREF_DIR = path.join(os.homedir(), 'Library', 'Preferences', 'com.carriez.RustDesk');
+const RUSTDESK_PREF_DIR_CANDIDATES = [
+  path.join(os.homedir(), 'Library', 'Preferences', 'com.carriez.rustdesk'),
+  path.join(os.homedir(), 'Library', 'Preferences', 'com.carriez.RustDesk')
+];
 const RUSTDESK_LOG_DIR = path.join(os.homedir(), 'Library', 'Logs', 'RustDesk');
 
 function remoteSafeString(value) {
@@ -3575,6 +3609,70 @@ function readTailTextFileSafe(filePath, maxBytes = 280000) {
   } catch (_) {
     return '';
   }
+}
+
+function listRustDeskConfigCandidates() {
+  const files = [];
+  for (const prefDir of RUSTDESK_PREF_DIR_CANDIDATES) {
+    files.push(path.join(prefDir, 'RustDesk2.toml'));
+    files.push(path.join(prefDir, 'RustDesk.toml'));
+    files.push(path.join(prefDir, 'RustDesk_local.toml'));
+  }
+  files.push(path.join(os.homedir(), '.config', 'rustdesk', 'RustDesk2.toml'));
+  files.push(path.join(os.homedir(), '.config', 'RustDesk', 'RustDesk2.toml'));
+  return Array.from(new Set(files));
+}
+
+function readRustDeskConfigStringValue(key) {
+  const targetKey = remoteSafeString(key);
+  if (!targetKey) return '';
+  const files = listRustDeskConfigCandidates();
+  for (const filePath of files) {
+    const text = readTailTextFileSafe(filePath, 220000);
+    if (!text) continue;
+    const value = remoteSafeString(parseTomlStringValue(text, targetKey));
+    if (value) return value;
+  }
+  return '';
+}
+
+function readLocalRustDeskServerPublicKey() {
+  const fromEnv = remoteSafeString(process.env.RUSTDESK_SERVER_PUBLIC_KEY || '');
+  if (fromEnv) return fromEnv;
+
+  const keyFiles = [
+    path.join(os.homedir(), '.meco-studio', 'rustdesk-server', 'docker-data', 'id_ed25519.pub'),
+    path.join(os.homedir(), '.meco-studio', 'rustdesk-server', 'id_ed25519.pub')
+  ];
+  for (const keyFile of keyFiles) {
+    const text = readTailTextFileSafe(keyFile, 4096)
+      .replace(/[\r\n]+/g, '')
+      .trim();
+    if (text) return text;
+  }
+
+  const fromConfig = readRustDeskConfigStringValue('key');
+  return remoteSafeString(fromConfig);
+}
+
+function readLocalRustDeskServerPrivateKey() {
+  const fromEnv = remoteSafeString(process.env.RUSTDESK_SERVER_PRIVATE_KEY || '');
+  if (fromEnv) return fromEnv;
+
+  const keyFiles = [
+    path.join(os.homedir(), '.meco-studio', 'rustdesk-server', 'docker-data', 'id_ed25519'),
+    path.join(os.homedir(), '.meco-studio', 'rustdesk-server', 'id_ed25519')
+  ];
+  for (const keyFile of keyFiles) {
+    try {
+      if (!fs.existsSync(keyFile)) continue;
+      const text = String(fs.readFileSync(keyFile, 'utf8') || '').trim();
+      if (text) return text;
+    } catch (_) {}
+  }
+
+  const fromConfig = readRustDeskConfigStringValue('private_key');
+  return remoteSafeString(fromConfig);
 }
 
 function listRustDeskLogFiles() {
@@ -3648,25 +3746,28 @@ function extractRustDeskPeerPasswordToken(peerId = '') {
   const id = remoteSafeString(peerId).replace(/\s+/g, '');
   if (!id) return { token: '', source: '' };
   try {
-    const peerPath = path.join(RUSTDESK_PREF_DIR, 'peers', `${id}.toml`);
-    const text = readTailTextFileSafe(peerPath, 220000);
-    if (!text) return { token: '', source: '' };
-    const m = text.match(/password\s*=\s*\[([\s\S]*?)\]/m);
-    if (!m || !m[1]) return { token: '', source: '' };
-    const nums = String(m[1])
-      .split(/[^0-9]+/)
-      .map((part) => Number(part))
-      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 255);
-    if (!nums.length) return { token: '', source: '' };
-    const token = Buffer.from(nums)
-      .toString('utf8')
-      .replace(/[\u0000-\u001f\u007f]+/g, '')
-      .trim();
-    if (!token) return { token: '', source: '' };
-    return { token, source: 'peer_toml_token' };
+    for (const prefDir of RUSTDESK_PREF_DIR_CANDIDATES) {
+      const peerPath = path.join(prefDir, 'peers', `${id}.toml`);
+      const text = readTailTextFileSafe(peerPath, 220000);
+      if (!text) continue;
+      const m = text.match(/password\s*=\s*\[([\s\S]*?)\]/m);
+      if (!m || !m[1]) continue;
+      const nums = String(m[1])
+        .split(/[^0-9]+/)
+        .map((part) => Number(part))
+        .filter((n) => Number.isFinite(n) && n >= 0 && n <= 255);
+      if (!nums.length) continue;
+      const token = Buffer.from(nums)
+        .toString('utf8')
+        .replace(/[\u0000-\u001f\u007f]+/g, '')
+        .trim();
+      if (!token) continue;
+      return { token, source: 'peer_toml_token' };
+    }
   } catch (_) {
     return { token: '', source: '' };
   }
+  return { token: '', source: '' };
 }
 
 function readRustDeskPasswordFromRemoteStore(preferredRustDeskId = '') {
@@ -3761,7 +3862,8 @@ async function readLocalRustDeskInfo(options = {}) {
   let idSource = remoteSafeString(fromLogs.source);
 
   if (!id) {
-    const localToml = readTailTextFileSafe(path.join(RUSTDESK_PREF_DIR, 'RustDesk_local.toml'));
+    const localTomlPath = listRustDeskConfigCandidates().find((filePath) => /RustDesk_local\.toml$/i.test(filePath));
+    const localToml = localTomlPath ? readTailTextFileSafe(localTomlPath) : '';
     id = remoteSafeString(parseTomlStringValue(localToml, 'remote_id')).replace(/\s+/g, '');
     idSource = id ? 'local_toml' : '';
   }
@@ -3789,6 +3891,9 @@ async function readLocalRustDeskInfo(options = {}) {
     passwordSource = remoteSafeString(fromLogsPassword.source);
   }
 
+  const serverKey = readLocalRustDeskServerPublicKey();
+  const serverPrivateKey = readLocalRustDeskServerPrivateKey();
+
   return {
     appInstalled,
     running,
@@ -3798,6 +3903,8 @@ async function readLocalRustDeskInfo(options = {}) {
     idSource,
     password,
     oneTimePassword: password,
+    serverKey,
+    serverPrivateKey,
     passwordToken: remoteSafeString(peerPasswordToken.token),
     passwordTokenSource: remoteSafeString(peerPasswordToken.source),
     passwordSource,
@@ -4098,7 +4205,7 @@ function normalizeRemoteHttpBase(raw, defaultProtocol = 'https://') {
 
 const RUSTDESK_WEB_PROXY_BASE_URL = 'https://rustdesk.com/web/';
 const RUSTDESK_PUBLIC_RENDEZVOUS = 'rs-ny.rustdesk.com:21116';
-const RUSTDESK_DEFAULT_LOCAL_RENDEZVOUS = '127.0.0.1:21116,127.0.0.1:21118';
+const RUSTDESK_DEFAULT_LOCAL_RENDEZVOUS = '';
 
 function parseRustDeskServerTarget(value, defaultPort = 21116) {
   const raw = remoteSafeString(value);
@@ -4205,9 +4312,12 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
   if (!html) return html;
   const localRendezvous = remoteSafeString(options.localRendezvous || '');
   const initialRendezvous = remoteSafeString(options.initialRendezvous || '') || RUSTDESK_PUBLIC_RENDEZVOUS;
+  const serverKey = remoteSafeString(options.serverKey || '');
+  const injectServerKey = !!(serverKey && initialRendezvous && initialRendezvous !== RUSTDESK_PUBLIC_RENDEZVOUS);
   const injectedPublicRendezvous = JSON.stringify(RUSTDESK_PUBLIC_RENDEZVOUS);
   const injectedLocalRendezvous = JSON.stringify(localRendezvous);
   const injectedInitialRendezvous = JSON.stringify(initialRendezvous);
+  const injectedServerKey = JSON.stringify(injectServerKey ? serverKey : '');
   const fixed = html
     .replace(/<base\s+href=(['"])\/web\/\1\s*\/?>/i, '<base href="/rustdesk-web/" />')
     .replace(/(["'])\/web\//g, '$1/rustdesk-web/');
@@ -4275,7 +4385,15 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     `  const publicRendezvous = ${injectedPublicRendezvous};`,
     `  const localRendezvous = ${injectedLocalRendezvous};`,
     `  let rendezvousServer = ${injectedInitialRendezvous};`,
+    `  let mecoKey = ${injectedServerKey};`,
+    '  let mecoLocalKey = mecoKey;',
     '  const normalizeServer = (v) => normalize(v).replace(/^wss?:\\/\\//i, "").replace(/^https?:\\/\\//i, "").replace(/\\/+$/g, "");',
+    '  const syncWebClientKeyStorage = () => {',
+    '    try {',
+    '      if (mecoKey) localStorage.setItem("wc-key", mecoKey);',
+    '      else localStorage.removeItem("wc-key");',
+    '    } catch (_) {}',
+    '  };',
     '  const setRendezvousServer = (value) => {',
     '    const next = normalizeServer(value) || publicRendezvous;',
     '    rendezvousServer = next;',
@@ -4302,6 +4420,10 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '  const hasOfflineDialog = () => {',
     '    const text = normalize((document.body && document.body.innerText) || "").toLowerCase();',
     '    return /remote desktop is offline|desktop is offline|peer is offline|device is offline|目标设备离线|设备离线/.test(text);',
+    '  };',
+    '  const hasIdNotExistDialog = () => {',
+    '    const text = normalize((document.body && document.body.innerText) || "").toLowerCase();',
+    '    return /id does not exist|id not exist|peer not found|device not found|设备不存在|目标设备不存在|未找到设备|invalid key|key mismatch/.test(text);',
     '  };',
     '  const clickRetryButton = () => {',
     '    const nodes = Array.from(document.querySelectorAll("button,[role=button]")).filter(isVisible);',
@@ -4347,6 +4469,7 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '  } catch (_) {}',
     '  disableRustDeskServiceWorkerCache();',
     '  setRendezvousServer(rendezvousServer);',
+    '  syncWebClientKeyStorage();',
     '  let mecoId = "";',
     '  let mecoPassword = "";',
     '  let mecoPasswordToken = "";',
@@ -4356,6 +4479,12 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '    mecoId = normalize(u.searchParams.get("meco_id")).replace(/\\s+/g, "");',
     '    mecoPassword = normalize(u.searchParams.get("meco_password"));',
     '    mecoPasswordToken = normalize(u.searchParams.get("meco_password_token"));',
+    '    const mecoKeyFromQuery = normalize(u.searchParams.get("meco_key"));',
+    '    if (mecoKeyFromQuery) {',
+    '      mecoKey = mecoKeyFromQuery;',
+    '      mecoLocalKey = mecoKeyFromQuery;',
+    '      syncWebClientKeyStorage();',
+    '    }',
     '    const auto = normalize(u.searchParams.get("meco_autoconnect")).toLowerCase();',
     '    mecoAutoConnect = auto === "1" || auto === "true" || auto === "yes";',
     '    const mecoRendezvous = normalizeServer(u.searchParams.get("meco_rendezvous"));',
@@ -4364,10 +4493,11 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
       '      localStorage.setItem("wc-id", mecoId);',
       '      localStorage.setItem("wc-last_remote_id", mecoId);',
     '    }',
-    '    if (u.searchParams.has("meco_id") || u.searchParams.has("meco_password") || u.searchParams.has("meco_password_token") || u.searchParams.has("meco_autoconnect") || u.searchParams.has("meco_rendezvous") || u.searchParams.has("meco_nonce")) {',
+    '    if (u.searchParams.has("meco_id") || u.searchParams.has("meco_password") || u.searchParams.has("meco_password_token") || u.searchParams.has("meco_key") || u.searchParams.has("meco_autoconnect") || u.searchParams.has("meco_rendezvous") || u.searchParams.has("meco_nonce")) {',
     '      u.searchParams.delete("meco_id");',
     '      u.searchParams.delete("meco_password");',
     '      u.searchParams.delete("meco_password_token");',
+    '      u.searchParams.delete("meco_key");',
     '      u.searchParams.delete("meco_autoconnect");',
     '      u.searchParams.delete("meco_rendezvous");',
     '      u.searchParams.delete("meco_nonce");',
@@ -4384,6 +4514,47 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '    } catch (_) {',
     '      return false;',
     '    }',
+    '  };',
+    '  const switchToPublicRendezvous = () => {',
+    '    if (rendezvousServer !== publicRendezvous) setRendezvousServer(publicRendezvous);',
+    '    mecoKey = "";',
+    '    syncWebClientKeyStorage();',
+    '    if (hasRustDeskBridge()) {',
+    '      callSetByName("option", JSON.stringify({ name: "custom-rendezvous-server", value: rendezvousServer }));',
+    '      callSetByName("option", JSON.stringify({ name: "key", value: "" }));',
+    '    }',
+    '  };',
+    '  const LOCAL_RENDEZVOUS_TIMEOUT_MS = 9000;',
+    '  const RECONNECT_COOLDOWN_MS = 700;',
+    '  let localRendezvousDeadlineAt = Date.now() + LOCAL_RENDEZVOUS_TIMEOUT_MS;',
+    '  let didFallbackToPublic = rendezvousServer === publicRendezvous;',
+    '  let reconnectRequestedAt = 0;',
+    '  const resetAutoConnectAttempts = () => {',
+    '    connectAttempts = 0;',
+    '    loginAttempts = 0;',
+    '    bridgeConnectAttempts = 0;',
+    '    bridgeLoginAttempts = 0;',
+    '  };',
+    '  const requestReconnect = () => {',
+    '    const now = Date.now();',
+    '    if (now - reconnectRequestedAt < RECONNECT_COOLDOWN_MS) return;',
+    '    reconnectRequestedAt = now;',
+    '    clickRetryButton();',
+    '    closeErrorDialog();',
+    '    if (mecoId && hasRustDeskBridge()) {',
+    '      const payload = JSON.stringify({ id: mecoId, remember: true });',
+    '      callSetByName("session_add_sync", payload);',
+    '      callSetByName("session_start", "");',
+    '      callSetByName("connect", "");',
+    '    }',
+    '  };',
+    '  const triggerPublicFallback = () => {',
+    '    if (rendezvousServer === publicRendezvous) return false;',
+    '    switchToPublicRendezvous();',
+    '    didFallbackToPublic = true;',
+    '    resetAutoConnectAttempts();',
+    '    requestReconnect();',
+    '    return true;',
     '  };',
     '  const callGetByName = (name, payload = "") => {',
     '    try {',
@@ -4407,6 +4578,13 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '  const seedBridgeOptions = () => {',
     '    if (!mecoId || !hasRustDeskBridge()) return;',
     '    callSetByName("option", JSON.stringify({ name: "custom-rendezvous-server", value: rendezvousServer }));',
+    '    if (mecoKey) {',
+    '      callSetByName("option", JSON.stringify({ name: "key", value: mecoKey }));',
+    '      syncWebClientKeyStorage();',
+    '    } else {',
+    '      callSetByName("option", JSON.stringify({ name: "key", value: "" }));',
+    '      syncWebClientKeyStorage();',
+    '    }',
     '    callSetByName("option:local", JSON.stringify({ name: "last_remote_id", value: mecoId }));',
     '    const passwordForPeer = mecoPasswordToken || mecoPassword;',
     '    if (passwordForPeer) {',
@@ -4431,6 +4609,14 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '      if (!info) return;',
     '      const id = normalize(info.id).replace(/\\s+/g, "");',
     '      if (id && id !== mecoId) return;',
+    '      const nextServerKey = normalize(info.serverKey);',
+    '      if (nextServerKey) {',
+    '        mecoLocalKey = nextServerKey;',
+    '        if (rendezvousServer !== publicRendezvous) {',
+    '          mecoKey = nextServerKey;',
+    '          syncWebClientKeyStorage();',
+    '        }',
+    '      }',
     '      const nextToken = normalize(info.passwordToken);',
     '      if (nextToken) mecoPasswordToken = nextToken;',
     '      const nextPassword = normalize(info.password);',
@@ -4440,6 +4626,9 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '      bridgeLoginAttempts = 0;',
     '      connectAttempts = 0;',
     '      loginAttempts = 0;',
+    '      if (rendezvousServer !== publicRendezvous && !didFallbackToPublic) {',
+    '        localRendezvousDeadlineAt = Date.now() + LOCAL_RENDEZVOUS_TIMEOUT_MS;',
+    '      }',
     '    } catch (_) {}',
     '    localPasswordRefreshPending = false;',
     '  };',
@@ -4656,26 +4845,18 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '  const tick = () => {',
     '    try {',
     '      if (shouldFallbackRendezvous()) {',
-    '        setRendezvousServer(publicRendezvous);',
-    '        connectAttempts = 0;',
-    '        loginAttempts = 0;',
-    '        bridgeConnectAttempts = 0;',
-    '        bridgeLoginAttempts = 0;',
-    '        closeErrorDialog();',
+    '        if (!triggerPublicFallback()) {',
+    '          resetAutoConnectAttempts();',
+    '          requestReconnect();',
+    '        }',
     '      }',
     '      if (hasOfflineDialog()) {',
-    '        if (rendezvousServer !== publicRendezvous) setRendezvousServer(publicRendezvous);',
-    '        connectAttempts = 0;',
-    '        loginAttempts = 0;',
-    '        bridgeConnectAttempts = 0;',
-    '        bridgeLoginAttempts = 0;',
-    '        closeErrorDialog();',
-    '        if (mecoId && hasRustDeskBridge()) {',
-    '          const payload = JSON.stringify({ id: mecoId, remember: true });',
-    '          callSetByName("session_add_sync", payload);',
-    '          callSetByName("session_start", "");',
-    '          callSetByName("connect", "");',
-    '        }',
+    '        triggerPublicFallback();',
+    '        requestReconnect();',
+    '      }',
+    '      if (hasIdNotExistDialog()) {',
+    '        triggerPublicFallback();',
+    '        requestReconnect();',
     '      }',
     '      if (hasWrongPasswordDialog()) {',
     '        clickRetryButton();',
@@ -4683,6 +4864,14 @@ function rewriteRustDeskWebHtml(rawHtml, options = {}) {
     '        if (!localPasswordRefreshPending && (now - localPasswordRefreshAt >= 1600)) {',
     '          localPasswordRefreshAt = now;',
     '          refreshPasswordFromLocalInfo();',
+    '        }',
+    '      }',
+    '      if (mecoAutoConnect && mecoId && rendezvousServer !== publicRendezvous && !didFallbackToPublic) {',
+    '        const statusNum = getConnStatusNum();',
+    '        if (statusNum > 0) {',
+    '          localRendezvousDeadlineAt = Date.now() + LOCAL_RENDEZVOUS_TIMEOUT_MS;',
+    '        } else if (Date.now() >= localRendezvousDeadlineAt) {',
+    '          triggerPublicFallback();',
     '        }',
     '      }',
     '      runBridgeAutoConnect();',
@@ -5845,6 +6034,330 @@ function sendRemoteControlError(res, err) {
   });
 }
 
+const REMOTE_CLOUD_SYNC_OBJECT_KEY = process.env.MECO_REMOTE_CLOUD_SYNC_OBJECT_KEY || 'meco-studio/remote-devices-sync.v1.json';
+const REMOTE_CLOUD_SYNC_FETCH_TIMEOUT_MS = 12000;
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function parseRemoteStoreSnapshot(raw) {
+  if (!isNonEmptyString(raw)) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const devices = Array.isArray(parsed.devices)
+      ? parsed.devices.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+      : [];
+    const version = Number(parsed.version) || 1;
+    return { version, devices };
+  } catch (_) {
+    return null;
+  }
+}
+
+function readLocalRemoteStoreSnapshot() {
+  try {
+    const storePath = remoteControl.STORE_PATH;
+    if (!storePath || !fs.existsSync(storePath)) {
+      return { version: 1, devices: [] };
+    }
+    const raw = fs.readFileSync(storePath, 'utf8');
+    return parseRemoteStoreSnapshot(raw) || { version: 1, devices: [] };
+  } catch (_) {
+    return { version: 1, devices: [] };
+  }
+}
+
+function writeLocalRemoteStoreSnapshot(snapshot = {}) {
+  const normalized = {
+    version: Number(snapshot && snapshot.version) || 1,
+    devices: Array.isArray(snapshot && snapshot.devices)
+      ? snapshot.devices.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+      : []
+  };
+  const storePath = remoteControl.STORE_PATH;
+  if (!storePath) {
+    throw new Error('remote store path is not available');
+  }
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
+  return normalized;
+}
+
+function toDeviceTimeMs(device) {
+  const ts = Date.parse(device && device.updatedAt ? String(device.updatedAt) : '') || 0;
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function normalizeRustDeskIdentity(device) {
+  return remoteSafeString((device && (device.rustdeskId || device.meshNodeId)) || '').replace(/\s+/g, '');
+}
+
+function normalizeOwnerDeviceIdentity(device) {
+  const owner = remoteSafeString(device && device.owner).toLowerCase();
+  const name = remoteSafeString(device && device.deviceName).toLowerCase();
+  if (!owner || !name) return '';
+  return `${owner}/${name}`;
+}
+
+function findMergedDeviceIndex(devices, incoming) {
+  const incomingId = remoteSafeString(incoming && incoming.id);
+  const incomingRoute = remoteSafeString(incoming && incoming.routePath);
+  const incomingRustDeskId = normalizeRustDeskIdentity(incoming);
+  const incomingOwnerDevice = normalizeOwnerDeviceIdentity(incoming);
+  for (let i = 0; i < devices.length; i += 1) {
+    const cur = devices[i];
+    const curId = remoteSafeString(cur && cur.id);
+    if (incomingId && curId && incomingId === curId) return i;
+    const curRoute = remoteSafeString(cur && cur.routePath);
+    if (incomingRoute && curRoute && incomingRoute === curRoute) return i;
+    const curRustDeskId = normalizeRustDeskIdentity(cur);
+    if (incomingRustDeskId && curRustDeskId && incomingRustDeskId === curRustDeskId) return i;
+    const curOwnerDevice = normalizeOwnerDeviceIdentity(cur);
+    if (incomingOwnerDevice && curOwnerDevice && incomingOwnerDevice === curOwnerDevice) return i;
+  }
+  return -1;
+}
+
+function mergeRemoteDeviceObjects(base = {}, incoming = {}) {
+  const baseTime = toDeviceTimeMs(base);
+  const incomingTime = toDeviceTimeMs(incoming);
+  const preferred = incomingTime >= baseTime ? incoming : base;
+  const fallback = preferred === incoming ? base : incoming;
+
+  const merged = {};
+  const keys = new Set([
+    ...Object.keys(fallback || {}),
+    ...Object.keys(preferred || {})
+  ]);
+
+  for (const key of keys) {
+    const pv = preferred ? preferred[key] : undefined;
+    const fv = fallback ? fallback[key] : undefined;
+    if (pv && typeof pv === 'object' && !Array.isArray(pv) && fv && typeof fv === 'object' && !Array.isArray(fv)) {
+      merged[key] = { ...fv, ...pv };
+      continue;
+    }
+    if (pv === undefined || pv === null) {
+      merged[key] = fv;
+      continue;
+    }
+    if (typeof pv === 'string' && pv.trim() === '' && typeof fv === 'string' && fv.trim() !== '') {
+      merged[key] = fv;
+      continue;
+    }
+    merged[key] = pv;
+  }
+
+  merged.id = remoteSafeString(merged.id) || crypto.randomBytes(8).toString('hex');
+  const nowIso = new Date().toISOString();
+  merged.createdAt = remoteSafeString(merged.createdAt) || remoteSafeString(fallback && fallback.createdAt) || nowIso;
+  merged.updatedAt = remoteSafeString(merged.updatedAt) || remoteSafeString(preferred && preferred.updatedAt) || nowIso;
+  return merged;
+}
+
+function mergeRemoteStoreSnapshots(localSnapshot = {}, cloudSnapshot = {}) {
+  const localDevices = Array.isArray(localSnapshot.devices) ? localSnapshot.devices : [];
+  const cloudDevices = Array.isArray(cloudSnapshot.devices) ? cloudSnapshot.devices : [];
+  const combined = [...cloudDevices, ...localDevices]
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .sort((a, b) => toDeviceTimeMs(a) - toDeviceTimeMs(b));
+
+  const mergedDevices = [];
+  for (const item of combined) {
+    const idx = findMergedDeviceIndex(mergedDevices, item);
+    if (idx < 0) {
+      mergedDevices.push(mergeRemoteDeviceObjects({}, item));
+      continue;
+    }
+    mergedDevices[idx] = mergeRemoteDeviceObjects(mergedDevices[idx], item);
+  }
+
+  return {
+    version: Math.max(Number(localSnapshot.version) || 1, Number(cloudSnapshot.version) || 1, 1),
+    devices: mergedDevices
+  };
+}
+
+function buildRemoteCloudSyncState(settings = {}) {
+  const cfg = ossStorage.resolveOssConfig(settings);
+  if (!cfg.ready) {
+    return {
+      enabled: false,
+      reason: cfg.error || 'oss_not_ready',
+      objectKey: REMOTE_CLOUD_SYNC_OBJECT_KEY
+    };
+  }
+  return {
+    enabled: true,
+    objectKey: REMOTE_CLOUD_SYNC_OBJECT_KEY
+  };
+}
+
+async function fetchRemoteStoreSnapshotFromCloud(settings = {}) {
+  const state = buildRemoteCloudSyncState(settings);
+  if (!state.enabled) {
+    return {
+      success: false,
+      skipped: true,
+      reason: state.reason || 'oss_not_ready',
+      objectKey: state.objectKey
+    };
+  }
+  try {
+    const signed = ossStorage.signObjectUrl(settings, {
+      objectKey: state.objectKey,
+      expires: 300
+    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOTE_CLOUD_SYNC_FETCH_TIMEOUT_MS);
+    let response = null;
+    try {
+      response = await fetch(signed.signedUrl, {
+        method: 'GET',
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response) {
+      return { success: false, skipped: false, reason: 'cloud_fetch_no_response', objectKey: state.objectKey };
+    }
+    if (response.status === 404) {
+      return {
+        success: true,
+        skipped: false,
+        empty: true,
+        objectKey: state.objectKey,
+        snapshot: { version: 1, devices: [] }
+      };
+    }
+    if (!response.ok) {
+      return {
+        success: false,
+        skipped: false,
+        reason: `cloud_fetch_http_${response.status}`,
+        objectKey: state.objectKey
+      };
+    }
+    const text = await response.text();
+    const parsed = parseRemoteStoreSnapshot(text);
+    if (!parsed) {
+      return {
+        success: false,
+        skipped: false,
+        reason: 'cloud_payload_invalid',
+        objectKey: state.objectKey
+      };
+    }
+    return {
+      success: true,
+      skipped: false,
+      empty: parsed.devices.length === 0,
+      objectKey: state.objectKey,
+      snapshot: parsed
+    };
+  } catch (e) {
+    return {
+      success: false,
+      skipped: false,
+      reason: remoteSafeString(e && e.message) || 'cloud_fetch_failed',
+      objectKey: state.objectKey
+    };
+  }
+}
+
+async function pushRemoteStoreSnapshotToCloud(settings = {}, snapshot = null) {
+  const state = buildRemoteCloudSyncState(settings);
+  if (!state.enabled) {
+    return {
+      success: false,
+      skipped: true,
+      reason: state.reason || 'oss_not_ready',
+      objectKey: state.objectKey
+    };
+  }
+  const localSnapshot = snapshot && typeof snapshot === 'object'
+    ? snapshot
+    : readLocalRemoteStoreSnapshot();
+  const tempPath = path.join(os.tmpdir(), `meco-remote-devices-sync-${Date.now()}-${process.pid}.json`);
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(localSnapshot, null, 2) + '\n', 'utf8');
+    const uploaded = await ossStorage.uploadLocalFile(settings, {
+      localPath: tempPath,
+      objectKey: state.objectKey,
+      contentType: 'application/json'
+    });
+    return {
+      success: true,
+      skipped: false,
+      objectKey: remoteSafeString(uploaded && uploaded.objectKey) || state.objectKey,
+      url: remoteSafeString(uploaded && uploaded.url)
+    };
+  } catch (e) {
+    return {
+      success: false,
+      skipped: false,
+      reason: remoteSafeString(e && e.message) || 'cloud_push_failed',
+      objectKey: state.objectKey
+    };
+  } finally {
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch (_) {}
+  }
+}
+
+async function pullCloudRemoteStoreIntoLocal(settings = {}) {
+  const cloud = await fetchRemoteStoreSnapshotFromCloud(settings);
+  if (!cloud.success || cloud.skipped) return cloud;
+  const local = readLocalRemoteStoreSnapshot();
+  const merged = mergeRemoteStoreSnapshots(local, cloud.snapshot || { version: 1, devices: [] });
+  const before = JSON.stringify(local);
+  const after = JSON.stringify(merged);
+  const changed = before !== after;
+  if (changed) {
+    writeLocalRemoteStoreSnapshot(merged);
+  }
+  return {
+    success: true,
+    skipped: false,
+    changed,
+    objectKey: cloud.objectKey,
+    localCount: Array.isArray(local.devices) ? local.devices.length : 0,
+    cloudCount: Array.isArray(cloud.snapshot && cloud.snapshot.devices) ? cloud.snapshot.devices.length : 0,
+    mergedCount: Array.isArray(merged.devices) ? merged.devices.length : 0
+  };
+}
+
+function findExistingRemoteDeviceByPayload(payload = {}, settings = {}) {
+  const owner = remoteSafeString(payload.owner || payload.username || payload.user || '');
+  const deviceName = remoteSafeString(payload.deviceName || payload.device || payload.name || '');
+  const ownerSlug = owner ? remoteToSlug(owner, 'user') : '';
+  const deviceSlug = deviceName ? remoteToSlug(deviceName, 'dev') : '';
+  const incomingRustdeskId = remoteSafeString(
+    payload.rustdeskId || payload.meshNodeId || ''
+  ).replace(/\s+/g, '');
+
+  const devices = remoteControl.listDevices(settings);
+  if (!Array.isArray(devices) || devices.length === 0) return null;
+
+  for (const dev of devices) {
+    if (!dev || typeof dev !== 'object') continue;
+    const dOwnerSlug = remoteSafeString(dev.ownerSlug || '');
+    const dDeviceSlug = remoteSafeString(dev.deviceSlug || '');
+    if (ownerSlug && deviceSlug && dOwnerSlug === ownerSlug && dDeviceSlug === deviceSlug) {
+      return dev;
+    }
+    const dRustdeskId = remoteSafeString(dev.rustdeskId || dev.meshNodeId || '').replace(/\s+/g, '');
+    if (incomingRustdeskId && dRustdeskId && incomingRustdeskId === dRustdeskId) {
+      return dev;
+    }
+  }
+  return null;
+}
+
 app.get('/api/remote/devices', (req, res) => {
   try {
     const settings = getRuntimeSettings();
@@ -5863,35 +6376,64 @@ app.post('/api/remote/devices', async (req, res) => {
   try {
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
     const settings = getRuntimeSettings();
-    const device = remoteControl.createDevice(payload, settings);
+    const cloudSync = {
+      pre: await pullCloudRemoteStoreIntoLocal(settings)
+    };
+    let device = null;
+    let upserted = false;
+    try {
+      device = remoteControl.createDevice(payload, settings);
+    } catch (e) {
+      if (e && e.code === 'duplicate_route') {
+        const existing = findExistingRemoteDeviceByPayload(payload, settings);
+        if (!existing || !existing.id) throw e;
+        device = remoteControl.updateDevice(existing.id, payload, settings);
+        upserted = true;
+      } else {
+        throw e;
+      }
+    }
+    cloudSync.post = await pushRemoteStoreSnapshotToCloud(settings, readLocalRemoteStoreSnapshot());
 
     return res.json({
       success: true,
-      device
+      device,
+      upserted,
+      cloudSync
     });
   } catch (e) {
     return sendRemoteControlError(res, e);
   }
 });
 
-app.put('/api/remote/devices/:id', (req, res) => {
+app.put('/api/remote/devices/:id', async (req, res) => {
   try {
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
     const settings = getRuntimeSettings();
+    const cloudSync = {
+      pre: await pullCloudRemoteStoreIntoLocal(settings)
+    };
     const device = remoteControl.updateDevice(req.params.id, payload, settings);
+    cloudSync.post = await pushRemoteStoreSnapshotToCloud(settings, readLocalRemoteStoreSnapshot());
     return res.json({
       success: true,
-      device
+      device,
+      cloudSync
     });
   } catch (e) {
     return sendRemoteControlError(res, e);
   }
 });
 
-app.delete('/api/remote/devices/:id', (req, res) => {
+app.delete('/api/remote/devices/:id', async (req, res) => {
   try {
+    const settings = getRuntimeSettings();
+    const cloudSync = {
+      pre: await pullCloudRemoteStoreIntoLocal(settings)
+    };
     remoteControl.deleteDevice(req.params.id);
-    return res.json({ success: true });
+    cloudSync.post = await pushRemoteStoreSnapshotToCloud(settings, readLocalRemoteStoreSnapshot());
+    return res.json({ success: true, cloudSync });
   } catch (e) {
     return sendRemoteControlError(res, e);
   }
@@ -5923,10 +6465,15 @@ app.post('/api/remote/import', async (req, res) => {
       });
     }
     const settings = getRuntimeSettings();
+    const cloudSync = {
+      pre: await pullCloudRemoteStoreIntoLocal(settings)
+    };
     const device = remoteControl.importControlCode(code, settings);
+    cloudSync.post = await pushRemoteStoreSnapshotToCloud(settings, readLocalRemoteStoreSnapshot());
     return res.json({
       success: true,
-      device
+      device,
+      cloudSync
     });
   } catch (e) {
     return sendRemoteControlError(res, e);
@@ -16206,10 +16753,12 @@ app.get(/^\/rustdesk-web\/(.*)$/, async (req, res) => {
           }
         }
       }
+      const serverKey = readLocalRustDeskServerPublicKey();
       const rawHtml = await upstream.text();
       return res.send(rewriteRustDeskWebHtml(rawHtml, {
         localRendezvous: shouldTryLocal ? preferredLocal : '',
-        initialRendezvous
+        initialRendezvous,
+        serverKey
       }));
     }
 

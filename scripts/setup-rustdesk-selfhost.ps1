@@ -88,11 +88,18 @@ function Resolve-ReleaseAssetUrl {
     if ([string]::IsNullOrWhiteSpace([string]$asset.browser_download_url)) { continue }
 
     $name = [string]$asset.name
+    $osMatched = $name -match $osPattern
+    $archMatched = $name -match $archPattern
+    $zipMatched = $name -match '\.zip$'
+    if (-not $osMatched) { continue }
+    if (-not $archMatched) { continue }
+    if (-not $zipMatched) { continue }
+
     $score = 0
     if ($name -match 'rustdesk-server') { $score += 50 }
-    if ($name -match $osPattern) { $score += 30 }
-    if ($name -match $archPattern) { $score += 30 }
-    if ($name -match '\.zip$') { $score += 20 }
+    if ($osMatched) { $score += 30 }
+    if ($archMatched) { $score += 30 }
+    if ($zipMatched) { $score += 20 }
     if ($name -match 'symbols|debug|sha|checksum') { $score -= 40 }
 
     if ($score -lt 60) { continue }

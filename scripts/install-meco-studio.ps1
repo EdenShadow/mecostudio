@@ -44,12 +44,14 @@ $MecoCloudflarePublicHost = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_PUBLIC_HOST'
 $MecoCloudflarePathPrefix = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_PATH_PREFIX' -Default ''
 $MecoCloudflareTunnelToken = Get-EnvOrDefault -Name 'MECO_CLOUDFLARE_TUNNEL_TOKEN' -Default 'eyJhIjoiNzMyNGQ3ZjU3MGY5MzBlMjRjODRlYTY2ZmNkM2IwYjUiLCJ0IjoiYTk1OTZiMDgtNDZjOC00NmRlLWIzZGYtN2NjYjQ4OTJhM2NkIiwicyI6Ik5EWmlaREV4TjJFdFpXRXdNeTAwWlRNNExXSTJZakF0TWpFek5HRmlNVEl4WXpCaiJ9'
 $MecoRustdeskWebBaseUrl = Get-EnvOrDefault -Name 'MECO_RUSTDESK_WEB_BASE_URL' -Default '/rustdesk-web/'
-$MecoRustdeskPreferredRendezvous = Get-EnvOrDefault -Name 'MECO_RUSTDESK_PREFERRED_RENDEZVOUS' -Default '127.0.0.1:21116,127.0.0.1:21118'
+$MecoRustdeskPreferredRendezvous = Get-EnvOrDefault -Name 'MECO_RUSTDESK_PREFERRED_RENDEZVOUS' -Default ''
 $MecoAutoInstallCloudflared = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_CLOUDFLARED' -Default '1'
 $MecoAutoInstallRustdeskClient = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_RUSTDESK_CLIENT' -Default '1'
-$MecoAutoSetupRustdeskSelfhost = Get-EnvOrDefault -Name 'MECO_AUTO_SETUP_RUSTDESK_SELFHOST' -Default '1'
+$MecoAutoSetupRustdeskSelfhost = Get-EnvOrDefault -Name 'MECO_AUTO_SETUP_RUSTDESK_SELFHOST' -Default '0'
 $MecoAutoGrantRustdeskPermissions = Get-EnvOrDefault -Name 'MECO_AUTO_GRANT_RUSTDESK_PERMISSIONS' -Default '1'
 $MecoAutoStartCloudflareTunnel = Get-EnvOrDefault -Name 'MECO_AUTO_START_CLOUDFLARE_TUNNEL' -Default '1'
+$MecoServicePort = [int](Get-EnvOrDefault -Name 'MECO_SERVICE_PORT' -Default '3456')
+$MecoServicePortScanMax = [int](Get-EnvOrDefault -Name 'MECO_SERVICE_PORT_SCAN_MAX' -Default '20')
 $MecoAutoInstallMeshcentral = Get-EnvOrDefault -Name 'MECO_AUTO_INSTALL_MESHCENTRAL' -Default '0'
 $MecoMeshNodeBin = Get-EnvOrDefault -Name 'MECO_MESH_NODE_BIN' -Default ''
 $MecoMeshcentralCert = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_CERT' -Default 'mecoclaw.com'
@@ -686,7 +688,22 @@ function Configure-OpenclawDefaults {
 
   if (-not $conf.ContainsKey('gateway') -or $null -eq $conf.gateway) { $conf.gateway = @{} }
   if (-not $conf.gateway.ContainsKey('port')) { $conf.gateway.port = 18789 }
+  if (-not $conf.gateway.ContainsKey('mode') -or [string]::IsNullOrWhiteSpace([string]$conf.gateway.mode)) { $conf.gateway.mode = 'local' }
+  if (-not $conf.gateway.ContainsKey('bind') -or [string]::IsNullOrWhiteSpace([string]$conf.gateway.bind)) { $conf.gateway.bind = 'loopback' }
   if (-not $conf.gateway.ContainsKey('auth') -or $null -eq $conf.gateway.auth) { $conf.gateway.auth = @{} }
+  if (-not $conf.gateway.ContainsKey('controlUi') -or $null -eq $conf.gateway.controlUi) { $conf.gateway.controlUi = @{} }
+  if (-not $conf.gateway.controlUi.ContainsKey('allowedOrigins') -or $null -eq $conf.gateway.controlUi.allowedOrigins) {
+    $conf.gateway.controlUi.allowedOrigins = @('*')
+  }
+  if (-not $conf.gateway.ContainsKey('http') -or $null -eq $conf.gateway.http) { $conf.gateway.http = @{} }
+  if (-not $conf.gateway.http.ContainsKey('endpoints') -or $null -eq $conf.gateway.http.endpoints) { $conf.gateway.http.endpoints = @{} }
+  if (-not $conf.gateway.http.endpoints.ContainsKey('chatCompletions') -or $null -eq $conf.gateway.http.endpoints.chatCompletions) {
+    $conf.gateway.http.endpoints.chatCompletions = @{}
+  }
+  $conf.gateway.http.endpoints.chatCompletions.enabled = $true
+  if ($conf.gateway.http.endpoints.chatCompletions.ContainsKey('images')) {
+    $null = $conf.gateway.http.endpoints.chatCompletions.Remove('images')
+  }
 
   if (-not $conf.ContainsKey('agents') -or $null -eq $conf.agents) { $conf.agents = @{} }
   if (-not $conf.agents.ContainsKey('defaults') -or $null -eq $conf.agents.defaults) { $conf.agents.defaults = @{} }
@@ -779,10 +796,113 @@ function Configure-MecoRuntimeSettings {
       $current[$key] = ''
     }
   }
+  # Installer defaults should be authoritative for rendezvous preference.
+  $current['rustdeskPreferredRendezvous'] = [string]$MecoRustdeskPreferredRendezvous
 
   $json = $current | ConvertTo-Json -Depth 10
   Set-Content -Path $settingsPath -Value $json -Encoding UTF8
   Write-Log "Updated Meco runtime settings: $settingsPath"
+}
+
+function Get-OpenclawGatewayPort {
+  $openclawConfigPath = Join-Path $OpenclawRoot 'openclaw.json'
+  if (-not (Test-Path $openclawConfigPath)) {
+    return 18789
+  }
+  try {
+    $conf = Get-Content -Raw -Path $openclawConfigPath | ConvertFrom-Json
+    $port = [int]($conf.gateway.port)
+    if ($port -gt 0) { return $port }
+  }
+  catch {}
+  return 18789
+}
+
+function Ensure-OpenclawGateway {
+  if (-not (Test-Cmd 'openclaw')) {
+    Write-Warn 'OpenClaw command not found, skip gateway startup check'
+    return
+  }
+
+  Write-Log 'Ensuring OpenClaw Gateway is running...'
+  & openclaw gateway restart *> $null
+  if ($LASTEXITCODE -ne 0) {
+    & openclaw gateway start *> $null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warn 'OpenClaw gateway restart/start failed, trying background run fallback...'
+      $runtimeDir = Join-Path $env:USERPROFILE '.meco-studio\openclaw'
+      $pidFile = Join-Path $runtimeDir 'gateway.pid'
+      $logFile = Join-Path $runtimeDir 'gateway.log'
+      $errFile = Join-Path $runtimeDir 'gateway.err.log'
+      New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+
+      $existingPid = ''
+      if (Test-Path $pidFile) {
+        try { $existingPid = (Get-Content -Raw -Path $pidFile).Trim() } catch {}
+      }
+      $existingProc = $null
+      if (-not [string]::IsNullOrWhiteSpace($existingPid) -and $existingPid -match '^\d+$') {
+        $existingProc = Get-Process -Id ([int]$existingPid) -ErrorAction SilentlyContinue
+        if ($existingProc) {
+          Write-Log "OpenClaw gateway fallback already running (pid=$existingPid)"
+        }
+      }
+
+      if (-not $existingProc) {
+        $gatewayPort = Get-OpenclawGatewayPort
+        $fallback = Start-Process -FilePath 'openclaw' -ArgumentList @('gateway', 'run', '--allow-unconfigured', '--bind', 'loopback', '--port', [string]$gatewayPort) -RedirectStandardOutput $logFile -RedirectStandardError $errFile -PassThru
+        Set-Content -Path $pidFile -Value $fallback.Id -Encoding UTF8
+        Start-Sleep -Seconds 1
+        if ($fallback.HasExited) {
+          Write-Warn 'OpenClaw gateway fallback run failed (continue install)'
+          return
+        }
+        Write-Log "OpenClaw gateway fallback started (pid=$($fallback.Id))"
+      }
+    }
+    else {
+      Write-Log 'OpenClaw gateway started'
+    }
+  }
+  else {
+    Write-Log 'OpenClaw gateway restarted'
+  }
+
+  $gatewayPort = Get-OpenclawGatewayPort
+  $probeUrl = "http://127.0.0.1:$gatewayPort/v1/chat/completions"
+  $ready = $false
+  $lastStatus = ''
+  for ($i = 0; $i -lt $MecoHealthcheckRetries; $i++) {
+    try {
+      $resp = Invoke-WebRequest -UseBasicParsing -Method POST -Uri $probeUrl -ContentType 'application/json' -Body '{}' -TimeoutSec 3
+      $lastStatus = [string]$resp.StatusCode
+      if ($resp.StatusCode -ne 404) {
+        $ready = $true
+        break
+      }
+    }
+    catch {
+      $status = $null
+      if ($_.Exception -and $_.Exception.Response) {
+        try { $status = [int]$_.Exception.Response.StatusCode } catch {}
+      }
+      if ($null -ne $status) {
+        $lastStatus = [string]$status
+        if ($status -ne 404) {
+          $ready = $true
+          break
+        }
+      }
+    }
+    Start-Sleep -Seconds $MecoHealthcheckIntervalSec
+  }
+
+  if ($ready) {
+    Write-Log "OpenClaw gateway endpoint ready: $probeUrl (status=$lastStatus)"
+  }
+  else {
+    Write-Warn "OpenClaw gateway endpoint /v1/chat/completions not ready (url=$probeUrl, last_status=$lastStatus)"
+  }
 }
 
 function Prepare-Repo {
@@ -1037,6 +1157,77 @@ function Stop-OldServerProcess {
   }
 }
 
+function Get-ListeningPidsByPort {
+  param([Parameter(Mandatory = $true)][int]$Port)
+
+  $pids = @()
+  if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+    try {
+      $rows = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
+      if ($rows) {
+        $pids += @($rows | Select-Object -ExpandProperty OwningProcess -ErrorAction SilentlyContinue)
+      }
+    }
+    catch {}
+  }
+
+  if ($pids.Count -eq 0) {
+    try {
+      $netstat = netstat -ano -p tcp 2>$null
+      foreach ($line in $netstat) {
+        if ($line -match "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING\s+(\d+)\s*$") {
+          $pids += [int]$matches[1]
+        }
+      }
+    }
+    catch {}
+  }
+
+  return @($pids | Where-Object { $_ -and $_ -gt 0 } | Select-Object -Unique)
+}
+
+function Resolve-ServicePort {
+  param([Parameter(Mandatory = $true)][int]$PreferredPort)
+
+  $target = $PreferredPort
+  if ($target -le 0) { $target = 3456 }
+  $listeners = @(Get-ListeningPidsByPort -Port $target)
+
+  if ($listeners.Count -gt 0) {
+    foreach ($pid in $listeners) {
+      $cmdLine = ''
+      try {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$pid" -ErrorAction SilentlyContinue
+        if ($proc -and $proc.CommandLine) { $cmdLine = [string]$proc.CommandLine }
+      }
+      catch {}
+      if ($cmdLine -match 'node' -and $cmdLine -match 'server\.js') {
+        Write-Log "Stopping process on port $target (pid=$pid): $cmdLine"
+        try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch {}
+      }
+    }
+  }
+
+  $listeners = @(Get-ListeningPidsByPort -Port $target)
+  if ($listeners.Count -eq 0) {
+    return $target
+  }
+
+  Write-Warn "Port $target occupied by non-meco process, trying next available port..."
+  $attempt = 0
+  while ($attempt -lt $MecoServicePortScanMax) {
+    $attempt++
+    $candidate = $target + $attempt
+    $candidateListeners = @(Get-ListeningPidsByPort -Port $candidate)
+    if ($candidateListeners.Count -eq 0) {
+      Write-Warn "Service port switched from $target to $candidate"
+      return $candidate
+    }
+  }
+
+  Throw-Fail "Unable to allocate service port near $target. Set MECO_SERVICE_PORT manually and retry."
+}
+
 function Start-Service {
   if ($MecoStartAfterInstall -ne '1') {
     Write-Log "Skip start service (MECO_START_AFTER_INSTALL=$MecoStartAfterInstall)"
@@ -1044,19 +1235,28 @@ function Start-Service {
   }
 
   Stop-OldServerProcess
+  $servicePort = Resolve-ServicePort -PreferredPort $MecoServicePort
 
   Write-Log 'Starting meco-studio service...'
   $pidFile = Join-Path $MecoInstallDir '.meco-studio.pid'
+  $portFile = Join-Path $MecoInstallDir '.meco-studio.port'
   $stdout = Join-Path $MecoInstallDir 'server.log'
   $stderr = Join-Path $MecoInstallDir 'server.err.log'
 
-  $process = Start-Process -FilePath 'node' -ArgumentList @('server.js') -WorkingDirectory $MecoInstallDir -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+  $oldPortEnv = [Environment]::GetEnvironmentVariable('PORT', 'Process')
+  [Environment]::SetEnvironmentVariable('PORT', [string]$servicePort, 'Process')
+  try {
+    $process = Start-Process -FilePath 'node' -ArgumentList @('server.js') -WorkingDirectory $MecoInstallDir -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+  }
+  finally {
+    [Environment]::SetEnvironmentVariable('PORT', $oldPortEnv, 'Process')
+  }
   Set-Content -Path $pidFile -Value $process.Id -Encoding UTF8
 
   $healthy = $false
   for ($i = 0; $i -lt $MecoHealthcheckRetries; $i++) {
     try {
-      $resp = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3456/api/status' -TimeoutSec 3
+      $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$servicePort/api/status" -TimeoutSec 3
       if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
         $healthy = $true
         break
@@ -1071,7 +1271,12 @@ function Start-Service {
     Throw-Fail "service process started but healthcheck failed, check $stdout / $stderr"
   }
 
-  Write-Log "Service started. pid=$($process.Id), url=http://127.0.0.1:3456"
+  Set-Content -Path $portFile -Value $servicePort -Encoding UTF8
+  $runtimeDir = Join-Path $env:USERPROFILE '.meco-studio'
+  New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+  Set-Content -Path (Join-Path $runtimeDir 'service-port') -Value $servicePort -Encoding UTF8
+
+  Write-Log "Service started. pid=$($process.Id), url=http://127.0.0.1:$servicePort"
 }
 
 function Main {
@@ -1102,6 +1307,7 @@ function Main {
   Configure-KimiApiKey -KimiApiKey $MecoKimiCodingApiKey
   Configure-MecoRuntimeSettings -KimiApiKey $MecoKimiCodingApiKey -OpenclawModelApiKey $effectiveModelKey
   Reset-RuntimeState
+  Ensure-OpenclawGateway
   Start-Service
   Start-CloudflareTunnelRuntime
 

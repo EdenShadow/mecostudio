@@ -28,6 +28,8 @@
       running: false,
       id: '',
       password: '',
+      serverKey: '',
+      serverPrivateKey: '',
       passwordSource: '',
       lastReadAt: ''
     },
@@ -44,6 +46,8 @@
       note: '',
       lanUrl: '',
       rustdeskId: '',
+      rustdeskKey: '',
+      rustdeskPrivateKey: '',
       password: '',
       bindingId: ''
     },
@@ -225,6 +229,8 @@
         note: toSafeString(parsed.note),
         lanUrl: toSafeString(parsed.lanUrl),
         rustdeskId: normalizeRustDeskId(parsed.rustdeskId),
+        rustdeskKey: toSafeString(parsed.rustdeskKey),
+        rustdeskPrivateKey: toSafeString(parsed.rustdeskPrivateKey),
         password: toSafeString(parsed.password),
         bindingId: toSafeString(parsed.bindingId)
       };
@@ -241,6 +247,8 @@
         note: toSafeString(profile.note),
         lanUrl: toSafeString(profile.lanUrl),
         rustdeskId: normalizeRustDeskId(profile.rustdeskId),
+        rustdeskKey: toSafeString(profile.rustdeskKey),
+        rustdeskPrivateKey: toSafeString(profile.rustdeskPrivateKey),
         password: toSafeString(profile.password),
         bindingId: toSafeString(profile.bindingId)
       }));
@@ -418,6 +426,8 @@
       note: toSafeString(els.noteInput && els.noteInput.value),
       lanUrl: toSafeString(els.lanInput && els.lanInput.value),
       rustdeskId: normalizeRustDeskId((els.rustdeskIdInput && els.rustdeskIdInput.value) || ''),
+      rustdeskKey: toSafeString((els.rustdeskKeyInput && els.rustdeskKeyInput.value) || state.localProfile.rustdeskKey || state.localRustDesk.serverKey || ''),
+      rustdeskPrivateKey: toSafeString((els.rustdeskPrivateKeyInput && els.rustdeskPrivateKeyInput.value) || state.localProfile.rustdeskPrivateKey || state.localRustDesk.serverPrivateKey || ''),
       password: toSafeString(getRustDeskPasswordInputValue() || ''),
       bindingId: toSafeString(state.localProfile.bindingId || '')
     };
@@ -441,6 +451,12 @@
     if (els.rustdeskIdInput && (!keepUserInput || !normalizeRustDeskId(els.rustdeskIdInput.value))) {
       els.rustdeskIdInput.value = normalizeRustDeskId(profile.rustdeskId);
     }
+    if (els.rustdeskKeyInput && (!keepUserInput || !toSafeString(els.rustdeskKeyInput.value))) {
+      els.rustdeskKeyInput.value = toSafeString(profile.rustdeskKey);
+    }
+    if (els.rustdeskPrivateKeyInput && (!keepUserInput || !toSafeString(els.rustdeskPrivateKeyInput.value))) {
+      els.rustdeskPrivateKeyInput.value = toSafeString(profile.rustdeskPrivateKey);
+    }
     if (!keepUserInput || !toSafeString(getRustDeskPasswordInputValue())) {
       setRustDeskPasswordView(profile.password || '');
     }
@@ -453,6 +469,8 @@
       ...extra
     };
     merged.rustdeskId = normalizeRustDeskId(merged.rustdeskId);
+    merged.rustdeskKey = toSafeString(merged.rustdeskKey);
+    merged.rustdeskPrivateKey = toSafeString(merged.rustdeskPrivateKey);
     merged.bindingId = toSafeString(merged.bindingId);
     state.localProfile = merged;
     writeLocalProfileCache(merged);
@@ -526,6 +544,12 @@
       rustdeskId: normalizeRustDeskId(
         (device.rustdeskId || device.meshNodeId || state.localProfile.rustdeskId || state.localRustDesk.id || '')
       ),
+      rustdeskKey: toSafeString(
+        device.rustdeskKey || device.meshKey || state.localProfile.rustdeskKey || state.localRustDesk.serverKey || ''
+      ),
+      rustdeskPrivateKey: toSafeString(
+        device.rustdeskPrivateKey || device.meshPrivateKey || state.localProfile.rustdeskPrivateKey || state.localRustDesk.serverPrivateKey || ''
+      ),
       bindingId: toSafeString(device.id || state.localProfile.bindingId)
     };
 
@@ -538,6 +562,8 @@
       if (els.noteInput) els.noteInput.value = next.note;
       if (els.lanInput) els.lanInput.value = next.lanUrl;
       if (els.rustdeskIdInput) els.rustdeskIdInput.value = next.rustdeskId;
+      if (els.rustdeskKeyInput) els.rustdeskKeyInput.value = next.rustdeskKey;
+      if (els.rustdeskPrivateKeyInput) els.rustdeskPrivateKeyInput.value = next.rustdeskPrivateKey;
       updatePublicPreview();
     }
     return true;
@@ -739,6 +765,8 @@
       running: !!info.running,
       id: normalizeRustDeskId(info.id),
       password: toSafeString(info.password),
+      serverKey: toSafeString(info.serverKey),
+      serverPrivateKey: toSafeString(info.serverPrivateKey),
       passwordSource: toSafeString(info.passwordSource),
       lastReadAt: toSafeString(info.readAt)
     };
@@ -746,6 +774,12 @@
 
     if (els.rustdeskIdInput && (!keepUserInput || !normalizeRustDeskId(els.rustdeskIdInput.value))) {
       els.rustdeskIdInput.value = next.id || '';
+    }
+    if (els.rustdeskKeyInput && (!keepUserInput || !toSafeString(els.rustdeskKeyInput.value))) {
+      els.rustdeskKeyInput.value = next.serverKey || '';
+    }
+    if (els.rustdeskPrivateKeyInput && (!keepUserInput || !toSafeString(els.rustdeskPrivateKeyInput.value))) {
+      els.rustdeskPrivateKeyInput.value = next.serverPrivateKey || '';
     }
     setRustDeskPasswordView(next.password, {
       preserveUserInput: keepUserInput && state.rustdeskPasswordDirty
@@ -903,7 +937,7 @@
     const password = toSafeString(getRustDeskPasswordInputValue() || '');
     const rustdeskId = normalizeRustDeskId((els.rustdeskIdInput && els.rustdeskIdInput.value) || '');
 
-    return {
+    const payload = {
       owner,
       deviceName,
       note,
@@ -912,6 +946,7 @@
       rustdeskId,
       rustdeskPassword: password
     };
+    return payload;
   }
 
   async function createBinding() {
@@ -1311,6 +1346,9 @@
       }
       if (password) {
         u.searchParams.set('meco_password', password);
+      }
+      if (key) {
+        u.searchParams.set('meco_key', key);
       }
       u.searchParams.set('meco_nonce', String(Date.now()));
       return u.toString();
@@ -2063,10 +2101,15 @@
       || (device && device.password)
       || ''
     );
+    const fallbackKey = toSafeString(
+      (launch && launch.device && (launch.device.rustdeskKey || launch.device.meshKey))
+      || (device && (device.rustdeskKey || device.meshKey))
+      || ''
+    );
     const embedUrl = buildRustDeskWebAutoConnectUrl(rustdeskWebBaseUrl, {
       id: parsed.id || fallbackId,
       password: parsed.password || fallbackPassword,
-      key: parsed.key || ''
+      key: parsed.key || fallbackKey
     });
     return { ...launch, sessionMode: 'rustdesk', url: embedUrl };
   }
@@ -2418,6 +2461,24 @@
         renderDockTabs();
       });
     }
+    if (els.rustdeskKeyInput) {
+      els.rustdeskKeyInput.addEventListener('input', () => {
+        persistLocalProfileFromForm();
+      });
+      els.rustdeskKeyInput.addEventListener('blur', () => {
+        els.rustdeskKeyInput.value = toSafeString(els.rustdeskKeyInput.value);
+        persistLocalProfileFromForm();
+      });
+    }
+    if (els.rustdeskPrivateKeyInput) {
+      els.rustdeskPrivateKeyInput.addEventListener('input', () => {
+        persistLocalProfileFromForm();
+      });
+      els.rustdeskPrivateKeyInput.addEventListener('blur', () => {
+        els.rustdeskPrivateKeyInput.value = toSafeString(els.rustdeskPrivateKeyInput.value);
+        persistLocalProfileFromForm();
+      });
+    }
     if (els.rustdeskPasswordView && typeof els.rustdeskPasswordView.value === 'string') {
       els.rustdeskPasswordView.addEventListener('input', () => {
         state.rustdeskPasswordDirty = true;
@@ -2483,6 +2544,8 @@
     els.noteInput = q('remote-bind-note');
     els.lanInput = q('remote-bind-lan-url');
     els.rustdeskIdInput = q('remote-bind-rustdesk-id');
+    els.rustdeskKeyInput = q('remote-bind-rustdesk-key');
+    els.rustdeskPrivateKeyInput = q('remote-bind-rustdesk-private-key');
     els.rustdeskReadBtn = q('remote-bind-rustdesk-read-btn');
     els.rustdeskReadStatus = q('remote-bind-rustdesk-read-status');
     els.rustdeskPasswordView = q('remote-bind-rustdesk-password-view');

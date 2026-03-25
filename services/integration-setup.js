@@ -133,7 +133,26 @@ function configureOpenClawDefaults(settings, logs) {
 
   if (!conf.gateway || typeof conf.gateway !== 'object') conf.gateway = {};
   if (!conf.gateway.port) conf.gateway.port = 18789;
+  if (!conf.gateway.mode) conf.gateway.mode = 'local';
+  if (!conf.gateway.bind) conf.gateway.bind = 'loopback';
   if (!conf.gateway.auth || typeof conf.gateway.auth !== 'object') conf.gateway.auth = {};
+  if (!conf.gateway.controlUi || typeof conf.gateway.controlUi !== 'object') conf.gateway.controlUi = {};
+  if (!Array.isArray(conf.gateway.controlUi.allowedOrigins) || conf.gateway.controlUi.allowedOrigins.length === 0) {
+    conf.gateway.controlUi.allowedOrigins = ['*'];
+  }
+  if (!conf.gateway.http || typeof conf.gateway.http !== 'object') conf.gateway.http = {};
+  if (!conf.gateway.http.endpoints || typeof conf.gateway.http.endpoints !== 'object') conf.gateway.http.endpoints = {};
+  if (
+    !conf.gateway.http.endpoints.chatCompletions ||
+    typeof conf.gateway.http.endpoints.chatCompletions !== 'object' ||
+    Array.isArray(conf.gateway.http.endpoints.chatCompletions)
+  ) {
+    conf.gateway.http.endpoints.chatCompletions = {};
+  }
+  conf.gateway.http.endpoints.chatCompletions.enabled = true;
+  if (Object.prototype.hasOwnProperty.call(conf.gateway.http.endpoints.chatCompletions, 'images')) {
+    delete conf.gateway.http.endpoints.chatCompletions.images;
+  }
   if (!conf.agents || typeof conf.agents !== 'object') conf.agents = {};
   if (!conf.agents.defaults || typeof conf.agents.defaults !== 'object') conf.agents.defaults = {};
   if (!conf.agents.defaults.model || typeof conf.agents.defaults.model !== 'object') conf.agents.defaults.model = {};
@@ -166,6 +185,48 @@ function configureOpenClawDefaults(settings, logs) {
 
   fs.writeFileSync(openclawConfigPath, JSON.stringify(conf, null, 2) + '\n', 'utf8');
   logs.push(`Updated OpenClaw defaults (~/.openclaw/openclaw.json): model=${model}`);
+}
+
+async function ensureOpenClawGateway(logs) {
+  const openclawConfigPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+  let gatewayPort = 18789;
+  try {
+    if (fs.existsSync(openclawConfigPath)) {
+      const conf = JSON.parse(fs.readFileSync(openclawConfigPath, 'utf8') || '{}');
+      const configured = Number((((conf || {}).gateway || {}).port) || 0);
+      if (configured > 0) gatewayPort = configured;
+    }
+  } catch (_) {}
+
+  if (!(await commandExists('openclaw'))) {
+    logs.push('openclaw command not found, skip gateway startup check');
+    return;
+  }
+  try {
+    await runCommand('openclaw gateway restart', { timeoutMs: 2 * 60 * 1000 });
+    logs.push('OpenClaw gateway restarted');
+    return;
+  } catch (_) {}
+
+  try {
+    await runCommand('openclaw gateway start', { timeoutMs: 2 * 60 * 1000 });
+    logs.push('OpenClaw gateway started');
+  } catch (e) {
+    logs.push(`OpenClaw gateway restart/start failed: ${e.message}`);
+    const runtimeDir = path.join(os.homedir(), '.meco-studio', 'openclaw');
+    const pidFile = path.join(runtimeDir, 'gateway.pid');
+    const logFile = path.join(runtimeDir, 'gateway.log');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    try {
+      await runCommand(
+        `nohup openclaw gateway run --allow-unconfigured --bind loopback --port ${gatewayPort} >> "${logFile}" 2>&1 & echo $! > "${pidFile}"`,
+        { timeoutMs: 10 * 1000 }
+      );
+      logs.push('OpenClaw gateway fallback started (openclaw gateway run)');
+    } catch (fallbackError) {
+      logs.push(`OpenClaw gateway fallback failed: ${fallbackError.message}`);
+    }
+  }
 }
 
 function patchKimiToml(content, apiKey) {
@@ -337,6 +398,7 @@ async function applyAll(settings = {}) {
   const logs = [];
   await configureOpenClawKimiAuth(settings, logs);
   configureOpenClawDefaults(settings, logs);
+  await ensureOpenClawGateway(logs);
   const kimiPath = await ensureKimiCliInstalled(logs);
   configureKimiApiKey(String(settings.kimiApiKey || '').trim(), logs);
   const hotTopicsRoot = ensureHotTopicsKnowledgeBase(settings, logs);
