@@ -62,7 +62,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
   - Python：`requests aiohttp aiofiles pillow openai openai-whisper`
   - Node：自动扫描 OpenClaw/config skills 的 `package.json` 并安装
 - 初始化 `~/Documents/知识库/热门话题` 及分类目录（只补齐缺失，不覆盖已有内容）
-- 默认清空测试房间数据（`data/rooms.json = []`）
+- 首次安装默认清空测试房间数据（`data/rooms.json = []`）
+- 升级默认保留已有房间数据；如需强制清空可设置：`MECO_RESET_RUNTIME_STATE_ON_UPDATE=1`
 - 升级模式会先请求停止 active rooms（`POST /api/roundtable/stop-active-rooms`）再重启服务
 - 自动确保 OpenClaw Gateway 已启动，并检查 `/v1/chat/completions` 端点可用
 - 启动服务（默认 `http://127.0.0.1:3456`）

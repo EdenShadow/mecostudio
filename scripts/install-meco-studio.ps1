@@ -19,6 +19,7 @@ $MecoBranch = Get-EnvOrDefault -Name 'MECO_BRANCH' -Default 'main'
 $MecoInstallDir = Get-EnvOrDefault -Name 'MECO_INSTALL_DIR' -Default (Join-Path $env:USERPROFILE 'meco-studio')
 $MecoStartAfterInstall = Get-EnvOrDefault -Name 'MECO_START_AFTER_INSTALL' -Default '1'
 $MecoResetRuntimeState = Get-EnvOrDefault -Name 'MECO_RESET_RUNTIME_STATE' -Default '1'
+$MecoResetRuntimeStateOnUpdate = Get-EnvOrDefault -Name 'MECO_RESET_RUNTIME_STATE_ON_UPDATE' -Default '0'
 $MecoUpgradeOpenclaw = Get-EnvOrDefault -Name 'MECO_UPGRADE_OPENCLAW' -Default '0'
 $MecoNpmInstallMode = Get-EnvOrDefault -Name 'MECO_NPM_INSTALL_MODE' -Default 'auto' # auto|ci|install
 $MecoHealthcheckRetries = [int](Get-EnvOrDefault -Name 'MECO_HEALTHCHECK_RETRIES' -Default '20')
@@ -1125,6 +1126,10 @@ function Install-SkillRuntimeDependencies {
 
 function Reset-RuntimeState {
   if ($MecoResetRuntimeState -ne '1') {
+    return
+  }
+  if ($script:MecoIsUpdate -and $MecoResetRuntimeStateOnUpdate -ne '1') {
+    Write-Log 'Update mode detected: preserving existing runtime room state (set MECO_RESET_RUNTIME_STATE_ON_UPDATE=1 to force reset)'
     return
   }
 

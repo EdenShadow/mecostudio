@@ -301,7 +301,7 @@ post_install_actions:
   - "sync OpenClaw agents/workspaces + local data-agents"
   - "sync rule knowledge folders to upload root"
   - "ensure hot-topics category folders under ~/Documents/知识库/热门话题"
-  - "reset default test rooms to empty"
+  - "reset default test rooms on fresh install; preserve existing rooms on upgrade by default"
   - "on upgrade: stop active rooms first, then restart OpenClaw gateway and Meco Studio"
   - "sync repo VERSION to ~/.meco-studio/VERSION"
 ```

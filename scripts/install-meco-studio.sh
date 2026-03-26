@@ -6,6 +6,7 @@ MECO_BRANCH="${MECO_BRANCH:-main}"
 MECO_INSTALL_DIR="${MECO_INSTALL_DIR:-$HOME/meco-studio}"
 MECO_START_AFTER_INSTALL="${MECO_START_AFTER_INSTALL:-1}"
 MECO_RESET_RUNTIME_STATE="${MECO_RESET_RUNTIME_STATE:-1}"
+MECO_RESET_RUNTIME_STATE_ON_UPDATE="${MECO_RESET_RUNTIME_STATE_ON_UPDATE:-0}"
 MECO_UPGRADE_OPENCLAW="${MECO_UPGRADE_OPENCLAW:-0}"
 MECO_NPM_INSTALL_MODE="${MECO_NPM_INSTALL_MODE:-auto}" # auto|ci|install
 MECO_SKIP_NPM_INSTALL_IF_UNCHANGED="${MECO_SKIP_NPM_INSTALL_IF_UNCHANGED:-1}"
@@ -1566,6 +1567,10 @@ apply_bootstrap_assets() {
 
 reset_runtime_state() {
   if [[ "$MECO_RESET_RUNTIME_STATE" != "1" ]]; then
+    return 0
+  fi
+  if [[ "$MECO_IS_UPDATE" == "1" && "$MECO_RESET_RUNTIME_STATE_ON_UPDATE" != "1" ]]; then
+    log "Update mode detected: preserving existing runtime room state (set MECO_RESET_RUNTIME_STATE_ON_UPDATE=1 to force reset)"
     return 0
   fi
 
