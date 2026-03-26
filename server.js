@@ -9207,6 +9207,8 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
     podcastPusher: null,   // 该房间独立的 Podcast 推流连接
     pendingPodcastLiveEvent: null, // 待补发的开播/下播事件
     pendingPodcastStreamingLifecycleEvent: null, // 待补发的 C→S 开播/下播命令（手动或服务端关停）
+    podcastReconnectRetryCount: 0, // Podcast 控制连接失败后的自动重试计数
+    podcastReconnectRetryTimer: null, // Podcast 控制连接失败后的自动重试定时器
     _suppressNextPodcastLiveEvent: false, // 避免服务端 stop_streaming 触发的停播回环上报
     pendingStreamingControlCommand: null, // 待补发给主机前端的开播/下播控制命令
     topicQueue: [],              // 当前麦序话题列表（从服务端拉取）
@@ -9492,6 +9494,11 @@ function deleteRoom(channelId) {
       room.podcastPusher.disconnect();
       room.podcastPusher = null;
     }
+    if (room.podcastReconnectRetryTimer) {
+      clearTimeout(room.podcastReconnectRetryTimer);
+      room.podcastReconnectRetryTimer = null;
+    }
+    room.podcastReconnectRetryCount = 0;
     rooms.delete(channelId);
     console.log(`[Room] 删除房间: ${channelId}`);
   }
@@ -10231,6 +10238,10 @@ async function reconnectPodcastPusher(channelId) {
     console.log(`[Podcast] 未找到房间 ${channelId}, 现有房间: ${[...rooms.keys()].join(', ')}`);
     return;
   }
+  if (room.podcastReconnectRetryTimer) {
+    clearTimeout(room.podcastReconnectRetryTimer);
+    room.podcastReconnectRetryTimer = null;
+  }
 
   // 如果该房间已有活跃连接且 podcastRoomId 一致，复用
   if (room.podcastPusher && room.podcastPusher.connected && room.podcastPusher.podcastRoomId === room.podcastRoomId) {
@@ -10291,6 +10302,7 @@ async function reconnectPodcastPusher(channelId) {
     const ok = await pusher.connect();
     if (ok) {
       room.podcastPusher = pusher;
+      room.podcastReconnectRetryCount = 0;
       pusher.resumeAudioPush('reconnect_connected');
       console.log(`[Podcast] 房间 ${channelId}: ${podcastRoomId} 控制连接就绪 (host: ${agentId})`);
       // 连接成功后，补发暂存的话题
@@ -10360,6 +10372,28 @@ async function reconnectPodcastPusher(channelId) {
   } else {
     console.error(`[Podcast] 房间 ${channelId}: 所有 agent 均无法控制 ${podcastRoomId}`);
   }
+
+  const shouldRetry = !!room.isActive || !!(room.pendingPodcastStreamingLifecycleEvent && room.pendingPodcastStreamingLifecycleEvent.isLive);
+  if (!shouldRetry) {
+    room.podcastReconnectRetryCount = 0;
+    return;
+  }
+
+  const nextAttempt = (Number(room.podcastReconnectRetryCount) || 0) + 1;
+  room.podcastReconnectRetryCount = nextAttempt;
+  if (nextAttempt > 4) {
+    console.error(`[Podcast] 房间 ${channelId}: 控制连接重试已达上限，停止自动重连`);
+    room.podcastReconnectRetryCount = 0;
+    return;
+  }
+
+  const delay = Math.min(800 * Math.pow(2, nextAttempt - 1), 4000);
+  room.podcastReconnectRetryTimer = setTimeout(() => {
+    reconnectPodcastPusher(channelId).catch((e) => {
+      console.warn(`[Podcast] ⚠️ 自动重连失败(channel=${channelId}): ${e.message}`);
+    });
+  }, delay);
+  console.warn(`[Podcast] 房间 ${channelId}: 控制连接失败，${delay}ms 后自动重试(${nextAttempt}/4)`);
 }
 
 // ========== Kimi CLI 麦序话题抓取 ==========
@@ -10771,10 +10805,26 @@ function startHotTopicsCrawl(room) {
   }
 }
 
+function shouldSendStartStreamingBySource(sourceRaw = '') {
+  const source = String(sourceRaw || '').trim().toLowerCase();
+  if (!source) return true; // 默认按主机手动开播处理，避免漏发
+  if (source === 'room_start_streaming' || source === 'remote_start_streaming' || source === 'streaming_control') {
+    return false; // 来自房间服务下发的开播，不回环发送 C→S
+  }
+  return true;
+}
+
+function resolveStartStreamingReason(sourceRaw = '') {
+  const source = String(sourceRaw || '').trim().toLowerCase();
+  if (!source || source === 'manual_click') return 'manual_click_start';
+  return `${source.replace(/[^a-z0-9_]+/g, '_')}_start`;
+}
+
 // 开始圆桌讨论（指定话题）
 function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, channelId = null, options = {}) {
   const source = String(options?.source || '').trim();
-  const isManualClick = source === 'manual_click';
+  const shouldSendStartStreaming = shouldSendStartStreamingBySource(source);
+  const startStreamingReason = resolveStartStreamingReason(source);
   const moderatorToUse = mod || moderator;
   console.log('[RoundTable] 开始话题:', topic, '语言:', lang, fromUser ? '(用户输入)' : '(自动)', channelId ? `(房间: ${channelId})` : '', source ? `(source: ${source})` : '');
 
@@ -10805,9 +10855,12 @@ function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, chann
   if (channelId) {
     const room = rooms.get(channelId);
     if (room) {
-      // 仅手动点击开播：先发送 C→S start_streaming，再做后续流程
-      if (isManualClick) {
-        sendPodcastStreamingLifecycleEvent(room, true, 'manual_click_start');
+      // 排除 room 下发场景外，均发送 C→S start_streaming，避免 source 边缘值导致漏发
+      if (shouldSendStartStreaming) {
+        const sent = sendPodcastStreamingLifecycleEvent(room, true, startStreamingReason);
+        console.log(`[Podcast] ${sent ? '✅' : '🕓'} 开播命令已处理: channel=${channelId}, reason=${startStreamingReason}`);
+      } else {
+        console.log(`[Podcast] ⏭️ 跳过开播命令回传（来源: ${source || 'unknown'}）: channel=${channelId}`);
       }
       if (room.podcastPusher) {
         room.podcastPusher.resumeAudioPush('roundtable_start');
@@ -10863,7 +10916,8 @@ function startRoundTable(topic, fromUser = false, lang = 'zh', mod = null, chann
 // 从知识库随机选择话题
 async function startRandomTopic(lang = 'zh', mod = null, channelId = null, options = {}) {
   const source = String(options?.source || '').trim();
-  const isManualClick = source === 'manual_click';
+  const shouldSendStartStreaming = shouldSendStartStreamingBySource(source);
+  const startStreamingReason = resolveStartStreamingReason(source);
   const moderatorToUse = mod || moderator;
   console.log('[RoundTable] 从知识库选择话题... 语言:', lang, channelId ? `(房间: ${channelId})` : '', source ? `(source: ${source})` : '');
 
@@ -10894,9 +10948,12 @@ async function startRandomTopic(lang = 'zh', mod = null, channelId = null, optio
   if (channelId) {
     const room = rooms.get(channelId);
     if (room) {
-      // 仅手动点击开播：先发送 C→S start_streaming，再做后续流程
-      if (isManualClick) {
-        sendPodcastStreamingLifecycleEvent(room, true, 'manual_click_start');
+      // 排除 room 下发场景外，均发送 C→S start_streaming，避免 source 边缘值导致漏发
+      if (shouldSendStartStreaming) {
+        const sent = sendPodcastStreamingLifecycleEvent(room, true, startStreamingReason);
+        console.log(`[Podcast] ${sent ? '✅' : '🕓'} 开播命令已处理: channel=${channelId}, reason=${startStreamingReason}`);
+      } else {
+        console.log(`[Podcast] ⏭️ 跳过开播命令回传（来源: ${source || 'unknown'}）: channel=${channelId}`);
       }
       if (room.podcastPusher) {
         room.podcastPusher.resumeAudioPush('roundtable_start');
@@ -11017,6 +11074,11 @@ function stopRoundTable(channelId = null, options = {}) {
   if (channelId) {
     const room = rooms.get(channelId);
     if (room) {
+      if (room.podcastReconnectRetryTimer) {
+        clearTimeout(room.podcastReconnectRetryTimer);
+        room.podcastReconnectRetryTimer = null;
+      }
+      room.podcastReconnectRetryCount = 0;
       room.isActive = false;
       room.activeTurnAgentId = null;
       room.activeTurnStartedAt = 0;

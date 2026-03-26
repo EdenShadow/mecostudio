@@ -1576,6 +1576,60 @@ reset_runtime_state() {
   find "$MECO_INSTALL_DIR/data/room-covers" -type f -delete 2>/dev/null || true
 }
 
+resolve_runtime_service_port() {
+  local port_file="$MECO_INSTALL_DIR/.meco-studio.port"
+  local fallback_file="$HOME/.meco-studio/service-port"
+  local candidate=""
+
+  if [[ -f "$port_file" ]]; then
+    candidate="$(tr -d '[:space:]' < "$port_file" 2>/dev/null || true)"
+  fi
+  if ! [[ "$candidate" =~ ^[0-9]+$ ]] || (( candidate <= 0 || candidate > 65535 )); then
+    candidate=""
+  fi
+
+  if [[ -z "$candidate" && -f "$fallback_file" ]]; then
+    candidate="$(tr -d '[:space:]' < "$fallback_file" 2>/dev/null || true)"
+    if ! [[ "$candidate" =~ ^[0-9]+$ ]] || (( candidate <= 0 || candidate > 65535 )); then
+      candidate=""
+    fi
+  fi
+
+  if [[ -z "$candidate" ]]; then
+    candidate="${MECO_SERVICE_PORT:-3456}"
+    if ! [[ "$candidate" =~ ^[0-9]+$ ]] || (( candidate <= 0 || candidate > 65535 )); then
+      candidate="3456"
+    fi
+  fi
+
+  printf '%s\n' "$candidate"
+}
+
+stop_active_rooms_if_update() {
+  if [[ "$MECO_IS_UPDATE" != "1" ]]; then
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl not found, skip stopping active rooms before restart"
+    return 0
+  fi
+
+  local service_port
+  service_port="$(resolve_runtime_service_port)"
+  local stop_url="http://127.0.0.1:${service_port}/api/roundtable/stop-active-rooms"
+
+  log "Update mode detected: stopping active rooms before restart (port=$service_port)..."
+  if curl -fsS \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    --data '{"source":"pre_restart"}' \
+    "$stop_url" >/dev/null 2>&1; then
+    log "Stopped active rooms before restart"
+  else
+    warn "Unable to stop active rooms via $stop_url (service may be offline), continue restart"
+  fi
+}
+
 start_service() {
   if [[ "$MECO_START_AFTER_INSTALL" != "1" && "$MECO_IS_UPDATE" != "1" ]]; then
     log "Skip start service (MECO_START_AFTER_INSTALL=$MECO_START_AFTER_INSTALL)"
@@ -1719,6 +1773,7 @@ main() {
   sync_local_version_marker
   reset_runtime_state
   restart_openclaw_if_update
+  stop_active_rooms_if_update
   start_service
   start_cloudflare_tunnel_runtime
   log "Install/upgrade done."

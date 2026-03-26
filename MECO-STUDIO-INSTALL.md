@@ -1,6 +1,6 @@
 # Meco Studio 安装 / 升级 / API Key 一体文档（AI 可读）
 
-> 文档版本：`0.0.6`
+> 文档版本：`0.0.7`
 
 ## 一行安装（Install）
 
@@ -63,6 +63,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
   - Node：自动扫描 OpenClaw/config skills 的 `package.json` 并安装
 - 初始化 `~/Documents/知识库/热门话题` 及分类目录（只补齐缺失，不覆盖已有内容）
 - 默认清空测试房间数据（`data/rooms.json = []`）
+- 升级模式会先请求停止 active rooms（`POST /api/roundtable/stop-active-rooms`）再重启服务
 - 自动确保 OpenClaw Gateway 已启动，并检查 `/v1/chat/completions` 端点可用
 - 启动服务（默认 `http://127.0.0.1:3456`）
 - 启动服务时自动处理端口冲突（优先回收旧 meco 进程，必要时切换可用端口）

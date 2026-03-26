@@ -1,6 +1,6 @@
 # Meco Studio 🚀
 
-> 文档版本：`0.0.6`
+> 文档版本：`0.0.7`
 
 ## ⚡ 一行安装 / 升级
 
@@ -302,7 +302,7 @@ post_install_actions:
   - "sync rule knowledge folders to upload root"
   - "ensure hot-topics category folders under ~/Documents/知识库/热门话题"
   - "reset default test rooms to empty"
-  - "restart OpenClaw gateway and Meco Studio on upgrade"
+  - "on upgrade: stop active rooms first, then restart OpenClaw gateway and Meco Studio"
   - "sync repo VERSION to ~/.meco-studio/VERSION"
 ```
 

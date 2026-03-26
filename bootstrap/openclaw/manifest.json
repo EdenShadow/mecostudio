@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "createdAt": "2026-03-25T09:00:55.433Z",
+  "createdAt": "2026-03-26T03:30:41.575Z",
   "agents": [
     {
       "id": "eden",
@@ -76,7 +76,5 @@
       "x-grok": true
     }
   },
-  "knowledgeRuleFolders": [
-    "1773841227413_8c4nvu_Pentagon_headhunting_Goldman"
-  ]
+  "knowledgeRuleFolders": []
 }

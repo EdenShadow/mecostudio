@@ -67,6 +67,7 @@ $MecoMeshcentralAdminName = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_ADMIN_NAME'
 $MecoMeshcentralLoginToken = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_LOGIN_TOKEN' -Default ''
 $MecoMeshcentralDomainPath = Get-EnvOrDefault -Name 'MECO_MESHCENTRAL_DOMAIN_PATH' -Default ''
 $script:MeshcentralLoginTokenRuntime = ''
+$script:MecoIsUpdate = $false
 
 $HotTopicsCategories = @(
   'AI_Tech',
@@ -925,6 +926,7 @@ function Ensure-OpenclawGateway {
 function Prepare-Repo {
   $gitDir = Join-Path $MecoInstallDir '.git'
   if (Test-Path $gitDir) {
+    $script:MecoIsUpdate = $true
     Write-Log 'Meco Studio exists, pulling latest...'
     Invoke-Checked -FilePath 'git' -Arguments @('-C', $MecoInstallDir, 'fetch', 'origin', $MecoBranch)
     Invoke-Checked -FilePath 'git' -Arguments @('-C', $MecoInstallDir, 'checkout', $MecoBranch)
@@ -1138,6 +1140,51 @@ function Reset-RuntimeState {
   Get-ChildItem -Path $coversDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
 
+function Get-RuntimeServicePort {
+  $candidateFiles = @(
+    (Join-Path $MecoInstallDir '.meco-studio.port'),
+    (Join-Path (Join-Path $env:USERPROFILE '.meco-studio') 'service-port')
+  )
+
+  foreach ($file in $candidateFiles) {
+    if (-not (Test-Path $file)) {
+      continue
+    }
+    try {
+      $raw = (Get-Content -Raw -Path $file).Trim()
+      $parsed = 0
+      if ([int]::TryParse($raw, [ref]$parsed) -and $parsed -gt 0 -and $parsed -le 65535) {
+        return $parsed
+      }
+    }
+    catch {}
+  }
+
+  if ($MecoServicePort -gt 0 -and $MecoServicePort -le 65535) {
+    return $MecoServicePort
+  }
+  return 3456
+}
+
+function Stop-ActiveRoomsIfUpdate {
+  if (-not $script:MecoIsUpdate) {
+    return
+  }
+
+  $servicePort = Get-RuntimeServicePort
+  $stopUrl = "http://127.0.0.1:$servicePort/api/roundtable/stop-active-rooms"
+  Write-Log "Update mode detected: stopping active rooms before restart (port=$servicePort)..."
+
+  try {
+    $body = @{ source = 'pre_restart' } | ConvertTo-Json -Depth 4 -Compress
+    $resp = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $stopUrl -Body $body -ContentType 'application/json' -TimeoutSec 4
+    Write-Log "Stopped active rooms before restart (status=$($resp.StatusCode))"
+  }
+  catch {
+    Write-Warn "Unable to stop active rooms via $stopUrl (service may be offline), continue restart"
+  }
+}
+
 function Stop-OldServerProcess {
   $pidFile = Join-Path $MecoInstallDir '.meco-studio.pid'
 
@@ -1246,9 +1293,12 @@ function Resolve-ServicePort {
 }
 
 function Start-Service {
-  if ($MecoStartAfterInstall -ne '1') {
+  if ($MecoStartAfterInstall -ne '1' -and -not $script:MecoIsUpdate) {
     Write-Log "Skip start service (MECO_START_AFTER_INSTALL=$MecoStartAfterInstall)"
     return
+  }
+  if ($script:MecoIsUpdate -and $MecoStartAfterInstall -ne '1') {
+    Write-Log 'Update mode detected: forcing Meco Studio restart (MECO_START_AFTER_INSTALL ignored)'
   }
 
   Stop-OldServerProcess
@@ -1326,6 +1376,7 @@ function Main {
   Configure-MecoRuntimeSettings -KimiApiKey $MecoKimiCodingApiKey -OpenclawModelApiKey $effectiveModelKey
   Reset-RuntimeState
   Ensure-OpenclawGateway
+  Stop-ActiveRoomsIfUpdate
   Start-Service
   Start-CloudflareTunnelRuntime
 
