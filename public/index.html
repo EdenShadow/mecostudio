@@ -8,7 +8,7 @@
     <script src="lib/js/three.min.js"></script>
     <script src="lib/js/OrbitControls.js"></script>
     <script src="js/playgen.js"></script>
-    <script src="js/remote-control-dock.js?v=20260325h"></script>
+    <script src="js/remote-control-dock.js?v=20260326b"></script>
     <link href="lib/css/inter.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-round.css" rel="stylesheet"/>
@@ -194,6 +194,11 @@
             background: rgba(255, 255, 255, 0.06);
             border-radius: 0.65rem;
         }
+        #at-chat-messages .message-content hr {
+            margin: 0.72rem 0;
+            border: 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.16);
+        }
         #at-chat-messages .message-content pre {
             margin: 0.6rem 0;
             padding: 0.7rem 0.8rem;
@@ -320,6 +325,19 @@
         #app-sidebar .meco-sidebar-nav-link,
         #app-sidebar .meco-sidebar-entry {
             transition: padding 150ms ease, gap 150ms ease, justify-content 150ms ease;
+        }
+        body.meco-sidebar-drag-active {
+            cursor: grabbing !important;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        body.meco-sidebar-drag-active * {
+            cursor: grabbing !important;
+        }
+        .meco-sidebar-entry.meco-sidebar-dragging {
+            opacity: 0.92;
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.16);
         }
         #app-sidebar.sidebar-compact .meco-sidebar-nav-link,
         #app-sidebar.sidebar-compact .meco-sidebar-entry {
@@ -534,6 +552,22 @@
             text-align: center;
             padding-left: 0;
             padding-right: 0;
+        }
+        @keyframes mecoAvatarPlaceholderPulse {
+            0%, 100% { opacity: 0.52; }
+            50% { opacity: 0.88; }
+        }
+        .meco-avatar-placeholder {
+            background:
+                radial-gradient(130% 130% at 20% 18%, rgba(255, 255, 255, 0.26) 0%, rgba(255, 255, 255, 0.08) 42%, rgba(255, 255, 255, 0.02) 100%),
+                rgba(148, 163, 184, 0.16);
+            animation: mecoAvatarPlaceholderPulse 1.25s ease-in-out infinite;
+        }
+        .meco-avatar-loading > img {
+            opacity: 0;
+        }
+        .meco-avatar-loaded > img {
+            opacity: 1;
         }
         #sidebar-toggle-btn {
             background: transparent !important;
@@ -753,6 +787,220 @@
             margin-top: 0.45rem !important;
             padding: 0.55rem !important;
             border-radius: 0.8rem !important;
+        }
+        .reasoning-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.6rem;
+        }
+        .reasoning-meta {
+            font-size: 10px;
+            color: rgba(156, 163, 175, 0.92);
+            white-space: nowrap;
+        }
+        .reasoning-thread-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+        .reasoning-thread-card {
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 0.7rem;
+            padding: 0.52rem 0.62rem;
+        }
+        .reasoning-thread-card.is-active {
+            border-color: rgba(125, 211, 252, 0.6);
+            box-shadow: 0 0 14px rgba(59, 130, 246, 0.18);
+        }
+        .reasoning-thread-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: rgba(192, 132, 252, 0.96);
+            margin-bottom: 0.28rem;
+        }
+        .reasoning-thread-content {
+            font-size: 12px;
+            line-height: 1.52;
+            color: rgba(229, 231, 235, 0.95);
+            word-break: break-word;
+        }
+        .execution-container {
+            margin-top: 0.5rem;
+            position: relative;
+        }
+        .execution-live-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            background: linear-gradient(180deg, rgba(10, 12, 18, 0.58), rgba(8, 10, 16, 0.42));
+            border-radius: 0.75rem;
+            padding: 0.42rem 0.58rem;
+            min-width: 0;
+        }
+        .execution-container.is-streaming .execution-live-row {
+            border-color: rgba(96, 165, 250, 0.36);
+            box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16), 0 0 14px rgba(59, 130, 246, 0.14);
+        }
+        .execution-live-dot {
+            width: 0.48rem;
+            height: 0.48rem;
+            border-radius: 9999px;
+            background: rgba(96, 165, 250, 0.95);
+            border: 1px solid rgba(191, 219, 254, 0.75);
+            box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6);
+            animation: executionPulse 1.9s ease-out infinite;
+            flex-shrink: 0;
+        }
+        .execution-live-text {
+            font-size: 12px;
+            line-height: 1.42;
+            color: rgba(229, 231, 235, 0.95);
+            min-width: 0;
+            flex: 1;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            word-break: break-word;
+        }
+        .execution-live-loading {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            margin-left: 2px;
+            margin-top: 3px;
+            flex-shrink: 0;
+        }
+        .execution-live-loading span {
+            width: 3px;
+            height: 3px;
+            border-radius: 9999px;
+            background: rgba(148, 163, 184, 0.85);
+            opacity: 0.25;
+            animation: executionDots 1.05s infinite ease-in-out;
+        }
+        .execution-live-loading span:nth-child(2) { animation-delay: 0.14s; }
+        .execution-live-loading span:nth-child(3) { animation-delay: 0.28s; }
+        .execution-container:not(.is-streaming) .execution-live-loading {
+            display: none;
+        }
+        .execution-container:not(.is-streaming) .execution-live-dot {
+            animation: none;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.16);
+            opacity: 0.72;
+        }
+        @keyframes executionPulse {
+            0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+            70% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+        }
+        @keyframes executionDots {
+            0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+            40% { opacity: 1; transform: translateY(-1px); }
+        }
+        .execution-meta {
+            font-size: 10px;
+            color: rgba(107, 114, 128, 0.95);
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+            margin-left: auto;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .assistant-bubble {
+            position: relative;
+        }
+        .assistant-bubble.is-streaming {
+            border-color: rgba(96, 165, 250, 0.52) !important;
+            box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.22), 0 0 18px rgba(59, 130, 246, 0.2);
+            animation: assistantBubblePulse 1.9s ease-in-out infinite;
+        }
+        @keyframes assistantBubblePulse {
+            0%, 100% {
+                box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.14), 0 0 12px rgba(59, 130, 246, 0.12);
+            }
+            50% {
+                box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.38), 0 0 22px rgba(59, 130, 246, 0.28);
+            }
+        }
+        .bubble-stream-status {
+            margin: 0;
+            width: 100%;
+            max-width: 100%;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 0.48rem;
+            color: rgba(156, 163, 175, 0.96);
+            font-size: inherit;
+            line-height: 1;
+            padding: 0;
+        }
+        .assistant-bubble .message-content:empty + .bubble-stream-status {
+            margin-top: 0;
+        }
+        .assistant-bubble .message-content:not(:empty) + .bubble-stream-status {
+            margin-top: 0.46rem;
+        }
+        .bubble-stream-spinner {
+            width: 0.9rem;
+            height: 0.9rem;
+            border-radius: 999px;
+            border: 2px solid rgba(148, 163, 184, 0.35);
+            border-top-color: rgba(96, 165, 250, 0.96);
+            border-right-color: rgba(125, 211, 252, 0.85);
+            animation: bubbleStreamSpin 0.85s linear infinite;
+            flex-shrink: 0;
+        }
+        @keyframes bubbleStreamSpin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .bubble-stream-text {
+            display: inline-block;
+            min-width: 0;
+            overflow: visible;
+            text-overflow: clip;
+            white-space: normal;
+            color: rgba(229, 231, 235, 0.96);
+            max-width: none;
+            line-height: 1.32;
+            word-break: break-word;
+        }
+        .bubble-stream-elapsed {
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.18rem;
+            font-variant-numeric: tabular-nums;
+            color: rgba(148, 163, 184, 0.94);
+            flex-shrink: 0;
+            line-height: 1.1;
+            justify-self: end;
+        }
+        body.meco-chat-compact #at-chat-messages .reasoning-thread-card {
+            border-radius: 0.62rem !important;
+            padding: 0.44rem 0.55rem !important;
+        }
+        body.meco-chat-compact #at-chat-messages .execution-live-row {
+            padding: 0.32rem 0.46rem !important;
+            border-radius: 0.62rem !important;
+        }
+        body.meco-chat-compact #at-chat-messages .bubble-stream-status {
+            margin-top: 0 !important;
+            max-width: 100% !important;
+            font-size: inherit !important;
+        }
+        body.meco-chat-compact #at-chat-messages .assistant-bubble .message-content:not(:empty) + .bubble-stream-status {
+            margin-top: 0.34rem !important;
+        }
+        body.meco-chat-compact #at-chat-messages .bubble-stream-spinner {
+            width: 0.78rem !important;
+            height: 0.78rem !important;
+            border-width: 1.5px !important;
         }
         body.meco-chat-compact #at-loading-indicator {
             gap: 0.6rem !important;
@@ -1090,6 +1338,8 @@
         const AT_SOUND_PREF_KEY = 'meco.agenttools.soundEnabled';
         const AT_CHANNEL_RULE_MODE_PREF_KEY = 'meco.agenttools.channelRuleMode';
         const AT_IMMERSIVE_PREF_KEY = 'meco.agenttools.singleChatImmersive';
+        const AT_SENT_INPUT_HISTORY_STORE_KEY = 'meco.agenttools.sentInputHistory.v1';
+        const AT_SENT_INPUT_HISTORY_MAX_KEYS = 160;
         const AT_SENT_INPUT_HISTORY_LIMIT = 20;
         const AT_HISTORY_PAGE_SIZE = 20;
         const AT_HISTORY_MAX_PAGES = 20;
@@ -1118,6 +1368,8 @@
         const AT_AUDIO_IDLE_RESET_MS = 900;
         const AT_TYPING_CHARS_PER_TICK = 6;
         const AT_TYPING_TICK_MS = 20;
+        const AT_SHOW_REASONING_PANEL = false;
+        const AT_SHOW_EXECUTION_PANEL = false;
         let currentMessageDiv = null;
         let currentAgentAvatarUrl = null;
         let appRuntimeSettings = null;
@@ -1137,6 +1389,8 @@
         let atHistoryScrollTicking = false;
         const atAgentTypingTimers = new Map();
         const atChannelTypingTimers = new Map();
+        let atStreamStatusTicker = null;
+        let atLoadingIndicatorTicker = null;
         const atAgentSentInputHistory = new Map();
         const atChannelSentInputHistory = new Map();
         const atSkillToggleState = new Map();
@@ -1152,6 +1406,8 @@
         let mecoUpdateLastFinishedTaskId = '';
         let mecoUpdateSawRunningThisSession = false;
         const MECO_UPDATE_NOTIFIED_TASK_ID_KEY = 'meco.update.notifiedTaskId';
+        const MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.agentOrder.v1';
+        const MECO_CHANNEL_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.channelOrder.v1';
         const MECO_SIDEBAR_AUTO_COLLAPSE_WIDTH = 1040;
         const MECO_HEADER_COMPACT_WIDTH = 1080;
         let mecoSidebarManualCollapsed = false;
@@ -1161,6 +1417,9 @@
         let mecoHeaderSearchExpanded = false;
         let mecoSidebarTooltipEl = null;
         let mecoSidebarTooltipTarget = null;
+        let mecoSidebarSuppressClickUntil = 0;
+        let mecoSidebarPointerDragState = null;
+        let mecoSidebarChannelPointerDragState = null;
 
         function isMecoWindowMode() {
             if (window.self !== window.top) return true;
@@ -1718,6 +1977,75 @@
             return true;
         }
 
+        function normalizeSentInputHistoryItems(rawItems) {
+            const normalized = [];
+            const list = Array.isArray(rawItems) ? rawItems : [];
+            list.forEach((item) => {
+                const text = typeof item === 'string' ? item.trim() : '';
+                if (!text) return;
+                normalized.push(text);
+            });
+            if (normalized.length > AT_SENT_INPUT_HISTORY_LIMIT) {
+                return normalized.slice(-AT_SENT_INPUT_HISTORY_LIMIT);
+            }
+            return normalized;
+        }
+
+        function exportSentInputHistoryMap(mapRef) {
+            const exported = {};
+            if (!mapRef || typeof mapRef.forEach !== 'function') return exported;
+            mapRef.forEach((state, rawKey) => {
+                const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+                if (!key) return;
+                const items = normalizeSentInputHistoryItems(state && state.items);
+                if (items.length === 0) return;
+                exported[key] = items;
+            });
+            return exported;
+        }
+
+        function hydrateSentInputHistoryMap(mapRef, rawSection) {
+            if (!mapRef || typeof mapRef.clear !== 'function') return;
+            mapRef.clear();
+            const section = rawSection && typeof rawSection === 'object' ? rawSection : {};
+            const keys = Object.keys(section);
+            if (keys.length === 0) return;
+            const trimmedKeys = keys
+                .map((key) => String(key || '').trim())
+                .filter(Boolean)
+                .slice(-AT_SENT_INPUT_HISTORY_MAX_KEYS);
+            trimmedKeys.forEach((key) => {
+                const items = normalizeSentInputHistoryItems(section[key]);
+                if (items.length === 0) return;
+                mapRef.set(key, {
+                    items,
+                    navIndex: -1,
+                    draft: ''
+                });
+            });
+        }
+
+        function persistSentInputHistoryStore() {
+            try {
+                localStorage.setItem(AT_SENT_INPUT_HISTORY_STORE_KEY, JSON.stringify({
+                    agents: exportSentInputHistoryMap(atAgentSentInputHistory),
+                    channels: exportSentInputHistoryMap(atChannelSentInputHistory),
+                    updatedAt: new Date().toISOString()
+                }));
+            } catch (_) {}
+        }
+
+        function loadSentInputHistoryStore() {
+            try {
+                const raw = localStorage.getItem(AT_SENT_INPUT_HISTORY_STORE_KEY);
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                if (!parsed || typeof parsed !== 'object') return;
+                hydrateSentInputHistoryMap(atAgentSentInputHistory, parsed.agents);
+                hydrateSentInputHistoryMap(atChannelSentInputHistory, parsed.channels);
+            } catch (_) {}
+        }
+
         function ensureSentInputHistoryState(mapRef, rawKey) {
             const key = typeof rawKey === 'string' ? rawKey.trim() : '';
             if (!key) return null;
@@ -1739,6 +2067,7 @@
             const state = ensureSentInputHistoryState(mapRef, rawKey);
             if (!state) return;
             const text = typeof rawText === 'string' ? rawText.trim() : '';
+            let changed = false;
             if (!text) {
                 state.navIndex = -1;
                 state.draft = '';
@@ -1750,9 +2079,13 @@
                 if (state.items.length > AT_SENT_INPUT_HISTORY_LIMIT) {
                     state.items = state.items.slice(-AT_SENT_INPUT_HISTORY_LIMIT);
                 }
+                changed = true;
             }
             state.navIndex = -1;
             state.draft = '';
+            if (changed) {
+                persistSentInputHistoryStore();
+            }
         }
 
         function navigateSentInputHistory(mapRef, rawKey, direction, getText, setText) {
@@ -1786,7 +2119,6 @@
 
         function advanceStreamingDisplay(message, step = AT_TYPING_CHARS_PER_TICK) {
             if (!message || typeof message !== 'object') return false;
-            const safeStep = Number.isFinite(step) && step > 0 ? Math.floor(step) : 1;
             let changed = false;
             const targetContent = typeof message.content === 'string' ? message.content : '';
             const targetReasoning = typeof message.reasoning === 'string' ? message.reasoning : '';
@@ -1796,12 +2128,12 @@
             if (typeof message.displayReasoning !== 'string') {
                 message.displayReasoning = '';
             }
-            if (message.displayContent.length < targetContent.length) {
-                message.displayContent = targetContent.slice(0, message.displayContent.length + safeStep);
+            if (message.displayContent !== targetContent) {
+                message.displayContent = targetContent;
                 changed = true;
             }
-            if (message.displayReasoning.length < targetReasoning.length) {
-                message.displayReasoning = targetReasoning.slice(0, message.displayReasoning.length + safeStep);
+            if (message.displayReasoning !== targetReasoning) {
+                message.displayReasoning = targetReasoning;
                 changed = true;
             }
             return changed;
@@ -3008,18 +3340,37 @@
             const name = (profile && profile.name) ? profile.name : 'A';
             const avatarUrl = (profile && profile.avatarUrl) ? profile.avatarUrl : '';
             const holder = document.createElement('div');
-            holder.className = `${sizeClass} ${roundedClass} overflow-hidden shrink-0 border border-white/10 bg-black/30`;
+            holder.className = `${sizeClass} ${roundedClass} relative overflow-hidden shrink-0 border border-white/10 bg-black/30`;
             if (avatarUrl) {
+                const placeholder = document.createElement('div');
+                placeholder.className = `meco-avatar-placeholder absolute inset-0 ${roundedClass}`;
+                holder.appendChild(placeholder);
+
                 const img = document.createElement('img');
-                img.src = avatarUrl;
                 img.alt = name;
-                img.className = 'w-full h-full object-cover';
+                img.className = 'w-full h-full object-cover transition-opacity duration-300 opacity-0';
+                const markLoaded = () => {
+                    holder.classList.remove('meco-avatar-loading');
+                    holder.classList.add('meco-avatar-loaded');
+                    img.style.opacity = '1';
+                    if (placeholder.parentNode) {
+                        placeholder.classList.add('hidden');
+                    }
+                };
+                holder.classList.add('meco-avatar-loading');
+                img.onload = markLoaded;
                 img.onerror = () => {
                     img.remove();
+                    if (placeholder.parentNode) placeholder.remove();
+                    holder.classList.remove('meco-avatar-loading');
                     holder.className = `${sizeClass} ${roundedClass} overflow-hidden shrink-0 border border-white/10 ${getRandomColor(name)} text-white font-semibold ${textClass} flex items-center justify-center`;
                     holder.style.backgroundColor = getAvatarColorHex(name);
                     holder.textContent = name.charAt(0).toUpperCase();
                 };
+                img.src = avatarUrl;
+                if (img.complete && img.naturalWidth > 0) {
+                    requestAnimationFrame(markLoaded);
+                }
                 holder.appendChild(img);
                 return holder;
             }
@@ -3319,7 +3670,8 @@
                 return;
             }
 
-            atChannels.forEach((channel) => {
+            const sortedChannels = orderChannelsBySidebarPreference(atChannels);
+            sortedChannels.forEach((channel) => {
                 const item = document.createElement('div');
                 item.className = 'meco-sidebar-entry meco-sidebar-channel-item meco-sidebar-tooltip-host group flex items-center gap-3 px-3 py-2 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-colors border border-transparent cursor-pointer';
                 item.dataset.channelId = channel.id;
@@ -3357,12 +3709,14 @@
                 };
                 item.appendChild(delBtn);
                 item.onclick = () => {
+                    if (Date.now() < mecoSidebarSuppressClickUntil) return;
                     collapseCompactNavLinks();
                     if (!isHashView('agenttools')) {
                         switchView('agenttools');
                     }
                     loadAgentToolsChannel(channel.id);
                 };
+                bindSidebarChannelDragEvents(item, list);
                 list.appendChild(item);
             });
 
@@ -4166,6 +4520,406 @@
                 .map((item) => item.agent);
         }
 
+        function readSidebarAgentOrderIds() {
+            try {
+                const raw = localStorage.getItem(MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY);
+                if (!raw) return [];
+                const parsed = JSON.parse(raw);
+                if (!Array.isArray(parsed)) return [];
+                return parsed
+                    .map((id) => String(id || '').trim())
+                    .filter(Boolean);
+            } catch (_) {
+                return [];
+            }
+        }
+
+        function writeSidebarAgentOrderIds(ids) {
+            const clean = normalizeSidebarAgentIdList(ids);
+            try {
+                localStorage.setItem(MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY, JSON.stringify(clean));
+            } catch (_) {}
+            return clean;
+        }
+
+        function normalizeSidebarAgentIdList(ids) {
+            const seen = new Set();
+            const clean = [];
+            (Array.isArray(ids) ? ids : []).forEach((id) => {
+                const normalized = String(id || '').trim();
+                if (!normalized || seen.has(normalized)) return;
+                seen.add(normalized);
+                clean.push(normalized);
+            });
+            return clean;
+        }
+
+        function orderAgentsBySidebarPreference(agents) {
+            const base = sortAgentsMainFirst(agents);
+            const saved = readSidebarAgentOrderIds();
+            if (!saved.length) return base;
+            const orderMap = new Map();
+            saved.forEach((id, index) => orderMap.set(id, index));
+            return base.slice().sort((a, b) => {
+                const idA = String(a?.id || '').trim();
+                const idB = String(b?.id || '').trim();
+                const hasA = orderMap.has(idA);
+                const hasB = orderMap.has(idB);
+                if (hasA && hasB) return orderMap.get(idA) - orderMap.get(idB);
+                if (hasA) return -1;
+                if (hasB) return 1;
+                return 0;
+            });
+        }
+
+        function persistSidebarOrderFromVisibleIds(visibleIds) {
+            const normalizedVisible = normalizeSidebarAgentIdList(visibleIds);
+            if (!normalizedVisible.length) return;
+
+            const fullCurrent = orderAgentsBySidebarPreference(allAgents || [])
+                .map((agent) => String(agent?.id || '').trim())
+                .filter(Boolean);
+            if (!fullCurrent.length) {
+                writeSidebarAgentOrderIds(normalizedVisible);
+                return;
+            }
+
+            const visibleSet = new Set(normalizedVisible);
+            let replacementIndex = 0;
+            const merged = fullCurrent.map((id) => {
+                if (!visibleSet.has(id)) return id;
+                const nextId = normalizedVisible[replacementIndex] || id;
+                replacementIndex += 1;
+                return nextId;
+            });
+            normalizedVisible.forEach((id) => {
+                if (!merged.includes(id)) merged.push(id);
+            });
+            writeSidebarAgentOrderIds(merged);
+        }
+
+        function persistSidebarOrderFromDom(sidebarList) {
+            if (!sidebarList) return;
+            const ids = Array.from(sidebarList.querySelectorAll('[data-agent-id]'))
+                .map((node) => String(node.dataset.agentId || '').trim())
+                .filter(Boolean);
+            if (ids.length < 2) return;
+            persistSidebarOrderFromVisibleIds(ids);
+        }
+
+        function readSidebarChannelOrderIds() {
+            try {
+                const raw = localStorage.getItem(MECO_CHANNEL_SIDEBAR_ORDER_STORAGE_KEY);
+                if (!raw) return [];
+                const parsed = JSON.parse(raw);
+                if (!Array.isArray(parsed)) return [];
+                return parsed
+                    .map((id) => String(id || '').trim())
+                    .filter(Boolean);
+            } catch (_) {
+                return [];
+            }
+        }
+
+        function writeSidebarChannelOrderIds(ids) {
+            const clean = normalizeSidebarAgentIdList(ids);
+            try {
+                localStorage.setItem(MECO_CHANNEL_SIDEBAR_ORDER_STORAGE_KEY, JSON.stringify(clean));
+            } catch (_) {}
+            return clean;
+        }
+
+        function orderChannelsBySidebarPreference(channels) {
+            const base = Array.isArray(channels) ? channels.slice() : [];
+            const saved = readSidebarChannelOrderIds();
+            if (!saved.length) return base;
+            const orderMap = new Map();
+            saved.forEach((id, index) => orderMap.set(id, index));
+            return base.sort((a, b) => {
+                const idA = String(a?.id || '').trim();
+                const idB = String(b?.id || '').trim();
+                const hasA = orderMap.has(idA);
+                const hasB = orderMap.has(idB);
+                if (hasA && hasB) return orderMap.get(idA) - orderMap.get(idB);
+                if (hasA) return -1;
+                if (hasB) return 1;
+                return 0;
+            });
+        }
+
+        function persistSidebarChannelOrderFromVisibleIds(visibleIds) {
+            const normalizedVisible = normalizeSidebarAgentIdList(visibleIds);
+            if (!normalizedVisible.length) return;
+            const fullCurrent = orderChannelsBySidebarPreference(atChannels || [])
+                .map((channel) => String(channel?.id || '').trim())
+                .filter(Boolean);
+            if (!fullCurrent.length) {
+                writeSidebarChannelOrderIds(normalizedVisible);
+                return;
+            }
+            const visibleSet = new Set(normalizedVisible);
+            let replacementIndex = 0;
+            const merged = fullCurrent.map((id) => {
+                if (!visibleSet.has(id)) return id;
+                const nextId = normalizedVisible[replacementIndex] || id;
+                replacementIndex += 1;
+                return nextId;
+            });
+            normalizedVisible.forEach((id) => {
+                if (!merged.includes(id)) merged.push(id);
+            });
+            writeSidebarChannelOrderIds(merged);
+        }
+
+        function persistSidebarChannelOrderFromDom(sidebarList) {
+            if (!sidebarList) return;
+            const ids = Array.from(sidebarList.querySelectorAll('[data-channel-id]'))
+                .map((node) => String(node.dataset.channelId || '').trim())
+                .filter(Boolean);
+            if (ids.length < 2) return;
+            persistSidebarChannelOrderFromVisibleIds(ids);
+        }
+
+        function bindSidebarChannelDragEvents(sidebarItem, sidebarList) {
+            if (!sidebarItem || !sidebarList) return;
+            sidebarItem.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0 || event.isPrimary === false) return;
+                if (event.target && event.target.closest('button, a, input, textarea, select, [contenteditable="true"], [draggable="false"]')) return;
+                startSidebarChannelPointerDrag(event, sidebarItem, sidebarList);
+            });
+        }
+
+        function startSidebarChannelPointerDrag(event, sidebarItem, sidebarList) {
+            const items = Array.from(sidebarList.querySelectorAll('[data-channel-id]'));
+            if (items.length < 2) return;
+            if (mecoSidebarChannelPointerDragState) {
+                finishSidebarChannelPointerDrag(false);
+            }
+            const pointerId = event.pointerId;
+            const state = {
+                pointerId,
+                item: sidebarItem,
+                list: sidebarList,
+                startY: event.clientY,
+                moved: false,
+                pendingClientY: event.clientY,
+                rafId: 0,
+                moveHandler: null,
+                endHandler: null,
+            };
+            const moveHandler = (moveEvent) => {
+                if (!mecoSidebarChannelPointerDragState || moveEvent.pointerId !== pointerId) return;
+                state.pendingClientY = moveEvent.clientY;
+                if (!state.moved && Math.abs(moveEvent.clientY - state.startY) < 3) return;
+                if (!state.moved) {
+                    state.moved = true;
+                    state.item.classList.add('meco-sidebar-dragging');
+                    document.body.classList.add('meco-sidebar-drag-active');
+                }
+                mecoSidebarSuppressClickUntil = Date.now() + 1200;
+                if (!state.rafId) {
+                    state.rafId = window.requestAnimationFrame(() => {
+                        state.rafId = 0;
+                        applySidebarChannelDragReorder(state, state.pendingClientY);
+                    });
+                }
+                moveEvent.preventDefault();
+            };
+            const endHandler = (endEvent) => {
+                if (!mecoSidebarChannelPointerDragState || endEvent.pointerId !== pointerId) return;
+                finishSidebarChannelPointerDrag(true);
+            };
+            state.moveHandler = moveHandler;
+            state.endHandler = endHandler;
+            mecoSidebarChannelPointerDragState = state;
+            document.addEventListener('pointermove', moveHandler, true);
+            document.addEventListener('pointerup', endHandler, true);
+            document.addEventListener('pointercancel', endHandler, true);
+            try {
+                sidebarItem.setPointerCapture(pointerId);
+            } catch (_) {}
+        }
+
+        function finishSidebarChannelPointerDrag(shouldPersist) {
+            const state = mecoSidebarChannelPointerDragState;
+            if (!state) return;
+            if (state.rafId) {
+                window.cancelAnimationFrame(state.rafId);
+                state.rafId = 0;
+            }
+            document.removeEventListener('pointermove', state.moveHandler, true);
+            document.removeEventListener('pointerup', state.endHandler, true);
+            document.removeEventListener('pointercancel', state.endHandler, true);
+            try {
+                state.item.releasePointerCapture(state.pointerId);
+            } catch (_) {}
+            state.item.classList.remove('meco-sidebar-dragging');
+            document.body.classList.remove('meco-sidebar-drag-active');
+            if (state.moved && shouldPersist) {
+                persistSidebarChannelOrderFromDom(state.list);
+                mecoSidebarSuppressClickUntil = Date.now() + 280;
+            }
+            mecoSidebarChannelPointerDragState = null;
+        }
+
+        function applySidebarChannelDragReorder(state, clientY) {
+            if (!state || !state.list || !state.item) return;
+            const referenceNode = findSidebarChannelDragReferenceNode(state.list, state.item, clientY);
+            if (!referenceNode) {
+                if (state.list.lastElementChild !== state.item) {
+                    animateSidebarListReorder(state.list, state.item, null);
+                }
+                return;
+            }
+            if (referenceNode === state.item || referenceNode === state.item.nextElementSibling) return;
+            animateSidebarListReorder(state.list, state.item, referenceNode);
+        }
+
+        function findSidebarChannelDragReferenceNode(sidebarList, dragItem, clientY) {
+            const items = Array.from(sidebarList.querySelectorAll('[data-channel-id]')).filter((el) => el !== dragItem);
+            for (const item of items) {
+                const rect = item.getBoundingClientRect();
+                const centerY = rect.top + (rect.height / 2);
+                if (clientY < centerY) return item;
+            }
+            return null;
+        }
+
+        function bindSidebarAgentDragEvents(sidebarItem, sidebarList) {
+            if (!sidebarItem || !sidebarList) return;
+            sidebarItem.addEventListener('pointerdown', (event) => {
+                if (event.button !== 0 || event.isPrimary === false) return;
+                if (event.target && event.target.closest('button, a, input, textarea, select, [contenteditable="true"], [draggable="false"]')) return;
+                startSidebarPointerDrag(event, sidebarItem, sidebarList);
+            });
+        }
+
+        function startSidebarPointerDrag(event, sidebarItem, sidebarList) {
+            const items = Array.from(sidebarList.querySelectorAll('[data-agent-id]'));
+            if (items.length < 2) return;
+            if (mecoSidebarPointerDragState) {
+                finishSidebarPointerDrag(false);
+            }
+            const pointerId = event.pointerId;
+            const state = {
+                pointerId,
+                item: sidebarItem,
+                list: sidebarList,
+                startY: event.clientY,
+                moved: false,
+                pendingClientY: event.clientY,
+                rafId: 0,
+                moveHandler: null,
+                endHandler: null,
+            };
+            const moveHandler = (moveEvent) => {
+                if (!mecoSidebarPointerDragState || moveEvent.pointerId !== pointerId) return;
+                state.pendingClientY = moveEvent.clientY;
+                if (!state.moved && Math.abs(moveEvent.clientY - state.startY) < 3) return;
+                if (!state.moved) {
+                    state.moved = true;
+                    state.item.classList.add('meco-sidebar-dragging');
+                    document.body.classList.add('meco-sidebar-drag-active');
+                }
+                mecoSidebarSuppressClickUntil = Date.now() + 1200;
+                if (!state.rafId) {
+                    state.rafId = window.requestAnimationFrame(() => {
+                        state.rafId = 0;
+                        applySidebarDragReorder(state, state.pendingClientY);
+                    });
+                }
+                moveEvent.preventDefault();
+            };
+            const endHandler = (endEvent) => {
+                if (!mecoSidebarPointerDragState || endEvent.pointerId !== pointerId) return;
+                finishSidebarPointerDrag(true);
+            };
+            state.moveHandler = moveHandler;
+            state.endHandler = endHandler;
+            mecoSidebarPointerDragState = state;
+            document.addEventListener('pointermove', moveHandler, true);
+            document.addEventListener('pointerup', endHandler, true);
+            document.addEventListener('pointercancel', endHandler, true);
+            try {
+                sidebarItem.setPointerCapture(pointerId);
+            } catch (_) {}
+        }
+
+        function finishSidebarPointerDrag(shouldPersist) {
+            const state = mecoSidebarPointerDragState;
+            if (!state) return;
+            if (state.rafId) {
+                window.cancelAnimationFrame(state.rafId);
+                state.rafId = 0;
+            }
+            document.removeEventListener('pointermove', state.moveHandler, true);
+            document.removeEventListener('pointerup', state.endHandler, true);
+            document.removeEventListener('pointercancel', state.endHandler, true);
+            try {
+                state.item.releasePointerCapture(state.pointerId);
+            } catch (_) {}
+            state.item.classList.remove('meco-sidebar-dragging');
+            document.body.classList.remove('meco-sidebar-drag-active');
+            if (state.moved && shouldPersist) {
+                persistSidebarOrderFromDom(state.list);
+                mecoSidebarSuppressClickUntil = Date.now() + 280;
+            }
+            mecoSidebarPointerDragState = null;
+        }
+
+        function applySidebarDragReorder(state, clientY) {
+            if (!state || !state.list || !state.item) return;
+            const referenceNode = findSidebarDragReferenceNode(state.list, state.item, clientY);
+            if (!referenceNode) {
+                if (state.list.lastElementChild !== state.item) {
+                    animateSidebarListReorder(state.list, state.item, null);
+                }
+                return;
+            }
+            if (referenceNode === state.item || referenceNode === state.item.nextElementSibling) return;
+            animateSidebarListReorder(state.list, state.item, referenceNode);
+        }
+
+        function findSidebarDragReferenceNode(sidebarList, dragItem, clientY) {
+            const items = Array.from(sidebarList.querySelectorAll('[data-agent-id]')).filter((el) => el !== dragItem);
+            for (const item of items) {
+                const rect = item.getBoundingClientRect();
+                const centerY = rect.top + (rect.height / 2);
+                if (clientY < centerY) return item;
+            }
+            return null;
+        }
+
+        function animateSidebarListReorder(sidebarList, dragItem, referenceNode) {
+            const beforeItems = Array.from(sidebarList.querySelectorAll('[data-agent-id]'));
+            const beforeTop = new Map(beforeItems.map((item) => [item, item.getBoundingClientRect().top]));
+            if (referenceNode) {
+                sidebarList.insertBefore(dragItem, referenceNode);
+            } else {
+                sidebarList.appendChild(dragItem);
+            }
+            const afterItems = Array.from(sidebarList.querySelectorAll('[data-agent-id]'));
+            afterItems.forEach((item) => {
+                if (item === dragItem) return;
+                const from = beforeTop.get(item);
+                if (typeof from !== 'number') return;
+                const to = item.getBoundingClientRect().top;
+                const delta = from - to;
+                if (Math.abs(delta) < 0.5) return;
+                item.style.transition = 'none';
+                item.style.transform = `translateY(${delta}px)`;
+                item.style.willChange = 'transform';
+                window.requestAnimationFrame(() => {
+                    item.style.transition = 'transform 180ms cubic-bezier(0.2, 0.82, 0.2, 1)';
+                    item.style.transform = '';
+                    window.setTimeout(() => {
+                        item.style.transition = '';
+                        item.style.willChange = '';
+                    }, 220);
+                });
+            });
+        }
+
         function getRandomColor(name) {
             const colors = [
                 'bg-red-600', 'bg-orange-600', 'bg-amber-600', 
@@ -4216,6 +4970,18 @@
         window.handleSidebarAvatarError = function(img, name) {
             const colorClass = getRandomColor(name || 'A');
             const initial = (name || 'A').charAt(0).toUpperCase();
+            const shell = img && img.closest ? img.closest('.meco-sidebar-avatar-shell') : null;
+            if (shell) {
+                shell.classList.remove('meco-avatar-loading');
+                shell.classList.add('meco-avatar-loaded');
+                shell.innerHTML = '';
+                const fallback = document.createElement('div');
+                fallback.className = 'w-full h-full rounded-full flex items-center justify-center text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100';
+                fallback.style.backgroundColor = getAvatarColorHex(name || 'A');
+                fallback.innerText = initial;
+                shell.appendChild(fallback);
+                return;
+            }
             
             const div = document.createElement('div');
             div.className = `w-8 h-8 rounded-full flex items-center justify-center ${colorClass} text-white text-xs font-bold ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100`;
@@ -4224,6 +4990,19 @@
             
             if (img && img.parentNode) {
                 img.parentNode.replaceChild(div, img);
+            }
+        };
+
+        window.handleSidebarAvatarLoaded = function(img) {
+            if (!img || !img.closest) return;
+            const shell = img.closest('.meco-sidebar-avatar-shell');
+            if (!shell) return;
+            shell.classList.remove('meco-avatar-loading');
+            shell.classList.add('meco-avatar-loaded');
+            img.style.opacity = '1';
+            const placeholder = shell.querySelector('.meco-avatar-placeholder');
+            if (placeholder) {
+                placeholder.classList.add('hidden');
             }
         };
 
@@ -4251,7 +5030,7 @@
             
             sidebarList.innerHTML = '';
 
-            const orderedAgents = sortAgentsMainFirst(agents);
+            const orderedAgents = orderAgentsBySidebarPreference(agents);
             orderedAgents.forEach(agent => {
                 const displayName = agent.displayName || agent.name;
                 const visual = resolveAgentVisualIdentity(agent.id, displayName, agent.avatarUrl || '');
@@ -4336,9 +5115,15 @@
                 let sidebarAvatarHtml;
                 if (visual.hasCustomAvatar) {
                     sidebarAvatarHtml = `
-                        <img alt="${displayName}" class="w-8 h-8 rounded-full object-cover ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100" 
-                             src="${visual.avatarUrl}" 
-                             onerror="handleSidebarAvatarError(this, '${displayName}')">
+                        <div class="meco-sidebar-avatar-shell meco-avatar-loading relative w-8 h-8 rounded-full overflow-hidden">
+                            <div class="meco-avatar-placeholder absolute inset-0 rounded-full"></div>
+                            <img alt="${displayName}" class="w-8 h-8 rounded-full object-cover ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-0 group-hover:opacity-100"
+                                 src="${visual.avatarUrl}"
+                                 loading="lazy"
+                                 decoding="async"
+                                 onload="handleSidebarAvatarLoaded(this)"
+                                 onerror="handleSidebarAvatarError(this, '${displayName}')">
+                        </div>
                     `;
                 } else {
                     const colorClass = getRandomColor(displayName);
@@ -4357,7 +5142,11 @@
                 sidebarItem.setAttribute('data-tooltip', displayName);
                 sidebarItem.title = displayName;
 
-                sidebarItem.onclick = () => {
+                sidebarItem.onclick = (event) => {
+                    if (Date.now() < mecoSidebarSuppressClickUntil) {
+                        event.preventDefault();
+                        return;
+                    }
                     openAgentToolsChat(agent.id);
                 };
                 sidebarItem.innerHTML = `
@@ -4367,10 +5156,10 @@
                     </div>
                     <span class="meco-sidebar-label meco-sidebar-item-text text-sm truncate font-medium flex-1 min-w-0">${displayName}</span>
                     <div class="meco-sidebar-item-actions ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button class="js-agent-clone-btn text-gray-500 hover:text-cyan-300 transition-colors" title="复制智能体">
+                        <button class="js-agent-clone-btn text-gray-500 hover:text-cyan-300 transition-colors" title="复制智能体" draggable="false">
                             <span class="material-icons-round text-sm">content_copy</span>
                         </button>
-                        <button class="js-agent-delete-btn text-gray-500 hover:text-red-400 transition-colors" title="删除智能体">
+                        <button class="js-agent-delete-btn text-gray-500 hover:text-red-400 transition-colors" title="删除智能体" draggable="false">
                             <span class="material-icons-round text-sm">close</span>
                         </button>
                     </div>
@@ -4389,6 +5178,7 @@
                         deleteAgent(agent.id);
                     };
                 }
+                bindSidebarAgentDragEvents(sidebarItem, sidebarList);
                 sidebarList.appendChild(sidebarItem);
             });
 
@@ -4775,7 +5565,10 @@
                     .map(msg => ({
                         role: msg.role,
                         content: msg.content,
-                        reasoning: '',
+                        senderName: typeof msg.senderName === 'string' ? msg.senderName : '',
+                        agentId: typeof msg.agentId === 'string' ? msg.agentId : '',
+                        reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : '',
+                        executionEvents: normalizeExecutionEvents(msg.executionEvents || msg.events),
                         files: normalizeMessageFiles(msg.files)
                     }));
                 if (normalizedHistory.length > 0) {
@@ -4821,6 +5614,7 @@
                         senderName: msg.senderName || '',
                         agentId: msg.agentId || '',
                         reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : '',
+                        executionEvents: normalizeExecutionEvents(msg.executionEvents || msg.events),
                         files: normalizeMessageFiles(msg.files)
                     }));
                 if (normalizedHistory.length > 0) {
@@ -4865,6 +5659,26 @@
             });
         }
 
+        function trimAgentMessagesToLatestPage(state) {
+            if (!state || !Array.isArray(state.messages)) return false;
+            if (state.inFlight || (Array.isArray(state.pendingQueue) && state.pendingQueue.length > 0)) return false;
+            if (state.messages.length <= AT_HISTORY_PAGE_SIZE) return false;
+            state.messages = state.messages.slice(-AT_HISTORY_PAGE_SIZE);
+            state.historyPage = 1;
+            state.hasMoreHistory = true;
+            return true;
+        }
+
+        function trimChannelMessagesToLatestPage(state) {
+            if (!state || !Array.isArray(state.messages)) return false;
+            if (state.inFlight || (Array.isArray(state.pendingQueue) && state.pendingQueue.length > 0)) return false;
+            if (state.messages.length <= AT_HISTORY_PAGE_SIZE) return false;
+            state.messages = state.messages.slice(-AT_HISTORY_PAGE_SIZE);
+            state.historyPage = 1;
+            state.hasMoreHistory = true;
+            return true;
+        }
+
         async function loadAgentTools(agentId, options = {}) {
             if (!agentId) return;
             if (currentChannelId) {
@@ -4892,6 +5706,9 @@
             const avatarImg = document.getElementById('at-avatar-img');
             const avatarPlaceholder = document.getElementById('at-avatar-placeholder');
             const state = getAgentChatState(agentId);
+            if (state.historyLoaded) {
+                trimAgentMessagesToLatestPage(state);
+            }
             const isImmersiveSingleMode = () => !currentChannelId && isSingleChatImmersiveActive();
             const applyAgentToolsLetterAvatar = (displayName) => {
                 const visual = resolveAgentVisualIdentity(agentId, displayName);
@@ -4966,6 +5783,7 @@
             if (skillsList) skillsList.innerHTML = '<div class="p-4 text-center text-gray-500 text-sm">Loading skills...</div>';
             
             renderAgentToolsChat(agentId);
+            scrollAgentToolsChatToBottom();
             
             const chatInput = document.getElementById('at-chat-input');
             if (chatInput) {
@@ -5008,16 +5826,14 @@
                                 .map(msg => ({
                                     role: msg.role,
                                     content: msg.content,
-                                    reasoning: '',
+                                    senderName: typeof msg.senderName === 'string' ? msg.senderName : '',
+                                    agentId: typeof msg.agentId === 'string' ? msg.agentId : '',
+                                    reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : '',
+                                    executionEvents: normalizeExecutionEvents(msg.executionEvents || msg.events),
                                     files: normalizeMessageFiles(msg.files)
                                 }));
                             if (normalizedHistory.length > 0) {
-                                state.messages = state.messages.length === 0
-                                    ? normalizedHistory
-                                    : [...normalizedHistory, ...state.messages];
-                                if (state.messages.length > AT_HISTORY_TOTAL_LIMIT) {
-                                    state.messages = state.messages.slice(-AT_HISTORY_TOTAL_LIMIT);
-                                }
+                                state.messages = normalizedHistory.slice(-AT_HISTORY_PAGE_SIZE);
                             }
                         }
                         state.historyPage = historyData.page || 1;
@@ -5030,11 +5846,16 @@
                         maybeRestorePendingAgentRequest(agentId);
                         if (currentAgentToolId === agentId) {
                             renderAgentToolsChat(agentId);
+                            scrollAgentToolsChatToBottom();
                         }
                         updateSidebarBusyIndicators();
                     }
                 } else {
                     maybeRestorePendingAgentRequest(agentId);
+                    if (currentAgentToolId === agentId) {
+                        renderAgentToolsChat(agentId);
+                        scrollAgentToolsChatToBottom();
+                    }
                 }
                 
             } catch (e) {
@@ -5067,6 +5888,8 @@
                     appendChannelText(channelId, data.agentId, data.agentName, data.content, data.isNew);
                 } else if (data.type === 'channel_reasoning_stream') {
                     appendChannelReasoning(channelId, data.agentId, data.content, data.isNew);
+                } else if (data.type === 'channel_execution_event') {
+                    appendChannelExecutionEvent(channelId, data.agentId, data.agentName, data.event, data.isNew);
                 } else if (data.type === 'channel_stream_done') {
                     finalizeChannelAgentStream(channelId, data.agentId);
                 } else if (data.type === 'channel_round_done') {
@@ -5173,6 +5996,9 @@
             }
 
             const state = getChannelChatState(channel.id);
+            if (state.historyLoaded) {
+                trimChannelMessagesToLatestPage(state);
+            }
             renderAgentToolsChannelChat(channel.id);
             scrollAgentToolsChatToBottom();
 
@@ -5188,13 +6014,11 @@
                             senderName: msg.senderName || '',
                             agentId: msg.agentId || '',
                             reasoning: typeof msg.reasoning === 'string' ? msg.reasoning : '',
+                            executionEvents: normalizeExecutionEvents(msg.executionEvents || msg.events),
                             files: normalizeMessageFiles(msg.files)
                         })) : [];
                     if (normalized.length > 0) {
-                        state.messages = normalized;
-                        if (state.messages.length > AT_HISTORY_TOTAL_LIMIT) {
-                            state.messages = state.messages.slice(-AT_HISTORY_TOTAL_LIMIT);
-                        }
+                        state.messages = normalized.slice(-AT_HISTORY_PAGE_SIZE);
                     }
                     state.historyPage = data.page || 1;
                     state.hasMoreHistory = !!data.hasMore;
@@ -5228,11 +6052,17 @@
                     senderName: agentName || agentId || 'Agent',
                     agentId: agentId || '',
                     reasoning: '',
+                    executionEvents: [],
                     files: [],
                     displayContent: '',
-                    displayReasoning: ''
+                    displayReasoning: '',
+                    preludeText: '',
+                    streamStartedAt: Date.now(),
+                    provisional: false
                 });
                 state.streamMessageIndexByAgent[key] = state.messages.length - 1;
+            } else if (current && !Number.isFinite(Number(current.streamStartedAt))) {
+                current.streamStartedAt = Date.now();
             }
             return state;
         }
@@ -5252,28 +6082,34 @@
             }
             if (!messageDiv) return;
 
-            const loadingIndicator = document.getElementById('at-loading-indicator');
-            if (loadingIndicator) loadingIndicator.remove();
+            removeLoadingIndicator();
             const msg = state.messages[idx];
             const contentDiv = messageDiv.querySelector('.message-content');
             if (contentDiv) {
                 const streamingText = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
                 renderBubbleContent(contentDiv, streamingText, true);
             }
-            const reasoningContainer = messageDiv.querySelector('.reasoning-container');
-            const reasoningDiv = messageDiv.querySelector('.reasoning-content');
+            const senderLabel = messageDiv.querySelector('.sender-label');
+            const senderName = (typeof msg.senderName === 'string') ? msg.senderName.trim() : '';
+            if (senderLabel) {
+                if (senderName) {
+                    senderLabel.classList.remove('hidden');
+                    senderLabel.textContent = senderName;
+                } else {
+                    senderLabel.classList.add('hidden');
+                    senderLabel.textContent = '';
+                }
+            }
             const reasoningText = (typeof msg.displayReasoning === 'string')
                 ? msg.displayReasoning
                 : (typeof msg.reasoning === 'string' ? msg.reasoning : '');
-            if (reasoningContainer && reasoningDiv) {
-                if (reasoningText.trim()) {
-                    reasoningContainer.classList.remove('hidden');
-                    reasoningDiv.innerHTML = renderMarkdownToHtml(reasoningText);
-                } else {
-                    reasoningContainer.classList.add('hidden');
-                    reasoningDiv.innerHTML = '';
-                }
-            }
+            renderReasoningPresentation(messageDiv, reasoningText, { streaming: true });
+            renderExecutionPresentation(messageDiv, msg.executionEvents, {
+                streaming: true,
+                reasoningText,
+                preludeText: msg.preludeText || ''
+            });
+            renderBubbleStreamingIndicator(messageDiv, msg, true);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
@@ -5324,6 +6160,7 @@
             const key = agentId || 'unknown';
             const idx = state.streamMessageIndexByAgent[key];
             if (!Number.isInteger(idx) || !state.messages[idx]) return;
+            state.messages[idx].provisional = false;
             state.messages[idx].content += text;
             state.loading = false;
             if (currentChannelId === channelId) {
@@ -5339,12 +6176,34 @@
             const key = agentId || 'unknown';
             const idx = state.streamMessageIndexByAgent[key];
             if (!Number.isInteger(idx) || !state.messages[idx]) return;
+            state.messages[idx].provisional = false;
             state.messages[idx].reasoning = (state.messages[idx].reasoning || '') + text;
             state.loading = false;
             if (currentChannelId === channelId) {
                 scheduleChannelTypingRender(channelId, key);
             } else {
                 syncStreamingDisplayNow(state.messages[idx]);
+            }
+        }
+
+        function appendChannelExecutionEvent(channelId, agentId, agentName, eventPayload, isNew) {
+            const event = normalizeExecutionEvent(eventPayload);
+            if (!event) return;
+            const state = ensureStreamingChannelAssistantMessage(channelId, agentId, agentName || '', isNew);
+            const key = agentId || 'unknown';
+            const idx = state.streamMessageIndexByAgent[key];
+            if (!Number.isInteger(idx) || !state.messages[idx]) return;
+            state.messages[idx].provisional = false;
+            if (!Array.isArray(state.messages[idx].executionEvents)) {
+                state.messages[idx].executionEvents = [];
+            }
+            state.messages[idx].executionEvents.push(event);
+            if (state.messages[idx].executionEvents.length > 120) {
+                state.messages[idx].executionEvents = state.messages[idx].executionEvents.slice(-120);
+            }
+            state.loading = false;
+            if (currentChannelId === channelId) {
+                patchStreamingChannelAssistantDom(channelId, key);
             }
         }
 
@@ -5392,6 +6251,7 @@
             const preserveScrollAnchor = !!(options && options.preserveScrollAnchor);
             const previousScrollTop = Number(options && options.previousScrollTop) || 0;
             const previousScrollHeight = Number(options && options.previousScrollHeight) || 0;
+            stopLoadingIndicatorTicker();
             chatContainer.innerHTML = '';
             currentMessageDiv = null;
 
@@ -5402,17 +6262,23 @@
                     : '';
                 const renderedContent = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
                 const renderedReasoning = (typeof msg.displayReasoning === 'string') ? msg.displayReasoning : (msg.reasoning || '');
+                const renderedExecution = normalizeExecutionEvents(msg.executionEvents);
                 appendMessage(msg.role, msg.content || '', msg.files || [], {
                     messageIndex: idx,
                     senderName: msg.senderName || '',
+                    senderAgentId: msg.agentId || '',
                     avatarUrl: channelAvatarUrl,
                     reasoning: renderedReasoning,
+                    executionEvents: renderedExecution,
+                    preludeText: msg.preludeText || '',
+                    streamStartedAt: msg.streamStartedAt,
+                    streaming: !!(state.inFlight && Object.values(state.streamMessageIndexByAgent || {}).includes(idx)),
                     renderedContent,
                     entranceAnimation: false,
                     skipScroll: true
                 });
             });
-            if (state.loading) {
+            if (state.loading && !Object.keys(state.streamMessageIndexByAgent || {}).length) {
                 showLoadingIndicator();
             }
             requestAnimationFrame(() => {
@@ -5665,6 +6531,21 @@
                     appendAgentText(agentId, data.content, data.isNew);
                 } else if (data.type === 'reasoning_stream' || data.type === 'thinking_stream') {
                     appendAgentReasoning(agentId, data.content, data.isNew);
+                } else if (data.type === 'execution_event') {
+                    appendAgentExecutionEvent(agentId, data.event, data.isNew, {
+                        senderName: typeof data.senderName === 'string' ? data.senderName : '',
+                        senderAgentId: typeof data.senderAgentId === 'string' ? data.senderAgentId : ''
+                    });
+                } else if (data.type === 'relay_text_stream') {
+                    appendAgentText(agentId, data.content, data.isNew, {
+                        senderName: typeof data.relayAgentName === 'string' ? data.relayAgentName : '',
+                        senderAgentId: typeof data.relayAgentId === 'string' ? data.relayAgentId : ''
+                    });
+                } else if (data.type === 'relay_reasoning_stream') {
+                    appendAgentReasoning(agentId, data.content, data.isNew, {
+                        senderName: typeof data.relayAgentName === 'string' ? data.relayAgentName : '',
+                        senderAgentId: typeof data.relayAgentId === 'string' ? data.relayAgentId : ''
+                    });
                 } else if (data.type === 'audio_stream') {
                     if (!atMiniMaxConfigured && shouldPlayForegroundAudio(agentId)) {
                         enqueueAudioHexChunk(data.audio);
@@ -6049,6 +6930,13 @@
                     continue;
                 }
 
+                const normalizedRule = trimmed.replace(/\s+/g, '');
+                if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(normalizedRule)) {
+                    closeLists();
+                    parts.push('<hr>');
+                    continue;
+                }
+
                 const ulMatch = /^[-*+]\s+(.+)$/.exec(trimmed);
                 if (ulMatch) {
                     if (!inUl) {
@@ -6101,6 +6989,461 @@
                 contentDiv.innerHTML = renderMarkdownToHtml(parsed.text);
             }
             return parsed;
+        }
+
+        function normalizeReasoningThreadKey(rawKey, fallbackIndex) {
+            const cleaned = String(rawKey || '')
+                .trim()
+                .toLowerCase()
+                .replace(/[^\w\u4e00-\u9fa5-]+/g, '');
+            if (cleaned) return cleaned;
+            return `thread_${Math.max(1, Number(fallbackIndex) || 1)}`;
+        }
+
+        function ensureReasoningThread(store, order, key, fallbackTitle) {
+            if (!store.has(key)) {
+                store.set(key, {
+                    key,
+                    title: fallbackTitle || `线程 ${order.length + 1}`,
+                    lines: []
+                });
+                order.push(key);
+            }
+            return store.get(key);
+        }
+
+        function parseReasoningThreadMarker(rawLine, fallbackIndex) {
+            const line = String(rawLine || '').trim();
+            if (!line) return null;
+
+            const bracket = /^\[\s*(?:thread|线程|worker|branch|lane)\s*#?\s*([^\]]+)\]\s*(?:[:：\-·|｜]\s*(.+))?$/i.exec(line);
+            if (bracket) {
+                const threadId = String(bracket[1] || '').trim();
+                const body = String(bracket[2] || '').trim();
+                return {
+                    key: normalizeReasoningThreadKey(threadId, fallbackIndex),
+                    title: `线程 ${threadId || fallbackIndex}`,
+                    body
+                };
+            }
+
+            const heading = /^(?:#{1,6}\s*)?(?:thread|线程|worker|branch|lane)\s*(?:#?\s*([a-z0-9\u4e00-\u9fa5_-]+))?\s*(?:[:：\-·|｜]\s*(.+))?$/i.exec(line);
+            if (heading) {
+                const threadId = String(heading[1] || '').trim();
+                const body = String(heading[2] || '').trim();
+                const normalizedId = threadId || String(fallbackIndex);
+                return {
+                    key: normalizeReasoningThreadKey(threadId || fallbackIndex, fallbackIndex),
+                    title: `线程 ${normalizedId}`,
+                    body
+                };
+            }
+
+            return null;
+        }
+
+        function parseReasoningPresentation(rawReasoning) {
+            const source = typeof rawReasoning === 'string' ? rawReasoning.replace(/\r/g, '') : '';
+            const lines = source.split('\n');
+            const rootLines = [];
+            const threadStore = new Map();
+            const threadOrder = [];
+            let currentThreadKey = '';
+            let explicitThreadMarkerCount = 0;
+
+            lines.forEach((rawLine) => {
+                const cleanLine = String(rawLine || '').replace(/\x1b\[[0-9;]*m/g, '');
+                const trimmed = cleanLine.trim();
+                if (!trimmed) {
+                    if (currentThreadKey && threadStore.has(currentThreadKey)) {
+                        threadStore.get(currentThreadKey).lines.push('');
+                    } else {
+                        rootLines.push('');
+                    }
+                    return;
+                }
+
+                const marker = parseReasoningThreadMarker(trimmed, threadOrder.length + 1);
+                if (marker) {
+                    explicitThreadMarkerCount += 1;
+                    const thread = ensureReasoningThread(threadStore, threadOrder, marker.key, marker.title);
+                    if (marker.title) {
+                        thread.title = marker.title;
+                    }
+                    if (marker.body) {
+                        thread.lines.push(marker.body);
+                    }
+                    currentThreadKey = marker.key;
+                    return;
+                }
+
+                if (currentThreadKey && threadStore.has(currentThreadKey)) {
+                    threadStore.get(currentThreadKey).lines.push(cleanLine);
+                } else {
+                    rootLines.push(cleanLine);
+                }
+            });
+
+            const threads = threadOrder
+                .map((key) => threadStore.get(key))
+                .filter(Boolean)
+                .map((thread) => {
+                    const body = thread.lines.join('\n').trim();
+                    return {
+                        key: thread.key,
+                        title: thread.title || '线程',
+                        body
+                    };
+                })
+                .filter((thread) => thread.body);
+
+            const rootText = rootLines.join('\n').trim();
+            const isThreaded = explicitThreadMarkerCount >= 2 && threads.length >= 2;
+            if (!isThreaded) {
+                return {
+                    threaded: false,
+                    linearText: source.trim(),
+                    threads: [],
+                    activeThreadKey: ''
+                };
+            }
+
+            const enrichedThreads = rootText
+                ? [{ key: 'summary', title: '概览', body: rootText }, ...threads]
+                : threads;
+
+            return {
+                threaded: true,
+                linearText: source.trim(),
+                threads: enrichedThreads,
+                activeThreadKey: currentThreadKey && threadStore.has(currentThreadKey) ? currentThreadKey : ''
+            };
+        }
+
+        function renderReasoningCardsHtml(parsed, options = {}) {
+            const list = Array.isArray(parsed && parsed.threads) ? parsed.threads : [];
+            if (list.length === 0) return '';
+            const streaming = !!options.streaming;
+            const activeKey = parsed && typeof parsed.activeThreadKey === 'string' ? parsed.activeThreadKey : '';
+            return list.map((thread, idx) => {
+                const isActive = streaming && activeKey && thread.key === activeKey;
+                return `
+                    <div class="reasoning-thread-card ${isActive ? 'is-active' : ''}">
+                        <div class="reasoning-thread-title">${escapeHtml(thread.title || `线程 ${idx + 1}`)}</div>
+                        <div class="reasoning-thread-content">${renderMarkdownToHtml(thread.body || '')}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderReasoningPresentation(messageDiv, rawReasoning, options = {}) {
+            if (!messageDiv) return;
+            const reasoningContainer = messageDiv.querySelector('.reasoning-container');
+            if (!reasoningContainer) return;
+
+            if (!AT_SHOW_REASONING_PANEL) {
+                reasoningContainer.classList.add('hidden');
+                const hiddenLinear = reasoningContainer.querySelector('.reasoning-content');
+                const hiddenThreads = reasoningContainer.querySelector('.reasoning-thread-list');
+                const hiddenMeta = reasoningContainer.querySelector('.reasoning-meta');
+                if (hiddenLinear) hiddenLinear.innerHTML = '';
+                if (hiddenThreads) hiddenThreads.innerHTML = '';
+                if (hiddenMeta) hiddenMeta.textContent = '';
+                return;
+            }
+
+            const reasoningLinear = reasoningContainer.querySelector('.reasoning-content');
+            const reasoningThreads = reasoningContainer.querySelector('.reasoning-thread-list');
+            const reasoningMeta = reasoningContainer.querySelector('.reasoning-meta');
+            if (!reasoningLinear || !reasoningThreads) return;
+
+            const reasoningText = typeof rawReasoning === 'string' ? rawReasoning : '';
+            if (!reasoningText.trim()) {
+                reasoningContainer.classList.add('hidden');
+                reasoningLinear.innerHTML = '';
+                reasoningLinear.classList.remove('hidden');
+                reasoningThreads.innerHTML = '';
+                reasoningThreads.classList.add('hidden');
+                if (reasoningMeta) reasoningMeta.textContent = '';
+                return;
+            }
+
+            const parsed = parseReasoningPresentation(reasoningText);
+            const streaming = !!options.streaming;
+            reasoningContainer.classList.remove('hidden');
+            if (parsed.threaded) {
+                reasoningLinear.innerHTML = '';
+                reasoningLinear.classList.add('hidden');
+                reasoningThreads.classList.remove('hidden');
+                reasoningThreads.innerHTML = renderReasoningCardsHtml(parsed, { streaming });
+                if (reasoningMeta) {
+                    reasoningMeta.textContent = streaming
+                        ? `${parsed.threads.length} 线程思考中`
+                        : `${parsed.threads.length} 线程`;
+                }
+            } else {
+                reasoningThreads.innerHTML = '';
+                reasoningThreads.classList.add('hidden');
+                reasoningLinear.classList.remove('hidden');
+                reasoningLinear.innerHTML = renderMarkdownToHtml(parsed.linearText);
+                if (reasoningMeta) {
+                    reasoningMeta.textContent = streaming ? '推理流式返回中' : '';
+                }
+            }
+        }
+
+        function normalizeExecutionEvent(rawEvent) {
+            if (!rawEvent || typeof rawEvent !== 'object') return null;
+            const code = typeof rawEvent.code === 'string' ? rawEvent.code.trim() : '';
+            const label = typeof rawEvent.label === 'string' ? rawEvent.label.trim() : '';
+            const detail = typeof rawEvent.detail === 'string' ? rawEvent.detail.trim() : '';
+            if (!code && !label && !detail) return null;
+            const source = typeof rawEvent.source === 'string' ? rawEvent.source.trim() : '';
+            const timestamp = typeof rawEvent.timestamp === 'string' ? rawEvent.timestamp : new Date().toISOString();
+            return {
+                code: code || '',
+                label: label || code || '事件',
+                detail: detail || '',
+                source: source || '',
+                timestamp
+            };
+        }
+
+        function normalizeExecutionEvents(rawEvents) {
+            if (!Array.isArray(rawEvents) || rawEvents.length === 0) return [];
+            const list = rawEvents
+                .map(normalizeExecutionEvent)
+                .filter(Boolean);
+            if (list.length > 120) {
+                return list.slice(-120);
+            }
+            return list;
+        }
+
+        function formatExecutionElapsed(events, streaming) {
+            if (!Array.isArray(events) || events.length === 0) return '';
+            const firstTs = new Date(events[0].timestamp).getTime();
+            if (!Number.isFinite(firstTs)) return '';
+            const lastTs = new Date(events[events.length - 1].timestamp).getTime();
+            const endTs = streaming
+                ? Date.now()
+                : (Number.isFinite(lastTs) ? lastTs : Date.now());
+            const elapsedSec = Math.max(0, Math.floor((endTs - firstTs) / 1000));
+            return `${elapsedSec}s`;
+        }
+
+        function formatStreamingElapsedByStartedAt(startedAt) {
+            const ts = Number(startedAt);
+            if (!Number.isFinite(ts) || ts <= 0) return '0s';
+            const elapsedSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+            return `${elapsedSec}s`;
+        }
+
+        function truncateExecutionText(rawText, maxLen = 220) {
+            const source = String(rawText || '').replace(/\s+/g, ' ').trim();
+            if (!source) return '';
+            if (source.length <= maxLen) return source;
+            return `${source.slice(0, Math.max(12, maxLen - 1))}…`;
+        }
+
+        function sanitizeExecutionDetail(rawDetail) {
+            const detail = truncateExecutionText(rawDetail || '', 220);
+            if (!detail) return '';
+            if (/(openclaw\s*cli|gateway\s*http|本地流式|thinking\s*=|模型可能不返回思考流)/i.test(detail)) {
+                return '';
+            }
+            return detail;
+        }
+
+        function inferExecutionPreludeText(rawText, mode = 'agent') {
+            const source = String(rawText || '').trim();
+            if (!source) {
+                return mode === 'channel'
+                    ? '正在协调频道成员，准备执行。'
+                    : '正在理解你的请求，准备执行。';
+            }
+            if (/(桌面|desktop|屏幕|screen|投屏|远控|看看.*桌面|查看.*桌面)/i.test(source)) {
+                return '先让我查看一下你的桌面内容。';
+            }
+            if (/(日志|log|报错|error|异常|失败|timeout|超时)/i.test(source)) {
+                return '先读取日志和报错上下文，定位问题。';
+            }
+            if (/(文件|目录|folder|路径|path|代码|repo|项目|project)/i.test(source)) {
+                return '先定位相关文件和上下文。';
+            }
+            if (/(优化|加速|性能|卡|延迟|lag)/i.test(source)) {
+                return '先分析瓶颈，再给出优化路径。';
+            }
+            return '正在拆解你的问题并规划执行步骤。';
+        }
+
+        function deriveBubbleStreamingText(msg = {}) {
+            const reasoningSource = (typeof msg.displayReasoning === 'string' && msg.displayReasoning.trim())
+                ? msg.displayReasoning
+                : (typeof msg.reasoning === 'string' ? msg.reasoning : '');
+            const reasoningHint = extractReasoningHint(reasoningSource);
+            if (reasoningHint) return reasoningHint;
+
+            const events = normalizeExecutionEvents(msg.executionEvents);
+            if (events.length > 0) {
+                const lastEvent = events[events.length - 1];
+                const detail = sanitizeExecutionDetail(lastEvent.detail || '');
+                if (detail) return detail;
+                const label = truncateExecutionText(lastEvent.label || '', 160);
+                if (label && !/执行通道|思考等级/i.test(label)) return label;
+            }
+
+            const prelude = typeof msg.preludeText === 'string' ? msg.preludeText.trim() : '';
+            if (prelude) return prelude;
+            return '模型思考中';
+        }
+
+        function renderBubbleStreamingIndicator(messageDiv, msg, streaming) {
+            if (!messageDiv) return;
+            const bubbleEl = messageDiv.querySelector('.assistant-bubble');
+            const statusEl = messageDiv.querySelector('[data-stream-status]');
+            if (!bubbleEl || !statusEl) return;
+
+            if (!streaming) {
+                bubbleEl.classList.remove('is-streaming');
+                statusEl.classList.add('hidden');
+                return;
+            }
+
+            if (!msg || typeof msg !== 'object') return;
+            if (!Number.isFinite(Number(msg.streamStartedAt))) {
+                msg.streamStartedAt = Date.now();
+            }
+            const textEl = statusEl.querySelector('[data-stream-status-text]');
+            const elapsedEl = statusEl.querySelector('[data-stream-status-elapsed]');
+            const liveText = deriveBubbleStreamingText(msg);
+
+            bubbleEl.classList.add('is-streaming');
+            statusEl.classList.remove('hidden');
+            if (textEl) textEl.textContent = liveText || '模型思考中';
+            if (elapsedEl) elapsedEl.textContent = formatStreamingElapsedByStartedAt(msg.streamStartedAt);
+        }
+
+        function extractReasoningHint(rawReasoning) {
+            const source = typeof rawReasoning === 'string' ? rawReasoning.replace(/\r/g, '') : '';
+            if (!source.trim()) return '';
+            const lines = source
+                .split('\n')
+                .map((line) => String(line || '').replace(/\x1b\[[0-9;]*m/g, '').trim())
+                .filter(Boolean);
+            const noisyReasoning = /(allowlist contains unknown entries|syntaxerror|formatexception|traceback|stack|not valid json|runtime\/provider\/model\/config|unknown entries)/i;
+            for (let i = lines.length - 1; i >= 0; i -= 1) {
+                let line = lines[i];
+                if (!line) continue;
+                line = line
+                    .replace(/^\[\s*(thread|线程|worker|branch|lane)[^\]]*]\s*/i, '')
+                    .replace(/^(thread|线程|worker|branch|lane)\s*#?\s*[a-z0-9\u4e00-\u9fa5_-]*\s*[:：\-]\s*/i, '')
+                    .replace(/^[-*•\d\.\)\s]+/, '')
+                    .trim();
+                if (!line) continue;
+                if (/^\[\s*(thread|线程|worker|branch|lane)\b/i.test(line)) continue;
+                if (/^(thinking|推理)\s*[/:：-]/i.test(line)) continue;
+                if (/^(thinking|推理|思考)\s*$/i.test(line)) continue;
+                if (/^[-=*`~#>\[\]\(\)_|]+$/.test(line)) continue;
+                if (noisyReasoning.test(line)) continue;
+                if (line.length < 4) continue;
+                return truncateExecutionText(line, 220);
+            }
+            return '';
+        }
+
+        function deriveExecutionLiveText(events, options = {}) {
+            const streaming = !!options.streaming;
+            const preludeText = typeof options.preludeText === 'string' ? options.preludeText.trim() : '';
+            const reasoningHint = extractReasoningHint(options.reasoningText);
+            if (streaming && reasoningHint) {
+                return `思考中：${reasoningHint}`;
+            }
+            if (streaming && preludeText) {
+                return preludeText;
+            }
+
+            const list = Array.isArray(events) ? events : [];
+            const lastEvent = list.length > 0 ? list[list.length - 1] : null;
+            if (!lastEvent) {
+                return streaming ? '模型思考中，等待执行事件…' : '';
+            }
+
+            const code = String(lastEvent.code || '').trim().toLowerCase();
+            const label = truncateExecutionText(lastEvent.label || '', 120);
+            const detail = sanitizeExecutionDetail(lastEvent.detail || '');
+            if (code === 'stream_done' || code === 'relay_done') {
+                return detail || '执行完成';
+            }
+            if (/error|failed|timeout|denied|offline/.test(code)) {
+                return detail ? `执行异常：${detail}` : '执行异常，请重试';
+            }
+            if (code === 'route') {
+                return detail ? `已锁定执行路径：${detail}` : '已锁定执行路径，开始分析…';
+            }
+            if (code === 'thinking_level') {
+                return detail ? `推理强度：${detail}` : '已设置思考强度，继续推理中…';
+            }
+            if (code === 'cli_local' || code === 'gateway_http') {
+                return detail || '正在读取上下文并生成回答…';
+            }
+            if (code === 'relay_start') {
+                return detail || '正在转发给协作智能体…';
+            }
+            if (detail) return detail;
+            if (label) {
+                return streaming ? `处理中：${label}` : label;
+            }
+            return streaming ? '模型处理中…' : '';
+        }
+
+        function isExecutionErrorEvent(event) {
+            if (!event || typeof event !== 'object') return false;
+            const signature = `${event.code || ''} ${event.label || ''} ${event.detail || ''}`.toLowerCase();
+            return /(error|failed|fail|timeout|denied|offline|mismatch|unavailable|forbidden|not allowed)/.test(signature);
+        }
+
+        function renderExecutionPresentation(messageDiv, rawEvents, options = {}) {
+            if (!messageDiv) return;
+            const executionContainer = messageDiv.querySelector('.execution-container');
+            if (!executionContainer) return;
+            if (!AT_SHOW_EXECUTION_PANEL) {
+                executionContainer.classList.add('hidden');
+                return;
+            }
+            const executionMeta = executionContainer.querySelector('.execution-meta');
+            const executionLiveText = executionContainer.querySelector('.execution-live-text');
+            if (!executionLiveText) return;
+
+            const events = normalizeExecutionEvents(rawEvents);
+            const streaming = !!options.streaming;
+            const lastEvent = events.length > 0 ? events[events.length - 1] : null;
+            const hasError = isExecutionErrorEvent(lastEvent);
+            const shouldHideAfterDone = !streaming && !hasError;
+            const liveText = deriveExecutionLiveText(events, options);
+            const shouldHideWhenNoSignal = events.length === 0 && !liveText;
+
+            if (shouldHideWhenNoSignal || shouldHideAfterDone) {
+                executionContainer.classList.add('hidden');
+                if (executionMeta) executionMeta.textContent = '';
+                executionContainer.classList.remove('is-streaming');
+                executionLiveText.textContent = '';
+                return;
+            }
+
+            const elapsedText = formatExecutionElapsed(events, streaming);
+            executionContainer.classList.remove('hidden');
+            executionContainer.classList.toggle('is-streaming', streaming);
+            executionLiveText.textContent = liveText || (streaming ? '模型处理中…' : '执行状态');
+            if (executionMeta) {
+                if (streaming) {
+                    executionMeta.textContent = elapsedText || '';
+                } else if (hasError) {
+                    executionMeta.textContent = elapsedText ? `异常 · ${elapsedText}` : '异常';
+                } else {
+                    executionMeta.textContent = '';
+                }
+            }
         }
 
         function normalizeMessageFiles(files) {
@@ -6342,10 +7685,18 @@
                     </div>`;
             } else {
                  const messageAvatarUrl = (typeof options.avatarUrl === 'string' && options.avatarUrl.trim()) ? options.avatarUrl.trim() : '';
+                 const senderAgentId = (typeof options.senderAgentId === 'string' && options.senderAgentId.trim())
+                    ? options.senderAgentId.trim()
+                    : '';
+                 const hasExplicitSenderName = typeof options.senderName === 'string' && !!options.senderName.trim();
+                 const allowCurrentAgentAvatarFallback = !senderAgentId && !hasExplicitSenderName;
+                 const preferredAvatarFallback = allowCurrentAgentAvatarFallback
+                    ? (messageAvatarUrl || currentAgentAvatarUrl || '')
+                    : messageAvatarUrl;
                  const hintedName = (typeof options.senderName === 'string' && options.senderName.trim())
                     ? options.senderName.trim()
                     : (currentAgentToolId || 'Agent');
-                 const visual = resolveAgentVisualIdentity(currentAgentToolId || '', hintedName, messageAvatarUrl || currentAgentAvatarUrl || '');
+                 const visual = resolveAgentVisualIdentity(senderAgentId || currentAgentToolId || '', hintedName, preferredAvatarFallback);
                  const assistantAvatarUrl = visual.avatarUrl || '';
                  if (assistantAvatarUrl) {
                      avatarHtml = `<img src="${assistantAvatarUrl}" class="w-10 h-10 rounded-full object-cover flex-shrink-0 border border-white/10 shadow-lg bg-black/50 ring-2 ring-transparent group-hover:ring-primary/20 transition-all" onerror="handleSidebarAvatarError(this, '${escapeHtml(visual.displayName || hintedName)}')">`;
@@ -6362,13 +7713,30 @@
             
             div.innerHTML = `
                 ${avatarHtml}
-                <div class="${isUser ? 'bg-primary text-black shadow-neon' : 'bg-white/10 text-gray-200 border border-white/5 shadow-glass'} p-5 rounded-3xl ${isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'} text-sm leading-relaxed backdrop-blur-md group relative hover:shadow-xl transition-all duration-300 min-w-[60px]">
+                <div class="${isUser ? 'bg-primary text-black shadow-neon' : 'assistant-bubble bg-white/10 text-gray-200 border border-white/5 shadow-glass'} p-5 rounded-3xl ${isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'} text-sm leading-relaxed backdrop-blur-md group relative hover:shadow-xl transition-all duration-300 min-w-[60px]">
                     ${isUser ? '' : '<div class="sender-label hidden text-[12px] font-semibold text-primary mb-2"></div>'}
                     <div class="message-content select-text" style="word-break: break-word;"></div>
                     ${isUser ? '' : `
+                    <div class="bubble-stream-status hidden" data-stream-status>
+                        <span class="bubble-stream-spinner" aria-hidden="true"></span>
+                        <span class="bubble-stream-text" data-stream-status-text>模型思考中</span>
+                        <span class="bubble-stream-elapsed" data-stream-status-elapsed>0s</span>
+                    </div>
                     <div class="reasoning-container hidden mt-3 p-3 rounded-2xl bg-black/20 border border-white/10">
-                        <div class="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Thinking / 推理</div>
+                        <div class="reasoning-header-row mb-1">
+                            <div class="text-[10px] uppercase tracking-wider text-gray-400">Thinking / 推理</div>
+                            <div class="reasoning-meta"></div>
+                        </div>
                         <div class="reasoning-content select-text text-xs text-gray-300 leading-relaxed" style="word-break: break-word;"></div>
+                        <div class="reasoning-thread-list hidden"></div>
+                    </div>
+                    <div class="execution-container hidden mt-2">
+                        <div class="execution-live-row">
+                            <span class="execution-live-dot"></span>
+                            <span class="execution-live-text">模型处理中…</span>
+                            <span class="execution-live-loading"><span></span><span></span><span></span></span>
+                            <span class="execution-meta"></span>
+                        </div>
                     </div>
                     `}
                 </div>
@@ -6384,12 +7752,22 @@
                 senderLabel.textContent = senderName;
             }
 
-            const reasoningContainer = div.querySelector('.reasoning-container');
-            const reasoningDiv = div.querySelector('.reasoning-content');
             const reasoningText = typeof options.reasoning === 'string' ? options.reasoning : '';
-            if (reasoningContainer && reasoningDiv && reasoningText) {
-                reasoningContainer.classList.remove('hidden');
-                reasoningDiv.innerHTML = renderMarkdownToHtml(reasoningText);
+            renderReasoningPresentation(div, reasoningText, { streaming: false });
+            const executionEvents = normalizeExecutionEvents(options.executionEvents);
+            renderExecutionPresentation(div, executionEvents, {
+                streaming: false,
+                reasoningText,
+                preludeText: options.preludeText || ''
+            });
+            if (!isUser) {
+                renderBubbleStreamingIndicator(div, {
+                    reasoning: reasoningText,
+                    displayReasoning: reasoningText,
+                    executionEvents,
+                    preludeText: options.preludeText || '',
+                    streamStartedAt: options.streamStartedAt
+                }, !!options.streaming);
             }
 
             const bubble = div.querySelector('.p-5');
@@ -6418,22 +7796,35 @@
             const preserveScrollAnchor = !!(options && options.preserveScrollAnchor);
             const previousScrollTop = Number(options && options.previousScrollTop) || 0;
             const previousScrollHeight = Number(options && options.previousScrollHeight) || 0;
+            stopLoadingIndicatorTicker();
             chatContainer.innerHTML = '';
             currentMessageDiv = null;
 
             state.messages.forEach((msg, idx) => {
                 const contentToRender = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
                 const reasoningToRender = (typeof msg.displayReasoning === 'string') ? msg.displayReasoning : (msg.reasoning || '');
+                const executionToRender = normalizeExecutionEvents(msg.executionEvents);
+                const senderAgent = (msg.role === 'assistant' && msg.agentId) ? getAgentById(msg.agentId) : null;
+                const senderAvatarUrl = (senderAgent && typeof senderAgent.avatarUrl === 'string' && senderAgent.avatarUrl && !senderAgent.avatarUrl.includes('googleusercontent.com'))
+                    ? senderAgent.avatarUrl
+                    : '';
                 appendMessage(msg.role, msg.content || '', msg.files || [], {
                     messageIndex: idx,
+                    senderName: msg.senderName || '',
+                    senderAgentId: msg.agentId || '',
+                    avatarUrl: senderAvatarUrl,
                     reasoning: reasoningToRender,
+                    executionEvents: executionToRender,
+                    preludeText: msg.preludeText || '',
+                    streamStartedAt: msg.streamStartedAt,
+                    streaming: !!(state.inFlight && Number.isInteger(state.streamMessageIndex) && state.streamMessageIndex === idx),
                     renderedContent: contentToRender,
                     entranceAnimation: false,
                     skipScroll: true
                 });
             });
 
-            if (state.loading) {
+            if (state.loading && !Number.isInteger(state.streamMessageIndex)) {
                 showLoadingIndicator();
             }
 
@@ -6448,13 +7839,44 @@
             });
         }
 
-        function ensureStreamingAssistantMessage(agentId, isNew) {
+        function ensureStreamingAssistantMessage(agentId, isNew, meta = {}) {
             const state = getAgentChatState(agentId);
             const currentIndex = state.streamMessageIndex;
             const current = Number.isInteger(currentIndex) ? state.messages[currentIndex] : null;
-            if (isNew || !current || current.role !== 'assistant') {
-                state.messages.push({ role: 'assistant', content: '', reasoning: '', files: [], displayContent: '', displayReasoning: '' });
+            const senderName = (meta && typeof meta.senderName === 'string') ? meta.senderName.trim() : '';
+            const senderAgentId = (meta && typeof meta.senderAgentId === 'string') ? meta.senderAgentId.trim() : '';
+            const currentSenderAgentId = current && typeof current.agentId === 'string' ? current.agentId.trim() : '';
+            const canReuseProvisional = !!(current && current.role === 'assistant' && current.provisional === true);
+            const shouldStartNew = (!canReuseProvisional && !!isNew)
+                || !current
+                || current.role !== 'assistant'
+                || (!!senderAgentId && senderAgentId !== currentSenderAgentId);
+            if (shouldStartNew) {
+                state.messages.push({
+                    role: 'assistant',
+                    content: '',
+                    reasoning: '',
+                    executionEvents: [],
+                    files: [],
+                    displayContent: '',
+                    displayReasoning: '',
+                    preludeText: '',
+                    streamStartedAt: Date.now(),
+                    provisional: false,
+                    senderName: senderName || '',
+                    agentId: senderAgentId || ''
+                });
                 state.streamMessageIndex = state.messages.length - 1;
+            } else if (current) {
+                if (!Number.isFinite(Number(current.streamStartedAt))) {
+                    current.streamStartedAt = Date.now();
+                }
+                if (senderName && (!current.senderName || !String(current.senderName).trim())) {
+                    current.senderName = senderName;
+                }
+                if (senderAgentId && (!current.agentId || !String(current.agentId).trim())) {
+                    current.agentId = senderAgentId;
+                }
             }
             return state;
         }
@@ -6484,26 +7906,32 @@
             const msg = state.messages[streamIndex];
             if (!msg || msg.role !== 'assistant') return;
 
-            const loadingIndicator = document.getElementById('at-loading-indicator');
-            if (loadingIndicator) loadingIndicator.remove();
+            removeLoadingIndicator();
 
             const contentDiv = currentMessageDiv.querySelector('.message-content');
             if (contentDiv) {
                 const streamingText = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
                 renderBubbleContent(contentDiv, streamingText, true);
             }
-            const reasoningContainer = currentMessageDiv.querySelector('.reasoning-container');
-            const reasoningDiv = currentMessageDiv.querySelector('.reasoning-content');
-            const reasoningText = (typeof msg.displayReasoning === 'string') ? msg.displayReasoning : (typeof msg.reasoning === 'string' ? msg.reasoning : '');
-            if (reasoningContainer && reasoningDiv) {
-                if (reasoningText.trim()) {
-                    reasoningContainer.classList.remove('hidden');
-                    reasoningDiv.innerHTML = renderMarkdownToHtml(reasoningText);
+            const senderLabel = currentMessageDiv.querySelector('.sender-label');
+            const senderName = (typeof msg.senderName === 'string') ? msg.senderName.trim() : '';
+            if (senderLabel) {
+                if (senderName) {
+                    senderLabel.classList.remove('hidden');
+                    senderLabel.textContent = senderName;
                 } else {
-                    reasoningContainer.classList.add('hidden');
-                    reasoningDiv.innerHTML = '';
+                    senderLabel.classList.add('hidden');
+                    senderLabel.textContent = '';
                 }
             }
+            const reasoningText = (typeof msg.displayReasoning === 'string') ? msg.displayReasoning : (typeof msg.reasoning === 'string' ? msg.reasoning : '');
+            renderReasoningPresentation(currentMessageDiv, reasoningText, { streaming: true });
+            renderExecutionPresentation(currentMessageDiv, msg.executionEvents, {
+                streaming: true,
+                reasoningText,
+                preludeText: msg.preludeText || ''
+            });
+            renderBubbleStreamingIndicator(currentMessageDiv, msg, true);
             const chatContainer = document.getElementById('at-chat-messages');
             if (chatContainer) {
                 chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -6547,28 +7975,98 @@
             }
         }
 
-        function appendAgentText(agentId, text, isNew) {
+        function tickStreamStatusUi() {
+            if (currentChannelId) {
+                const channelState = getChannelChatState(currentChannelId);
+                if (!channelState || !channelState.inFlight) return;
+                const keys = Object.keys(channelState.streamMessageIndexByAgent || {});
+                if (!keys.length) return;
+                keys.forEach((agentKey) => {
+                    patchStreamingChannelAssistantDom(currentChannelId, agentKey);
+                });
+                return;
+            }
+            if (currentAgentToolId) {
+                const state = getAgentChatState(currentAgentToolId);
+                if (!state || !state.inFlight || !Number.isInteger(state.streamMessageIndex)) return;
+                patchStreamingAssistantDom(currentAgentToolId);
+            }
+        }
+
+        function ensureStreamStatusTicker() {
+            if (atStreamStatusTicker) return;
+            atStreamStatusTicker = setInterval(() => {
+                try {
+                    tickStreamStatusUi();
+                } catch (_) {}
+            }, 420);
+        }
+
+        function appendAgentText(agentId, text, isNew, meta = {}) {
             if (typeof text !== 'string' || !text) return;
-            const state = ensureStreamingAssistantMessage(agentId, isNew);
+            const state = ensureStreamingAssistantMessage(agentId, isNew, meta);
             const msg = state.messages[state.streamMessageIndex];
+            msg.provisional = false;
             msg.content += text;
+            if (meta && typeof meta.senderName === 'string' && meta.senderName.trim()) {
+                msg.senderName = meta.senderName.trim();
+            }
+            if (meta && typeof meta.senderAgentId === 'string' && meta.senderAgentId.trim()) {
+                msg.agentId = meta.senderAgentId.trim();
+            }
             streamAgentTtsText(agentId, text, isNew);
             state.loading = false;
             if (currentAgentToolId === agentId) {
-                scheduleAgentTypingRender(agentId);
+                syncStreamingDisplayNow(msg);
+                patchStreamingAssistantDom(agentId);
             } else {
                 syncStreamingDisplayNow(msg);
             }
         }
 
-        function appendAgentReasoning(agentId, text, isNew) {
+        function appendAgentReasoning(agentId, text, isNew, meta = {}) {
             if (typeof text !== 'string' || !text) return;
-            const state = ensureStreamingAssistantMessage(agentId, isNew);
+            const state = ensureStreamingAssistantMessage(agentId, isNew, meta);
             const msg = state.messages[state.streamMessageIndex];
+            msg.provisional = false;
             msg.reasoning += text;
+            if (meta && typeof meta.senderName === 'string' && meta.senderName.trim()) {
+                msg.senderName = meta.senderName.trim();
+            }
+            if (meta && typeof meta.senderAgentId === 'string' && meta.senderAgentId.trim()) {
+                msg.agentId = meta.senderAgentId.trim();
+            }
             state.loading = false;
             if (currentAgentToolId === agentId) {
-                scheduleAgentTypingRender(agentId);
+                syncStreamingDisplayNow(msg);
+                patchStreamingAssistantDom(agentId);
+            } else {
+                syncStreamingDisplayNow(msg);
+            }
+        }
+
+        function appendAgentExecutionEvent(agentId, eventPayload, isNew, meta = {}) {
+            const event = normalizeExecutionEvent(eventPayload);
+            if (!event) return;
+            const state = ensureStreamingAssistantMessage(agentId, isNew, meta);
+            const msg = state.messages[state.streamMessageIndex];
+            msg.provisional = false;
+            if (!Array.isArray(msg.executionEvents)) {
+                msg.executionEvents = [];
+            }
+            msg.executionEvents.push(event);
+            if (msg.executionEvents.length > 120) {
+                msg.executionEvents = msg.executionEvents.slice(-120);
+            }
+            if (meta && typeof meta.senderName === 'string' && meta.senderName.trim()) {
+                msg.senderName = meta.senderName.trim();
+            }
+            if (meta && typeof meta.senderAgentId === 'string' && meta.senderAgentId.trim()) {
+                msg.agentId = meta.senderAgentId.trim();
+            }
+            state.loading = false;
+            if (currentAgentToolId === agentId) {
+                patchStreamingAssistantDom(agentId);
             } else {
                 syncStreamingDisplayNow(msg);
             }
@@ -6580,7 +8078,15 @@
             clearAgentTypingTimer(agentId);
             const idx = state.streamMessageIndex;
             if (Number.isInteger(idx) && state.messages[idx]) {
-                syncStreamingDisplayNow(state.messages[idx]);
+                const lastMsg = state.messages[idx];
+                syncStreamingDisplayNow(lastMsg);
+                const hasContent = !!String(lastMsg.content || '').trim()
+                    || !!String(lastMsg.reasoning || '').trim()
+                    || (Array.isArray(lastMsg.files) && lastMsg.files.length > 0);
+                const hasEvents = Array.isArray(lastMsg.executionEvents) && lastMsg.executionEvents.length > 0;
+                if (!hasContent && !hasEvents) {
+                    state.messages.splice(idx, 1);
+                }
             }
             state.inFlight = false;
             state.loading = false;
@@ -6606,10 +8112,27 @@
             state.loading = true;
             state.streamMessageIndex = null;
             state.activePayload = payload;
+            const preludeText = inferExecutionPreludeText(payload.content || '', 'agent');
+            state.messages.push({
+                role: 'assistant',
+                content: '',
+                reasoning: '',
+                executionEvents: [],
+                files: [],
+                displayContent: '',
+                displayReasoning: '',
+                preludeText,
+                streamStartedAt: Date.now(),
+                provisional: true,
+                senderName: '',
+                agentId: ''
+            });
+            state.streamMessageIndex = state.messages.length - 1;
             syncAgentPendingRequestSnapshot(agentId);
             updateSidebarBusyIndicators();
             if (currentAgentToolId === agentId) {
                 renderAgentToolsChat(agentId);
+                patchStreamingAssistantDom(agentId);
             }
 
             try {
@@ -6620,6 +8143,17 @@
             } catch (e) {
                 state.inFlight = false;
                 state.loading = false;
+                const provisionalIdx = state.streamMessageIndex;
+                if (Number.isInteger(provisionalIdx) && state.messages[provisionalIdx]) {
+                    const msg = state.messages[provisionalIdx];
+                    const hasContent = !!String(msg.content || '').trim()
+                        || !!String(msg.reasoning || '').trim()
+                        || (Array.isArray(msg.files) && msg.files.length > 0);
+                    const hasEvents = Array.isArray(msg.executionEvents) && msg.executionEvents.length > 0;
+                    if (!hasContent && !hasEvents) {
+                        state.messages.splice(provisionalIdx, 1);
+                    }
+                }
                 state.streamMessageIndex = null;
                 state.activePayload = null;
                 syncAgentPendingRequestSnapshot(agentId);
@@ -6639,19 +8173,65 @@
             }
         }
 
+        function stopLoadingIndicatorTicker() {
+            if (atLoadingIndicatorTicker) {
+                clearInterval(atLoadingIndicatorTicker);
+                atLoadingIndicatorTicker = null;
+            }
+        }
+
+        function refreshLoadingIndicator(indicatorEl) {
+            if (!indicatorEl) return;
+            const startedAt = Number(indicatorEl.dataset.startedAt) || Date.now();
+            const elapsedMs = Math.max(0, Date.now() - startedAt);
+            const dotCount = (Math.floor(elapsedMs / 520) % 3) + 1;
+            const labelEl = indicatorEl.querySelector('[data-loading-label]');
+            const elapsedEl = indicatorEl.querySelector('[data-loading-elapsed]');
+            if (labelEl) {
+                if (elapsedMs >= 12000) {
+                    labelEl.textContent = `等待模型输出中（该模型可能不返回思考流）${'.'.repeat(dotCount)}`;
+                } else {
+                    labelEl.textContent = `模型思考中${'.'.repeat(dotCount)}`;
+                }
+            }
+            if (elapsedEl) {
+                elapsedEl.textContent = `${Math.floor(elapsedMs / 1000)}s`;
+            }
+        }
+
+        function removeLoadingIndicator() {
+            const loadingIndicator = document.getElementById('at-loading-indicator');
+            if (loadingIndicator) {
+                loadingIndicator.remove();
+            }
+            stopLoadingIndicatorTicker();
+        }
+
         function showLoadingIndicator() {
              const chatContainer = document.getElementById('at-chat-messages');
              if (!chatContainer) return;
-             
-             // Check if already exists
-             if (document.getElementById('at-loading-indicator')) return;
-             
+
+             const existing = document.getElementById('at-loading-indicator');
+             if (existing) {
+                 refreshLoadingIndicator(existing);
+                 if (!atLoadingIndicatorTicker) {
+                     atLoadingIndicatorTicker = setInterval(() => {
+                         const target = document.getElementById('at-loading-indicator');
+                         if (!target) {
+                             stopLoadingIndicatorTicker();
+                             return;
+                         }
+                         refreshLoadingIndicator(target);
+                     }, 260);
+                 }
+                 return;
+             }
+
              const div = document.createElement('div');
              div.id = 'at-loading-indicator';
              div.className = 'flex gap-4 max-w-[90%] mb-6';
-             
-             // ... avatar code ...
-             
+             div.dataset.startedAt = String(Date.now());
+
              let avatarHtml = '';
              const loadingVisual = resolveAgentVisualIdentity(currentAgentToolId || '', 'Agent', currentAgentAvatarUrl || '');
              if (loadingVisual.avatarUrl) {
@@ -6665,15 +8245,29 @@
                         ${(fallbackName.charAt(0) || 'A').toUpperCase()}
                     </div>`;
              }
-             
+
              div.innerHTML = `
                 ${avatarHtml}
-                <div class="bg-white/5 text-gray-400 border border-white/5 p-4 rounded-3xl rounded-tl-sm backdrop-blur-md min-w-[60px] flex items-center justify-center">
-                    <span class="inline-block w-3 h-3 rounded-full border border-blue-300/40 border-t-blue-400 animate-spin shadow-[0_0_8px_rgba(96,165,250,0.9)]"></span>
+                <div class="bg-white/5 text-gray-300 border border-white/5 p-4 rounded-3xl rounded-tl-sm backdrop-blur-md min-w-[200px] max-w-[min(82vw,360px)]">
+                    <div class="flex items-center gap-2 text-[12px]">
+                        <span class="inline-block w-3 h-3 rounded-full border border-blue-300/40 border-t-blue-400 animate-spin shadow-[0_0_8px_rgba(96,165,250,0.9)]"></span>
+                        <span data-loading-label class="text-gray-300">模型思考中...</span>
+                        <span data-loading-elapsed class="ml-auto text-[11px] text-gray-500 tabular-nums">0s</span>
+                    </div>
                 </div>
              `;
-             
+
              chatContainer.appendChild(div);
+             refreshLoadingIndicator(div);
+             stopLoadingIndicatorTicker();
+             atLoadingIndicatorTicker = setInterval(() => {
+                 const target = document.getElementById('at-loading-indicator');
+                 if (!target) {
+                     stopLoadingIndicatorTicker();
+                     return;
+                 }
+                 refreshLoadingIndicator(target);
+             }, 260);
              requestAnimationFrame(() => {
                  chatContainer.scrollTop = chatContainer.scrollHeight;
              });
@@ -7200,12 +8794,15 @@
         function scrollAgentToolsChatToBottom() {
             const chatContainer = document.getElementById('at-chat-messages');
             if (!chatContainer) return;
-            requestAnimationFrame(() => {
+            let attempts = 5;
+            const tick = () => {
                 chatContainer.scrollTop = chatContainer.scrollHeight;
-                setTimeout(() => {
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                }, 80);
-            });
+                attempts -= 1;
+                if (attempts > 0) {
+                    setTimeout(() => requestAnimationFrame(tick), 70);
+                }
+            };
+            requestAnimationFrame(tick);
         }
 
         function clearChannelConversationState(channelId, options = {}) {
@@ -7565,6 +9162,7 @@
             loadAgentToolsChannelRuleModePref();
             loadAgentToolsImmersivePref();
             loadAgentToolsRuntimeStatusPref();
+            loadSentInputHistoryStore();
             mecoSidebarWasNarrow = isSidebarNarrowViewport();
             const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
             if (sidebarToggleBtn) {
@@ -7813,6 +9411,7 @@
                     checkMecoUpdateStatus();
                 }
             });
+            ensureStreamStatusTicker();
             refreshAgentToolsSoundAvailability();
             checkMecoUpdateStatus({ force: true });
             fetchAgents();

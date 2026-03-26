@@ -35,7 +35,8 @@
     },
     remoteConfig: {
       rustdeskWebBaseUrl: '',
-      rustdeskSchemeAuthority: 'connect'
+      rustdeskSchemeAuthority: 'connect',
+      cloudflarePublicHost: ''
     },
     rustdeskPasswordDirty: false,
     bindTab: 'import',
@@ -545,54 +546,63 @@
     return merged;
   }
 
-  function isLocalDevice(device) {
-    if (!device) return false;
-    const bindingId = toSafeString(state.localProfile.bindingId);
-    if (bindingId && toSafeString(device.id) === bindingId) {
-      return true;
-    }
+  function getLocalLanFingerprints() {
+    const candidates = new Set();
+    const bootstrapLan = normalizeComparableHttpUrl(state.bootstrap.lanUrl || '');
+    if (bootstrapLan) candidates.add(bootstrapLan);
+    try {
+      const originComparable = normalizeComparableHttpUrl(window.location.origin || '');
+      if (originComparable) candidates.add(originComparable);
+    } catch (_) {}
+    return candidates;
+  }
 
-    const localRustdeskId = normalizeRustDeskId(state.localRustDesk.id || state.localProfile.rustdeskId);
+  function isCurrentMachineByFingerprint(device) {
+    if (!device) return false;
+    const localRustdeskId = normalizeRustDeskId(state.localRustDesk.id || '');
     const deviceRustdeskId = normalizeRustDeskId(device.rustdeskId || device.meshNodeId || '');
     if (localRustdeskId && deviceRustdeskId && localRustdeskId === deviceRustdeskId) {
       return true;
     }
-
-    const localLan = normalizeComparableHttpUrl(state.bootstrap.lanUrl || state.localProfile.lanUrl);
+    const localLanCandidates = getLocalLanFingerprints();
     const deviceLan = normalizeComparableHttpUrl(device.lanUrl || '');
-    if (localLan && deviceLan && localLan === deviceLan) {
+    if (deviceLan && localLanCandidates.has(deviceLan)) {
+      return true;
+    }
+    return false;
+  }
+
+  function isLocalDevice(device) {
+    if (!device) return false;
+    const bindingId = toSafeString(state.localProfile.bindingId);
+    if (bindingId && toSafeString(device.id) === bindingId && isCurrentMachineByFingerprint(device)) {
       return true;
     }
 
-    const profileOwner = toSafeString(state.localProfile.owner);
-    const profileDeviceName = toSafeString(state.localProfile.deviceName);
-    if (!profileOwner || !profileDeviceName) return false;
-    return toSafeString(device.owner) === profileOwner && toSafeString(device.deviceName) === profileDeviceName;
+    return isCurrentMachineByFingerprint(device);
   }
 
   function findLocalBoundDevice() {
     const byBindingId = toSafeString(state.localProfile.bindingId);
     if (byBindingId) {
       const found = state.devices.find((d) => toSafeString(d && d.id) === byBindingId);
-      if (found) return found;
-    }
-
-    const owner = toSafeString(els.ownerInput && els.ownerInput.value) || toSafeString(state.localProfile.owner);
-    const deviceName = toSafeString(els.deviceInput && els.deviceInput.value) || toSafeString(state.localProfile.deviceName);
-    if (owner && deviceName) {
-      const byIdentity = state.devices.find((d) => toSafeString(d && d.owner) === owner && toSafeString(d && d.deviceName) === deviceName);
-      if (byIdentity) return byIdentity;
+      if (found && isCurrentMachineByFingerprint(found)) return found;
     }
 
     const rustdeskId = normalizeRustDeskId(
       (els.rustdeskIdInput && els.rustdeskIdInput.value)
       || state.localRustDesk.id
-      || state.localProfile.rustdeskId
       || ''
     );
     if (rustdeskId) {
       const byRustdeskId = state.devices.find((d) => normalizeRustDeskId((d && (d.rustdeskId || d.meshNodeId)) || '') === rustdeskId);
       if (byRustdeskId) return byRustdeskId;
+    }
+
+    const localLanCandidates = getLocalLanFingerprints();
+    if (localLanCandidates.size > 0) {
+      const byLan = state.devices.find((d) => localLanCandidates.has(normalizeComparableHttpUrl((d && d.lanUrl) || '')));
+      if (byLan) return byLan;
     }
 
     return null;
@@ -640,6 +650,10 @@
   function refreshLocalBindingMode() {
     const localBoundDevice = findLocalBoundDevice();
     state.localBindingDeviceId = localBoundDevice ? toSafeString(localBoundDevice.id) : '';
+    if (state.localProfile.bindingId && !state.localBindingDeviceId && state.devicesLoaded) {
+      // 防止历史缓存把远端设备误判成本机：失配时自动清空 bindingId。
+      persistLocalProfileFromForm({ bindingId: '' });
+    }
     if (state.localBindingDeviceId && state.localProfile.bindingId !== state.localBindingDeviceId) {
       persistLocalProfileFromForm({ bindingId: state.localBindingDeviceId });
     }
@@ -824,6 +838,7 @@
     const config = body && body.config ? body.config : {};
     state.remoteConfig.rustdeskWebBaseUrl = toSafeString(config.rustdeskWebBaseUrl);
     state.remoteConfig.rustdeskSchemeAuthority = toSafeString(config.rustdeskSchemeAuthority) || 'connect';
+    state.remoteConfig.cloudflarePublicHost = toSafeString(config.cloudflarePublicHost);
   }
 
   function applyLocalRustDeskInfo(info = {}, options = {}) {
@@ -1198,7 +1213,10 @@
         .slice(0, 5)
         .map((item, idx) => `${idx + 1}. ${item.error}`)
         .join('\n');
-      alert(`${summary}\n\n失败原因:\n${detail}${failed.length > 5 ? `\n... 其余 ${failed.length - 5} 条请重试` : ''}`);
+      console.warn(
+        '[RemoteDock] import failed details:',
+        `${detail}${failed.length > 5 ? `\n... 其余 ${failed.length - 5} 条请重试` : ''}`
+      );
     } catch (e) {
       showStatus(els.importStatus, e.message || '导入失败', true);
     } finally {
@@ -1247,26 +1265,31 @@
     alert('被控码已复制到剪贴板');
   }
 
-  async function probeLanReachable(lanUrl) {
+  async function probeLanReachable(lanUrl, options = {}) {
     const target = String(lanUrl || '').trim();
     if (!target) return false;
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      try { controller.abort(); } catch (_) {}
-    }, 1200);
-    try {
-      await fetch(target, {
-        method: 'GET',
-        mode: 'no-cors',
-        cache: 'no-store',
-        signal: controller.signal
-      });
-      return true;
-    } catch (_) {
-      return false;
-    } finally {
-      clearTimeout(timer);
+    const timeoutMs = Math.max(300, Math.round(Number(options.timeoutMs) || 1200));
+    const retries = Math.max(1, Math.min(4, Math.round(Number(options.retries) || 1)));
+    for (let i = 0; i < retries; i += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        try { controller.abort(); } catch (_) {}
+      }, timeoutMs);
+      try {
+        await fetch(target, {
+          method: 'GET',
+          mode: 'no-cors',
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        return true;
+      } catch (_) {
+        // try next attempt
+      } finally {
+        clearTimeout(timer);
+      }
     }
+    return false;
   }
 
   function ensureViewerRect() {
@@ -1722,6 +1745,7 @@
         .pop();
       state.activeSessionId = topRemaining ? topRemaining.id : '';
     }
+    updateSessionActivationMasks();
     renderDockTabs();
     renderBindDeviceList();
     updateWorkspaceFocusMode();
@@ -1831,12 +1855,34 @@
     session.zIndex = state.zCounter;
     session.el.style.zIndex = String(session.zIndex);
     state.activeSessionId = session.id;
+    updateSessionActivationMasks();
     if (options.skipUiRefresh) return;
     if (prevActiveId !== toSafeString(session.id) || options.forceUiRefresh) {
       renderDockTabs();
       renderBindDeviceList();
       updateWorkspaceFocusMode();
     }
+  }
+
+  function bringSessionToFrontByTarget(target, options = {}) {
+    if (!target || !target.closest) return;
+    const winEl = target.closest('[data-session-id]');
+    if (!winEl) return;
+    const sessionId = toSafeString(winEl.dataset && winEl.dataset.sessionId);
+    if (!sessionId) return;
+    const session = state.sessions.get(sessionId);
+    if (!session || session.minimized) return;
+    bringSessionToFront(session, options);
+  }
+
+  function updateSessionActivationMasks() {
+    const activeId = toSafeString(state.activeSessionId);
+    Array.from(state.sessions.values()).forEach((session) => {
+      if (!session || !session.activationMaskEl) return;
+      const isActive = !session.minimized && toSafeString(session.id) === activeId;
+      session.activationMaskEl.classList.toggle('hidden', isActive);
+      session.activationMaskEl.style.pointerEvents = isActive ? 'none' : 'auto';
+    });
   }
 
   function applySessionRect(session, rect = null) {
@@ -1883,6 +1929,51 @@
       return u.toString();
     } catch (_) {
       return text;
+    }
+  }
+
+  function isSameOriginRemoteEntryUrl(rawUrl, device) {
+    const text = normalizeRemoteLaunchUrl(rawUrl);
+    if (!text) return false;
+    const targetRoute = normalizeRoutePath(device && device.routePath);
+    if (!targetRoute || targetRoute === '/') return false;
+    try {
+      const u = new URL(text, window.location.origin);
+      if (!/^https?:$/i.test(u.protocol)) return false;
+      const current = new URL(window.location.href);
+      if (u.origin !== current.origin) return false;
+      const pathOnly = normalizeRoutePath(u.pathname || '/');
+      if (pathOnly === targetRoute) return true;
+      const routeFromQuery = normalizeRoutePath(u.searchParams.get('remoteRoute') || '');
+      if (routeFromQuery && routeFromQuery === targetRoute) return true;
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function isLikelyLocalCloudflareEntryUrl(rawUrl, device) {
+    const text = normalizeRemoteLaunchUrl(rawUrl);
+    if (!text) return false;
+    const targetRoute = normalizeRoutePath(device && device.routePath);
+    if (!targetRoute || targetRoute === '/') return false;
+    const localPublicOrigin = normalizePublicHost(
+      state.remoteConfig.cloudflarePublicHost
+      || state.bootstrap.cloudflarePublicHost
+      || ''
+    );
+    if (!localPublicOrigin) return false;
+    try {
+      const u = new URL(text, window.location.origin);
+      if (!/^https?:$/i.test(u.protocol)) return false;
+      const pathOnly = normalizeRoutePath(u.pathname || '/');
+      const routeFromQuery = normalizeRoutePath(u.searchParams.get('remoteRoute') || '');
+      const isRemoteEntry = pathOnly === targetRoute || (routeFromQuery && routeFromQuery === targetRoute);
+      if (!isRemoteEntry) return false;
+      const candidateOrigin = `${u.protocol}//${u.host}`.replace(/\/+$/, '');
+      return candidateOrigin === localPublicOrigin;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1987,6 +2078,7 @@
         .pop();
       state.activeSessionId = topRemaining ? topRemaining.id : '';
     }
+    updateSessionActivationMasks();
     renderDockTabs();
     renderBindDeviceList();
     updateWorkspaceFocusMode();
@@ -2038,13 +2130,17 @@
     iframe.dataset.deviceId = toSafeString(device && device.id);
     iframe.dataset.mode = toSafeString(launch && launch.sessionMode);
     iframe.src = toSafeString(launch && launch.url) || 'about:blank';
+    const activationMask = document.createElement('div');
+    activationMask.className = 'absolute inset-0 z-[2] bg-transparent hidden';
+    activationMask.dataset.role = 'activation-mask';
+    activationMask.title = '点击激活窗口';
     const loading = document.createElement('div');
-    loading.className = 'absolute inset-0 z-[3] hidden flex items-start justify-center pt-3 bg-black/50 backdrop-blur-[1px] pointer-events-auto';
+    loading.className = 'absolute top-2 left-1/2 -translate-x-1/2 z-[4] hidden flex items-center justify-center pointer-events-none max-w-[calc(100%-14px)]';
     loading.innerHTML = `
-      <div class="max-w-[72%] rounded-lg border border-white/15 bg-black/75 px-3 py-2 text-xs text-gray-100 flex items-center gap-2 shadow-xl">
-        <span data-role="loading-spinner" class="inline-flex w-4 h-4 rounded-full border-2 border-cyan-300/40 border-t-cyan-200 animate-spin"></span>
+      <div class="max-w-full min-w-0 rounded-lg border border-white/15 bg-black/78 px-3 py-1.5 text-xs text-gray-100 flex items-center gap-2 shadow-[0_8px_24px_rgba(2,8,23,0.5)]">
+        <span data-role="loading-spinner" class="inline-flex w-3.5 h-3.5 rounded-full border-2 border-cyan-300/35 border-t-cyan-100 animate-spin shrink-0"></span>
         <span data-role="loading-error-icon" class="hidden material-icons-round text-red-300 text-sm">error</span>
-        <span data-role="loading-text" class="leading-5">正在连接远控...</span>
+        <span data-role="loading-text" class="leading-5 truncate min-w-0 max-w-[260px]">正在连接远控...</span>
       </div>
     `;
     const resizeHandle = document.createElement('div');
@@ -2052,6 +2148,7 @@
     resizeHandle.dataset.action = 'resize';
     resizeHandle.innerHTML = '<span class="absolute right-1 bottom-1 block w-3 h-3 border-r-2 border-b-2 border-white/35"></span>';
     body.appendChild(iframe);
+    body.appendChild(activationMask);
     body.appendChild(loading);
     body.appendChild(resizeHandle);
 
@@ -2067,6 +2164,7 @@
       url: toSafeString(launch && launch.url),
       launch: launch || {},
       iframe,
+      activationMaskEl: activationMask,
       el: win,
       headerEl: header,
       titleEl: header.querySelector('[data-role="title"]'),
@@ -2089,14 +2187,70 @@
       prefetchingModes: { web: false, rustdesk: false }
     };
 
+    const activateFromContent = () => {
+      bringSessionToFront(session, { forceUiRefresh: true });
+    };
+
     iframe.addEventListener('load', () => {
       const iframeToken = Number(iframe.dataset.loadToken || 0);
       const activeToken = Number(session.pendingLoadToken || 0);
       if (!iframeToken || iframeToken !== activeToken) return;
+      if (toSafeString(session.mode).toLowerCase() === 'web' && !isLocalDevice(session.device)) {
+        let loadedHref = '';
+        try {
+          loadedHref = toSafeString(
+            iframe.contentWindow
+            && iframe.contentWindow.location
+            && iframe.contentWindow.location.href
+          );
+        } catch (_) {
+          loadedHref = '';
+        }
+        if (loadedHref) {
+          let shouldBlockLocalFallback = false;
+          try {
+            const loaded = new URL(loadedHref, window.location.origin);
+            const current = new URL(window.location.href);
+            if (loaded.origin === current.origin) {
+              const loadedRoute = normalizeRoutePath(loaded.searchParams.get('remoteRoute') || '');
+              const targetRoute = normalizeRoutePath(session.device && session.device.routePath);
+              const sameRoute = !!(loadedRoute && targetRoute && loadedRoute === targetRoute);
+              const loopback = isLoopbackHostname(loaded.hostname);
+              const indexLike = normalizeRoutePath(loaded.pathname || '') === '/index.html' || normalizeRoutePath(loaded.pathname || '') === '/';
+              shouldBlockLocalFallback = loopback || sameRoute || indexLike;
+            }
+          } catch (_) {
+            shouldBlockLocalFallback = false;
+          }
+          if (shouldBlockLocalFallback) {
+            try { iframe.src = 'about:blank'; } catch (_) {}
+            setSessionLoadingState(
+              session,
+              true,
+              '暂时连不通（已阻止误显示本机页面），请稍后重试或切换 RustDesk',
+              { error: true }
+            );
+            return;
+          }
+        }
+      }
       setSessionLoadingState(session, false);
     });
     iframe.addEventListener('error', () => {
       setSessionLoadingState(session, true, '页面加载失败，请重试', { error: true });
+    });
+
+    activationMask.addEventListener('pointerdown', (event) => {
+      if (event && typeof event.button === 'number' && event.button !== 0) return;
+      bringSessionToFront(session, { forceUiRefresh: true });
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    activationMask.addEventListener('mousedown', (event) => {
+      if (event && typeof event.button === 'number' && event.button !== 0) return;
+      bringSessionToFront(session, { forceUiRefresh: true });
+      event.preventDefault();
+      event.stopPropagation();
     });
 
     header.addEventListener('mousedown', (event) => {
@@ -2115,9 +2269,16 @@
       event.preventDefault();
     });
 
-    win.addEventListener('mousedown', () => {
-      bringSessionToFront(session);
-    });
+    const activateFromPointer = (event) => {
+      if (event && typeof event.button === 'number' && event.button !== 0) return;
+      activateFromContent();
+    };
+    // 仅点击内容区域时置顶，避免 hover 抢焦点。
+    win.addEventListener('pointerdown', activateFromPointer, true);
+    win.addEventListener('mousedown', activateFromPointer);
+    iframe.addEventListener('pointerdown', activateFromPointer);
+    iframe.addEventListener('mousedown', activateFromPointer);
+    // 跨域 iframe 内部点击时，父文档 pointerdown 可能收不到；focus 作为点击激活兜底。
     iframe.addEventListener('focus', () => {
       bringSessionToFront(session, { forceUiRefresh: true });
     });
@@ -2126,7 +2287,8 @@
     if (modeWebBtn) {
       modeWebBtn.addEventListener('click', () => {
         switchSessionMode(session.id, 'web', { forceReconnect: false }).catch((e) => {
-          alert(`切换到 Web 失败: ${e.message || e}`);
+          // 错误已显示在子窗口 loading 区，这里不再弹窗。
+          console.warn('[RemoteDock] switch to web failed', e);
         });
       });
     }
@@ -2134,7 +2296,8 @@
     if (modeRustdeskBtn) {
       modeRustdeskBtn.addEventListener('click', () => {
         switchSessionMode(session.id, 'rustdesk', { forceReconnect: false }).catch((e) => {
-          alert(`切换到 RustDesk 失败: ${e.message || e}`);
+          // 错误已显示在子窗口 loading 区，这里不再弹窗。
+          console.warn('[RemoteDock] switch to rustdesk failed', e);
         });
       });
     }
@@ -2172,6 +2335,7 @@
     });
 
     state.sessions.set(session.id, session);
+    updateSessionActivationMasks();
     const initialMode = toSafeString(launch && launch.sessionMode).toLowerCase() === 'rustdesk' ? 'rustdesk' : 'web';
     const initialUrl = toSafeString(launch && launch.url);
     const hasInitialUrl = !!initialUrl && !/^about:blank$/i.test(initialUrl);
@@ -2231,7 +2395,9 @@
     }
 
     const hasLanUrl = !!toSafeString(device && device.lanUrl);
-    const lanReachable = hasLanUrl ? await probeLanReachable(device && device.lanUrl) : false;
+    const lanReachable = hasLanUrl
+      ? await probeLanReachable(device && device.lanUrl, { timeoutMs: 1600, retries: 2 })
+      : false;
     if (hasLanUrl) {
       try {
         const body = await resolveRemoteLaunch(deviceId, { preferLan: true, lanReachable: true, forceMode: 'lan' });
@@ -2249,9 +2415,30 @@
       const body = await resolveRemoteLaunch(deviceId, { preferLan: true, lanReachable: false, forceMode: 'public' });
       const launch = body && body.launch ? body.launch : {};
       if (toSafeString(launch.url)) {
-        return { ...launch, sessionMode: 'web', url: normalizeAndEmbedWebUrl(launch.url) };
+        const normalizedUrl = normalizeAndEmbedWebUrl(launch.url);
+        if (isSameOriginRemoteEntryUrl(normalizedUrl, device) || isLikelyLocalCloudflareEntryUrl(normalizedUrl, device)) {
+          const lanRetryReachable = hasLanUrl
+            ? await probeLanReachable(device && device.lanUrl, { timeoutMs: 2600, retries: 3 })
+            : false;
+          if (lanRetryReachable) {
+            try {
+              const lanBody = await resolveRemoteLaunch(deviceId, { preferLan: true, lanReachable: true, forceMode: 'lan' });
+              const lanLaunch = lanBody && lanBody.launch ? lanBody.launch : {};
+              if (toSafeString(lanLaunch.url)) {
+                return { ...lanLaunch, sessionMode: 'web', url: normalizeAndEmbedWebUrl(lanLaunch.url) };
+              }
+            } catch (_) {}
+          }
+          throw new Error('已阻止误跳到当前主机页面：该设备公网入口当前不可用，请优先走内网或检查对端公网映射');
+        }
+        return { ...launch, sessionMode: 'web', url: normalizedUrl };
       }
-    } catch (_) {}
+    } catch (e) {
+      const message = toSafeString(e && e.message);
+      if (message && message.includes('已阻止误跳到当前主机页面')) {
+        throw e;
+      }
+    }
 
     const body = await resolveRemoteLaunch(deviceId, { preferLan: true, lanReachable });
     const launch = body && body.launch ? body.launch : {};
@@ -2259,7 +2446,11 @@
     if ((launch.mode || '') === 'rustdesk' || /^rustdesk:\/\//i.test(toSafeString(launch.url))) {
       throw new Error('当前设备没有可用的 Web 地址');
     }
-    return { ...launch, sessionMode: 'web', url: normalizeAndEmbedWebUrl(launch.url) };
+    const normalizedUrl = normalizeAndEmbedWebUrl(launch.url);
+    if (isSameOriginRemoteEntryUrl(normalizedUrl, device) || isLikelyLocalCloudflareEntryUrl(normalizedUrl, device)) {
+      throw new Error('已阻止误跳到当前主机页面：该设备公网入口当前不可用，请优先走内网或检查对端公网映射');
+    }
+    return { ...launch, sessionMode: 'web', url: normalizedUrl };
   }
 
   async function resolveRustdeskLaunch(device) {
@@ -2381,7 +2572,7 @@
 
     const device = getDeviceById(deviceId);
     if (!device) {
-      alert('设备不存在，列表将刷新');
+      showStatus(els.createStatus, '设备不存在，列表已刷新', true);
       await loadDevices();
       return;
     }
@@ -2508,6 +2699,12 @@
     document.body.style.cursor = state.prevBodyCursor || '';
     state.prevBodyUserSelect = '';
     state.prevBodyCursor = '';
+  }
+
+  function onGlobalSessionPointerActivate(event) {
+    if (!event || state.dragging) return;
+    if (event && typeof event.button === 'number' && event.button !== 0) return;
+    bringSessionToFrontByTarget(event.target, { forceUiRefresh: true });
   }
 
   function clearDockTabDragMarkers() {
@@ -2664,7 +2861,14 @@
       }
       activateSession(existing.id);
     } catch (e) {
-      alert(`打开远控失败: ${e.message || e}`);
+      const message = `打开远控失败: ${e && e.message ? e.message : e}`;
+      const existing = ensureSingleSessionForDevice(deviceId);
+      if (existing) {
+        setSessionLoadingState(existing, true, message, { error: true });
+      } else {
+        showStatus(els.createStatus, message, true);
+      }
+      console.warn('[RemoteDock] open from dock tab failed', e);
     }
   }
 
@@ -2696,7 +2900,14 @@
         await deleteBinding(deviceId);
       }
     } catch (e) {
-      alert(e.message || '操作失败');
+      const message = e && e.message ? e.message : '操作失败';
+      const existing = ensureSingleSessionForDevice(deviceId);
+      if (existing && (action === 'open' || action === 'open-rustdesk')) {
+        setSessionLoadingState(existing, true, message, { error: true });
+      } else {
+        showStatus(els.createStatus, message, true);
+      }
+      console.warn('[RemoteDock] bind list action failed', { action, deviceId, error: e });
     }
   }
 
@@ -2867,6 +3078,8 @@
     window.addEventListener('mousemove', onDragging);
     window.addEventListener('mouseup', stopDragging);
     window.addEventListener('blur', stopDragging);
+    document.addEventListener('pointerdown', onGlobalSessionPointerActivate, true);
+    document.addEventListener('mousedown', onGlobalSessionPointerActivate, true);
     window.addEventListener('resize', () => {
       updateWindowLayerBounds();
       updateWorkspaceFocusMode();
