@@ -7,6 +7,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
 CONFIG_SKILLS_ROOT="${CONFIG_SKILLS_ROOT:-$HOME/.config/agents/skills}"
 BOOTSTRAP_DIR="${BOOTSTRAP_DIR:-$REPO_ROOT/bootstrap/openclaw}"
+DEFAULT_BOOTSTRAP_AGENTS="main,gates,hawking,jobs,kobe,munger"
+DEFAULT_REQUIRED_OPENCLAW_SKILLS="hot-topics,tikhub-api"
+DEFAULT_REQUIRED_CONFIG_SKILLS="hot-topics,tikhub-tiktok,tikhubapi"
 
 log() {
   printf '[meco-bootstrap] %s\n' "$*"
@@ -116,49 +119,35 @@ list_from_csv_or_dirs() {
 }
 
 list_default_agent_ids() {
-  local csv="${MECO_BOOTSTRAP_AGENTS:-}"
-  local openclaw_agents_json_file="$1"
-  if [[ -n "$csv" ]]; then
-    list_from_csv_or_dirs "$csv" "$REPO_ROOT/data/agents"
+  local csv="${MECO_BOOTSTRAP_AGENTS:-$DEFAULT_BOOTSTRAP_AGENTS}"
+  list_from_csv_or_dirs "$csv" "$REPO_ROOT/data/agents"
+}
+
+list_merged_skill_names() {
+  local csv="$1"
+  local root="$2"
+  local required_csv="$3"
+  {
+    list_from_csv_or_dirs "$csv" "$root"
+    list_from_csv_or_dirs "$required_csv" "/dev/null"
+  } | sed '/^$/d' | sort -u
+}
+
+resolve_skill_source() {
+  local skill_name="$1"
+  local primary_root="$2"
+  local fallback_root="$3"
+  local primary="$primary_root/$skill_name"
+  local fallback="$fallback_root/$skill_name"
+  if [[ -d "$primary" ]]; then
+    printf '%s\n' "$primary"
     return 0
   fi
-
-  node -e '
-    const fs = require("fs");
-    const path = require("path");
-    const repoRoot = process.argv[1];
-    const openclawRoot = process.argv[2];
-    const openclawJsonFile = process.argv[3];
-    const ids = new Set();
-
-    const addDirEntries = (dir) => {
-      if (!fs.existsSync(dir)) return;
-      for (const de of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!de.isDirectory()) continue;
-        if (de.name.startsWith(".")) continue;
-        if (de.name.startsWith("workspace-")) continue;
-        ids.add(de.name);
-      }
-    };
-
-    addDirEntries(path.join(repoRoot, "data", "agents"));
-    addDirEntries(path.join(openclawRoot, "agents"));
-
-    if (fs.existsSync(openclawJsonFile)) {
-      try {
-        const conf = JSON.parse(fs.readFileSync(openclawJsonFile, "utf8") || "{}");
-        const list = (((conf || {}).agents || {}).list) || [];
-        for (const item of list) {
-          const id = String((item && item.id) || "").trim();
-          if (!id) continue;
-          if (id.startsWith(".")) continue;
-          ids.add(id);
-        }
-      } catch (_) {}
-    }
-
-    process.stdout.write(Array.from(ids).sort().join("\n"));
-  ' "$REPO_ROOT" "$OPENCLAW_ROOT" "$openclaw_agents_json_file"
+  if [[ -d "$fallback" ]]; then
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+  return 1
 }
 
 sync_dir_clean() {
@@ -371,7 +360,9 @@ main() {
   workspace_map_file="$(mktemp)"
   local name_map_file
   name_map_file="$(mktemp)"
-  trap 'rm -f "'"$workspace_map_file"'" "'"$name_map_file"'"' EXIT
+  local previous_skills_root
+  previous_skills_root="$(mktemp -d)"
+  trap 'rm -f "'"$workspace_map_file"'" "'"$name_map_file"'"; rm -rf "'"$previous_skills_root"'"' EXIT
   printf '%s' "$openclaw_agents_json" | node -e '
     const fs = require("fs");
     const arr = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -395,7 +386,8 @@ main() {
   ' > "$name_map_file"
 
   local agent_ids
-  agent_ids="$(list_default_agent_ids "$openclaw_config")"
+  agent_ids="$(list_default_agent_ids)"
+  log "Bootstrap agent whitelist: ${MECO_BOOTSTRAP_AGENTS:-$DEFAULT_BOOTSTRAP_AGENTS}"
 
   : > "$BOOTSTRAP_DIR/.agents.tsv"
   rm -rf "$BOOTSTRAP_DIR/openclaw-agents"
@@ -460,26 +452,43 @@ main() {
     log "Packed agent: $agent_id"
   done <<< "$agent_ids"
 
+  sync_dir_overlay "$BOOTSTRAP_DIR/skills/openclaw" "$previous_skills_root/openclaw"
+  sync_dir_overlay "$BOOTSTRAP_DIR/skills/config" "$previous_skills_root/config"
+
   rm -rf "$BOOTSTRAP_DIR/skills/openclaw" "$BOOTSTRAP_DIR/skills/config"
   mkdir -p "$BOOTSTRAP_DIR/skills/openclaw" "$BOOTSTRAP_DIR/skills/config"
 
   local oc_skill
   while read -r oc_skill; do
     [[ -n "$oc_skill" ]] || continue
-    local src="$OPENCLAW_ROOT/skills/$oc_skill"
-    [[ -d "$src" ]] || continue
+    local src
+    src="$(resolve_skill_source "$oc_skill" "$OPENCLAW_ROOT/skills" "$previous_skills_root/openclaw" || true)"
+    if [[ -z "$src" ]]; then
+      log "WARN: OpenClaw skill source not found, skipped: $oc_skill"
+      continue
+    fi
     sync_dir_clean "$src" "$BOOTSTRAP_DIR/skills/openclaw/$oc_skill"
     log "Packed OpenClaw skill: $oc_skill"
-  done < <(list_from_csv_or_dirs "${MECO_BOOTSTRAP_OPENCLAW_SKILLS:-}" "$OPENCLAW_ROOT/skills")
+  done < <(list_merged_skill_names \
+    "${MECO_BOOTSTRAP_OPENCLAW_SKILLS:-}" \
+    "$OPENCLAW_ROOT/skills" \
+    "${MECO_BOOTSTRAP_REQUIRED_OPENCLAW_SKILLS:-$DEFAULT_REQUIRED_OPENCLAW_SKILLS}")
 
   local cfg_skill
   while read -r cfg_skill; do
     [[ -n "$cfg_skill" ]] || continue
-    local src="$CONFIG_SKILLS_ROOT/$cfg_skill"
-    [[ -d "$src" ]] || continue
+    local src
+    src="$(resolve_skill_source "$cfg_skill" "$CONFIG_SKILLS_ROOT" "$previous_skills_root/config" || true)"
+    if [[ -z "$src" ]]; then
+      log "WARN: config skill source not found, skipped: $cfg_skill"
+      continue
+    fi
     sync_dir_clean "$src" "$BOOTSTRAP_DIR/skills/config/$cfg_skill"
     log "Packed config skill: $cfg_skill"
-  done < <(list_from_csv_or_dirs "${MECO_BOOTSTRAP_CONFIG_SKILLS:-}" "$CONFIG_SKILLS_ROOT")
+  done < <(list_merged_skill_names \
+    "${MECO_BOOTSTRAP_CONFIG_SKILLS:-}" \
+    "$CONFIG_SKILLS_ROOT" \
+    "${MECO_BOOTSTRAP_REQUIRED_CONFIG_SKILLS:-$DEFAULT_REQUIRED_CONFIG_SKILLS}")
 
   pack_knowledge_rule_folders
 

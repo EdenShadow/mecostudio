@@ -1059,6 +1059,88 @@ ensure_hot_topics_skill() {
   log "Installed hot-topics skill to $hot_topics_target"
 }
 
+ensure_tikhub_skills() {
+  local config_target="$CONFIG_SKILLS_ROOT/tikhub-tiktok"
+  local config_src1="$MECO_INSTALL_DIR/bootstrap/openclaw/skills/config/tikhub-tiktok"
+  local config_src2="$MECO_INSTALL_DIR/bootstrap/openclaw/skills/openclaw/tikhub-api"
+  local config_src3="$OPENCLAW_ROOT/skills/tikhub-api"
+  local config_src=""
+
+  if [[ -d "$config_src1" ]]; then
+    config_src="$config_src1"
+  elif [[ -d "$config_src2" ]]; then
+    config_src="$config_src2"
+  elif [[ -d "$config_src3" ]]; then
+    config_src="$config_src3"
+  fi
+
+  if [[ -n "$config_src" ]]; then
+    mkdir -p "$CONFIG_SKILLS_ROOT"
+    sync_skill_dir "$config_src" "$config_target"
+    log "Installed tikhub-tiktok skill to $config_target"
+  else
+    warn "tikhub-tiktok skill source not found, skipped"
+  fi
+
+  local openclaw_target="$OPENCLAW_ROOT/skills/tikhub-api"
+  local openclaw_src1="$MECO_INSTALL_DIR/bootstrap/openclaw/skills/openclaw/tikhub-api"
+  local openclaw_src2="$config_target"
+  local openclaw_src=""
+
+  if [[ -d "$openclaw_src1" ]]; then
+    openclaw_src="$openclaw_src1"
+  elif [[ -d "$openclaw_src2" ]]; then
+    openclaw_src="$openclaw_src2"
+  fi
+
+  if [[ -n "$openclaw_src" ]]; then
+    mkdir -p "$OPENCLAW_ROOT/skills"
+    sync_skill_dir "$openclaw_src" "$openclaw_target"
+    log "Installed tikhub-api skill to $openclaw_target"
+  else
+    warn "tikhub-api skill source not found, skipped"
+  fi
+
+  ensure_tikhub_alias_skill
+}
+
+ensure_tikhub_alias_skill() {
+  local alias_dir="$CONFIG_SKILLS_ROOT/tikhubapi"
+  mkdir -p "$alias_dir"
+  cat > "$alias_dir/SKILL.md" <<'MD'
+---
+name: tikhubapi
+description: Alias of tikhub-tiktok. Use this skill name when users ask for "tikhubapi" and route to the same TikHub social APIs.
+---
+
+# TikHub API Alias
+
+`tikhubapi` is a compatibility alias for `tikhub-tiktok`.
+
+Use:
+
+```bash
+python3 ~/.config/agents/skills/tikhub-tiktok/scripts/tiktok_api.py video_by_url "<share_url>"
+python3 ~/.config/agents/skills/tikhub-tiktok/scripts/twitter_api.py tweet "<tweet_id_or_url>"
+python3 ~/.config/agents/skills/tikhub-tiktok/scripts/youtube_api.py video_info "<video_id>"
+```
+MD
+  log "Ensured alias config skill: $alias_dir"
+}
+
+configure_skill_runtime_env() {
+  local runtime_env="$HOME/.meco-studio/skill-runtime.env"
+  mkdir -p "$(dirname "$runtime_env")"
+  {
+    printf 'TIKHUB_API_KEY=%s\n' "$MECO_TIKHUB_API_KEY"
+    printf 'HOT_TOPICS_KB_PATH=%s\n' "$HOT_TOPICS_ROOT"
+    printf 'OPENAI_API_KEY=%s\n' "$MECO_OPENAI_API_KEY"
+    printf 'KIMI_COMMAND=%s\n' "kimi"
+  } > "$runtime_env"
+  chmod 600 "$runtime_env" >/dev/null 2>&1 || true
+  log "Updated skill runtime env: $runtime_env"
+}
+
 collect_hot_topics_categories() {
   printf '%s\n' "${HOT_TOPICS_CATEGORIES[@]}"
 }
@@ -1771,10 +1853,12 @@ main() {
   ensure_hot_topics_knowledge_base
   apply_bootstrap_assets
   ensure_hot_topics_skill
+  ensure_tikhub_skills
   ensure_hot_topics_knowledge_base
   install_skill_runtime_dependencies
   configure_kimi_api_key "$effective_kimi_key"
   configure_meco_runtime_settings "$effective_kimi_key" "$effective_model_key"
+  configure_skill_runtime_env
   sync_local_version_marker
   reset_runtime_state
   restart_openclaw_if_update

@@ -1,6 +1,6 @@
 # Meco Studio 安装 / 升级 / API Key 一体文档（AI 可读）
 
-> 文档版本：`0.0.7`
+> 文档版本：`0.0.8`
 
 ## 一行安装（Install）
 
@@ -249,12 +249,15 @@ bash scripts/build-bootstrap-package.sh
 - `./data/agents`
 - `~/Meco Studio/public/uploads/knowledge-rule-folders`
 
-定向打包：
+默认仅打包并提交 6 个内置智能体：`main,gates,hawking,jobs,kobe,munger`。  
+其他本机新建智能体默认不入 GitHub（白名单策略）。
+
+临时覆盖白名单打包：
 
 ```bash
 MECO_BOOTSTRAP_AGENTS="main,gates,hawking,jobs,kobe,munger" \
 MECO_BOOTSTRAP_OPENCLAW_SKILLS="hot-topics,kimi-search,twitter-scraper,tikhub-api,x-grok" \
-MECO_BOOTSTRAP_CONFIG_SKILLS="hot-topics" \
+MECO_BOOTSTRAP_CONFIG_SKILLS="hot-topics,tikhub-tiktok,tikhubapi" \
 bash scripts/build-bootstrap-package.sh
 ```
 

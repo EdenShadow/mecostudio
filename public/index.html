@@ -8,7 +8,7 @@
     <script src="lib/js/three.min.js"></script>
     <script src="lib/js/OrbitControls.js"></script>
     <script src="js/playgen.js"></script>
-    <script src="js/remote-control-dock.js?v=20260326b"></script>
+    <script src="js/remote-control-dock.js?v=20260330a"></script>
     <link href="lib/css/inter.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-round.css" rel="stylesheet"/>
@@ -310,6 +310,7 @@
             bottom: calc(84px + env(safe-area-inset-bottom, 0px));
         }
         :root {
+            --meco-mobile-keyboard-offset: 0px;
             --meco-sidebar-expanded: 18rem;
             --meco-sidebar-compact: 5.25rem;
         }
@@ -330,6 +331,12 @@
             cursor: grabbing !important;
             -webkit-user-select: none;
             user-select: none;
+        }
+        body.meco-sidebar-drag-prep,
+        body.meco-sidebar-drag-prep * {
+            -webkit-user-select: none !important;
+            user-select: none !important;
+            -webkit-touch-callout: none !important;
         }
         body.meco-sidebar-drag-active * {
             cursor: grabbing !important;
@@ -361,6 +368,16 @@
             padding-right: 0.5rem;
             padding-top: 0.12rem;
             padding-bottom: 0.12rem;
+        }
+        #sidebar-agent-list,
+        #sidebar-channel-list,
+        #sidebar-agent-list .meco-sidebar-entry,
+        #sidebar-channel-list .meco-sidebar-entry,
+        #sidebar-agent-list .meco-sidebar-avatar-wrap,
+        #sidebar-channel-list .meco-sidebar-avatar-wrap {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
         }
         #app-sidebar.sidebar-compact .meco-sidebar-header-row {
             display: none !important;
@@ -541,6 +558,11 @@
             right: -1px;
             bottom: 0;
             transform: none;
+        }
+        #app-sidebar .meco-sidebar-avatar-wrap img {
+            pointer-events: none;
+            -webkit-user-drag: none;
+            user-select: none;
         }
         #app-sidebar.sidebar-compact .meco-sidebar-avatar-wrap .js-busy-badge {
             left: auto;
@@ -1046,6 +1068,14 @@
             gap: 0.5rem !important;
             align-items: center !important;
         }
+        body.meco-mobile-h5 #at-chat-composer-shell {
+            transform: translateY(calc(-1 * var(--meco-mobile-keyboard-offset, 0px)));
+            transition: transform 150ms ease;
+            will-change: transform;
+        }
+        body.meco-mobile-h5 #remote-dock {
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+        }
         #at-chat-composer-box {
             border-radius: 22px !important;
             min-height: 2.75rem;
@@ -1105,6 +1135,869 @@
         #app-header.meco-header-compact.meco-header-search-open #header-search-compact-panel {
             display: block;
         }
+        .at-clip-editor-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 42;
+            display: flex;
+            justify-content: flex-end;
+            pointer-events: none;
+        }
+        .at-app-launcher-root {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .at-app-launcher-root::after {
+            content: "";
+            position: absolute;
+            left: -10px;
+            right: -10px;
+            bottom: 100%;
+            height: 16px;
+            pointer-events: auto;
+        }
+        .at-app-launcher-menu {
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 4px);
+            min-width: 0;
+            padding: 8px;
+            border-radius: 16px;
+            border: 1px solid rgba(148, 163, 184, 0.26);
+            background: rgba(7, 11, 21, 0.96);
+            box-shadow: 0 14px 32px rgba(2, 6, 14, 0.55);
+            backdrop-filter: blur(10px);
+            transform: translate(-50%, 8px);
+            opacity: 0;
+            pointer-events: none;
+            visibility: hidden;
+            transition: transform 170ms ease, opacity 170ms ease, visibility 0s linear 220ms;
+            z-index: 70;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .at-app-launcher-root:hover .at-app-launcher-menu,
+        .at-app-launcher-menu:hover,
+        .at-app-launcher-root:focus-within .at-app-launcher-menu {
+            transform: translate(-50%, 0);
+            opacity: 1;
+            pointer-events: auto;
+            visibility: visible;
+            transition: transform 170ms ease, opacity 170ms ease, visibility 0s linear 0s;
+        }
+        .at-app-launcher-item {
+            width: 38px;
+            height: 38px;
+            border: 1px solid rgba(192, 132, 252, 0.34);
+            border-radius: 12px;
+            background: rgba(88, 28, 135, 0.25);
+            color: #c084fc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            font-size: 0;
+            transition: all 150ms ease;
+        }
+        .at-app-launcher-item:hover,
+        .at-app-launcher-item:focus-visible {
+            color: #e9d5ff;
+            background: rgba(126, 34, 206, 0.34);
+            border-color: rgba(216, 180, 254, 0.66);
+            box-shadow: 0 0 0 1px rgba(216, 180, 254, 0.2);
+            outline: none;
+        }
+        .at-app-launcher-item.is-active {
+            color: #f5d0fe;
+            background: rgba(126, 34, 206, 0.44);
+            border-color: rgba(216, 180, 254, 0.86);
+            box-shadow: inset 0 0 0 1px rgba(216, 180, 254, 0.28), 0 0 16px rgba(147, 51, 234, 0.25);
+        }
+        #agenttools-view {
+            --at-clip-panel-width: clamp(620px, 54vw, 980px);
+            transition: padding-right 280ms cubic-bezier(0.22, 0.9, 0.24, 1);
+        }
+        #agenttools-view.clip-editor-pushed {
+            padding-right: var(--at-clip-panel-width);
+        }
+        #agenttools-view.clip-editor-pushed .at-clip-editor-overlay {
+            inset: 0 0 0 auto;
+            width: var(--at-clip-panel-width);
+        }
+        #agenttools-view.clip-editor-pushed .at-clip-editor-backdrop {
+            display: none;
+        }
+        #agenttools-view.clip-editor-pushed .at-clip-editor-panel {
+            width: 100%;
+            min-width: 0;
+            border-left: 1px solid rgba(148, 163, 184, 0.24);
+        }
+        .at-clip-editor-overlay.is-open {
+            pointer-events: auto;
+        }
+        .at-clip-editor-backdrop {
+            flex: 1;
+            background: rgba(1, 4, 14, 0.54);
+            opacity: 0;
+            transition: opacity 220ms ease;
+        }
+        .at-clip-editor-panel {
+            width: min(68vw, 1140px);
+            min-width: 720px;
+            height: 100%;
+            background: linear-gradient(180deg, #10131b 0%, #0a0d14 58%, #07090f 100%);
+            border-left: 1px solid rgba(148, 163, 184, 0.24);
+            box-shadow: -24px 0 48px rgba(2, 8, 20, 0.56);
+            transform: translateX(104%);
+            transition: transform 280ms cubic-bezier(0.22, 0.9, 0.24, 1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .at-clip-editor-overlay.is-open .at-clip-editor-backdrop {
+            opacity: 1;
+        }
+        .at-clip-editor-overlay.is-open .at-clip-editor-panel {
+            transform: translateX(0);
+        }
+        .at-clip-editor-peek-close {
+            height: 24px;
+            flex-shrink: 0;
+            border: 0;
+            background: transparent;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(148, 163, 184, 0.9);
+            transition: color 160ms ease;
+        }
+        .at-clip-editor-peek-close:hover,
+        .at-clip-editor-peek-close:focus-visible {
+            color: rgba(34, 211, 238, 0.95);
+            outline: none;
+        }
+        .at-clip-editor-peek-close .at-clip-editor-peek-handle {
+            width: 74px;
+            height: 4px;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.5);
+        }
+        .at-clip-editor-head {
+            height: 52px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+            background: rgba(7, 10, 18, 0.72);
+            backdrop-filter: blur(10px);
+        }
+        .at-clip-editor-peek-close,
+        .at-clip-editor-head {
+            display: none !important;
+        }
+        .at-clip-editor-title {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #e2e8f0;
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.045em;
+            text-transform: uppercase;
+        }
+        .at-clip-editor-head-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .at-clip-editor-head-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            color: rgba(203, 213, 225, 0.92);
+            background: rgba(15, 23, 42, 0.5);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 160ms ease;
+        }
+        .at-clip-editor-head-btn:hover,
+        .at-clip-editor-head-btn:focus-visible {
+            color: #fff;
+            border-color: rgba(34, 211, 238, 0.55);
+            background: rgba(8, 24, 33, 0.72);
+            outline: none;
+        }
+        .at-clip-editor-body {
+            min-height: 0;
+            flex: 1;
+            display: grid;
+            grid-template-rows: minmax(0, 1fr) 196px;
+            gap: 10px;
+            padding: 10px;
+        }
+        .at-clip-editor-workbench {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 2.1fr) minmax(220px, 0.9fr);
+            gap: 10px;
+        }
+        .at-clip-stage-shell {
+            min-height: 0;
+            border: 1px solid rgba(148, 163, 184, 0.17);
+            border-radius: 16px;
+            background: linear-gradient(180deg, rgba(9, 14, 26, 0.94) 0%, rgba(5, 8, 14, 0.94) 100%);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .at-clip-stage-top {
+            height: 34px;
+            flex-shrink: 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+            background: rgba(3, 8, 22, 0.7);
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: #a5b4fc;
+            font-size: 11px;
+        }
+        .at-clip-stage-canvas {
+            min-height: 0;
+            flex: 1;
+            position: relative;
+            background: radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.24), transparent 58%),
+                        radial-gradient(circle at 72% 70%, rgba(168, 85, 247, 0.2), transparent 56%),
+                        linear-gradient(180deg, #060a14 0%, #02050c 100%);
+            overflow: hidden;
+        }
+        .at-clip-stage-canvas::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+                              linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+            background-size: 20px 20px;
+            opacity: 0.32;
+            pointer-events: none;
+        }
+        .at-clip-stage-canvas.has-demo-image::before {
+            opacity: 0.12;
+        }
+        .at-clip-stage-preview-image {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0;
+            transition: opacity 240ms ease;
+            filter: saturate(1.03) contrast(1.02);
+        }
+        .at-clip-stage-canvas.has-demo-image .at-clip-stage-preview-image {
+            opacity: 1;
+        }
+        .at-clip-stage-watermark {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: min(62%, 420px);
+            aspect-ratio: 16 / 9;
+            border-radius: 18px;
+            border: 1px solid rgba(103, 232, 249, 0.32);
+            background: linear-gradient(160deg, rgba(3, 7, 18, 0.85), rgba(14, 24, 38, 0.5));
+            box-shadow: 0 14px 34px rgba(8, 18, 31, 0.48);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(191, 219, 254, 0.94);
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+        }
+        .at-clip-stage-canvas.has-demo-image .at-clip-stage-watermark {
+            display: none;
+        }
+        .at-clip-stage-preview-tip {
+            position: absolute;
+            left: 50%;
+            bottom: 10px;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: rgba(191, 219, 254, 0.88);
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            background: rgba(2, 6, 18, 0.64);
+            white-space: nowrap;
+        }
+        .at-clip-stage-canvas.has-demo-image .at-clip-stage-preview-tip {
+            display: none;
+        }
+        .at-clip-stage-controls {
+            height: 38px;
+            flex-shrink: 0;
+            border-top: 1px solid rgba(148, 163, 184, 0.15);
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: rgba(203, 213, 225, 0.9);
+            font-size: 11px;
+            background: rgba(5, 10, 21, 0.84);
+        }
+        .at-clip-control-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(94, 234, 212, 0.88);
+            box-shadow: 0 0 12px rgba(45, 212, 191, 0.7);
+        }
+        .at-clip-media-shell {
+            min-height: 0;
+            border-radius: 16px;
+            border: 1px solid rgba(148, 163, 184, 0.17);
+            background: rgba(5, 9, 18, 0.9);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .at-clip-media-head {
+            height: 34px;
+            flex-shrink: 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: #e2e8f0;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .at-clip-media-list {
+            min-height: 0;
+            flex: 1;
+            overflow: auto;
+            padding: 8px;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+        .at-clip-media-item {
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            background: linear-gradient(160deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.55));
+            padding: 6px;
+        }
+        .at-clip-media-thumb {
+            width: 100%;
+            aspect-ratio: 16 / 10;
+            border-radius: 7px;
+            background: linear-gradient(145deg, rgba(14, 116, 144, 0.48), rgba(88, 28, 135, 0.4));
+            margin-bottom: 6px;
+        }
+        .at-clip-media-meta {
+            color: rgba(203, 213, 225, 0.88);
+            font-size: 10px;
+            line-height: 1.25;
+        }
+        .at-clip-timeline {
+            border: 1px solid rgba(148, 163, 184, 0.17);
+            border-radius: 16px;
+            background: rgba(4, 7, 14, 0.92);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .at-clip-timeline-head {
+            height: 34px;
+            flex-shrink: 0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+            padding: 0 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: #e2e8f0;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .at-clip-track-wrap {
+            min-height: 0;
+            flex: 1;
+            overflow: auto;
+            padding: 8px 10px 10px;
+            display: grid;
+            gap: 8px;
+        }
+        .at-clip-track {
+            display: grid;
+            grid-template-columns: 56px minmax(0, 1fr);
+            gap: 8px;
+            align-items: center;
+        }
+        .at-clip-track-label {
+            font-size: 11px;
+            color: rgba(148, 163, 184, 0.95);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .at-clip-track-lane {
+            height: 28px;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            background: rgba(15, 23, 42, 0.56);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 6px;
+            overflow: hidden;
+        }
+        .at-clip-seg {
+            height: 100%;
+            border-radius: 7px;
+            flex-shrink: 0;
+            border: 1px solid rgba(125, 211, 252, 0.34);
+            background: linear-gradient(150deg, rgba(14, 165, 233, 0.58), rgba(79, 70, 229, 0.4));
+        }
+        .at-clip-seg.alt {
+            border-color: rgba(196, 181, 253, 0.35);
+            background: linear-gradient(150deg, rgba(99, 102, 241, 0.62), rgba(168, 85, 247, 0.44));
+        }
+        .at-clip-seg.audio {
+            border-color: rgba(94, 234, 212, 0.34);
+            background: linear-gradient(150deg, rgba(45, 212, 191, 0.56), rgba(16, 185, 129, 0.42));
+        }
+        @media (max-width: 1024px) {
+            #agenttools-view,
+            #agenttools-view.clip-editor-pushed {
+                padding-right: 0;
+            }
+            .at-clip-editor-overlay {
+                flex-direction: column;
+                justify-content: flex-end;
+                align-items: flex-end;
+            }
+            .at-clip-editor-panel {
+                width: 100%;
+                min-width: 0;
+                height: min(78vh, 760px);
+                border-left: 0;
+                border-top: 1px solid rgba(148, 163, 184, 0.25);
+                border-radius: 18px 18px 0 0;
+                transform: translateY(104%);
+            }
+            .at-clip-editor-overlay.is-open .at-clip-editor-panel {
+                transform: translateY(0);
+            }
+            .at-clip-editor-body {
+                grid-template-rows: minmax(0, 1fr) 178px;
+            }
+            .at-clip-editor-body.app-web3 {
+                padding: 10px !important;
+            }
+            .at-clip-editor-workbench {
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .at-web3-layout {
+                grid-template-columns: minmax(0, 1fr);
+            }
+            .at-web3-side {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+            .at-clip-media-shell {
+                max-height: 158px;
+            }
+            .at-clip-media-list {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 720px) {
+            .at-clip-editor-head {
+                height: 46px;
+                padding: 0 10px;
+            }
+            .at-clip-editor-title {
+                font-size: 12px;
+            }
+            .at-clip-editor-head-btn {
+                width: 28px;
+                height: 28px;
+                border-radius: 9px;
+            }
+            .at-clip-editor-body {
+                padding: 8px;
+                gap: 8px;
+                grid-template-rows: minmax(0, 1fr) 164px;
+            }
+            .at-clip-editor-body.app-web3 {
+                padding: 8px !important;
+            }
+            .at-web3-hero {
+                flex-direction: column;
+            }
+            .at-web3-stats {
+                justify-content: flex-start;
+            }
+            .at-web3-task-list {
+                grid-template-columns: 1fr;
+            }
+            .at-web3-side {
+                grid-template-columns: 1fr;
+            }
+            .at-clip-media-list {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 6px;
+                padding: 6px;
+            }
+            .at-clip-track {
+                grid-template-columns: 40px minmax(0, 1fr);
+                gap: 6px;
+            }
+            .at-clip-track-lane {
+                height: 24px;
+                border-radius: 8px;
+            }
+        }
+        .at-clip-editor-body {
+            min-height: 0;
+            flex: 1;
+            padding: 0 !important;
+            display: flex !important;
+            background: #03060d;
+            position: relative;
+            overflow: hidden;
+        }
+        .at-clip-editor-body.app-clip {
+            overflow-x: auto;
+            overflow-y: hidden;
+            scrollbar-gutter: stable;
+        }
+        .at-clip-editor-body.app-web3 {
+            overflow-x: hidden;
+            overflow-y: auto;
+            padding: 14px !important;
+            background: linear-gradient(180deg, #0b1020 0%, #050912 100%);
+            scrollbar-gutter: stable;
+        }
+        .at-app-page {
+            min-width: 100%;
+            width: 100%;
+            height: 100%;
+            min-height: 100%;
+            flex: 0 0 auto;
+        }
+        .at-app-page-web3 {
+            min-height: max(100%, 760px);
+        }
+        .at-clip-image-stage {
+            min-width: 100%;
+            width: max-content;
+            height: 100%;
+            position: relative;
+            display: flex;
+            align-items: stretch;
+            justify-content: flex-start;
+            background: #03060d;
+        }
+        .at-clip-image-demo {
+            display: block;
+            height: 100%;
+            width: auto;
+            max-width: none;
+            flex: 0 0 auto;
+            user-select: none;
+            -webkit-user-drag: none;
+            pointer-events: none;
+        }
+        .at-web3-demo {
+            min-height: 100%;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 18px;
+            background: radial-gradient(circle at 14% 12%, rgba(34, 211, 238, 0.11), transparent 38%),
+                        radial-gradient(circle at 88% 8%, rgba(59, 130, 246, 0.14), transparent 40%),
+                        linear-gradient(180deg, rgba(9, 16, 30, 0.95), rgba(3, 7, 15, 0.96));
+            box-shadow: 0 18px 36px rgba(2, 8, 18, 0.45);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            color: #dbe4f5;
+        }
+        .at-web3-hero {
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 14px;
+            padding: 14px;
+            background: rgba(3, 10, 24, 0.58);
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+        }
+        .at-web3-kicker {
+            font-size: 11px;
+            letter-spacing: 0.09em;
+            text-transform: uppercase;
+            color: rgba(103, 232, 249, 0.92);
+            margin-bottom: 6px;
+            font-weight: 700;
+        }
+        .at-web3-hero h3 {
+            margin: 0;
+            font-size: 20px;
+            line-height: 1.2;
+            color: #f8fafc;
+            font-weight: 800;
+        }
+        .at-web3-sub {
+            margin-top: 7px;
+            color: rgba(203, 213, 225, 0.85);
+            font-size: 13px;
+        }
+        .at-web3-stats {
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .at-web3-stat {
+            min-width: 96px;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 12px;
+            padding: 8px 10px;
+            background: rgba(15, 23, 42, 0.55);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .at-web3-stat span {
+            font-size: 11px;
+            color: rgba(148, 163, 184, 0.92);
+        }
+        .at-web3-stat strong {
+            font-size: 16px;
+            color: #67e8f9;
+            font-weight: 800;
+        }
+        .at-web3-layout {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1.7fr) minmax(220px, 0.9fr);
+            gap: 12px;
+            flex: 1;
+        }
+        .at-web3-board {
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 14px;
+            background: rgba(4, 10, 21, 0.62);
+            padding: 12px;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .at-web3-board-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .at-web3-board-head h4 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 700;
+            color: #f8fafc;
+        }
+        .at-web3-board-head span {
+            font-size: 12px;
+            color: rgba(148, 163, 184, 0.95);
+        }
+        .at-web3-task-list {
+            min-height: 0;
+            display: grid;
+            gap: 10px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            overflow: auto;
+            padding-right: 2px;
+        }
+        .at-web3-task-card {
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 12px;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.66), rgba(7, 12, 24, 0.78));
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-height: 130px;
+        }
+        .at-web3-task-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .at-web3-tag {
+            display: inline-flex;
+            align-items: center;
+            height: 20px;
+            padding: 0 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            color: #bfdbfe;
+            background: rgba(37, 99, 235, 0.2);
+            border: 1px solid rgba(96, 165, 250, 0.34);
+        }
+        .at-web3-reward {
+            font-size: 13px;
+            font-weight: 800;
+            color: #5eead4;
+        }
+        .at-web3-task-card h5 {
+            margin: 0;
+            font-size: 14px;
+            line-height: 1.35;
+            color: #f8fafc;
+        }
+        .at-web3-task-card p {
+            margin: 0;
+            font-size: 12px;
+            color: rgba(203, 213, 225, 0.9);
+            line-height: 1.35;
+        }
+        .at-web3-task-meta {
+            margin-top: auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 11px;
+            color: rgba(148, 163, 184, 0.92);
+        }
+        .at-web3-task-meta button {
+            border: 1px solid rgba(34, 211, 238, 0.42);
+            border-radius: 999px;
+            background: rgba(8, 47, 73, 0.62);
+            color: #a5f3fc;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+        }
+        .at-web3-side {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .at-web3-side-card {
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 12px;
+            background: rgba(4, 10, 21, 0.62);
+            padding: 10px;
+        }
+        .at-web3-side-card h5 {
+            margin: 0 0 8px;
+            font-size: 13px;
+            color: #f1f5f9;
+            font-weight: 700;
+        }
+        .at-web3-usdt-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .at-web3-usdt-head h5 {
+            margin: 0;
+        }
+        .at-web3-usdt-head span {
+            font-size: 11px;
+            font-weight: 700;
+            color: #5eead4;
+        }
+        .at-web3-usdt-chart {
+            width: 100%;
+            height: 86px;
+            display: block;
+            border-radius: 10px;
+            background: rgba(2, 6, 18, 0.42);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            padding: 4px;
+        }
+        .at-web3-usdt-chart .grid {
+            stroke: rgba(148, 163, 184, 0.24);
+            stroke-width: 1;
+        }
+        .at-web3-usdt-chart .line {
+            fill: none;
+            stroke: #22d3ee;
+            stroke-width: 2.2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.5));
+        }
+        .at-web3-usdt-axis {
+            margin-top: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 10px;
+            color: rgba(148, 163, 184, 0.95);
+        }
+        .at-web3-big {
+            margin: 0;
+            font-size: 26px;
+            font-weight: 800;
+            color: #5eead4;
+        }
+        .at-web3-dim {
+            margin: 4px 0 0;
+            font-size: 12px;
+            color: rgba(148, 163, 184, 0.95);
+        }
+        .at-web3-side-card ul {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            display: grid;
+            gap: 8px;
+        }
+        .at-web3-side-card li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+            color: #dbe4f5;
+        }
+        .at-web3-side-card li strong {
+            color: #93c5fd;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .at-web3-pill-wrap {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .at-web3-pill-wrap span {
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 999px;
+            padding: 3px 8px;
+            font-size: 11px;
+            color: rgba(203, 213, 225, 0.95);
+            background: rgba(15, 23, 42, 0.45);
+        }
     </style>
     <script>
         console.log("Meco Studio script initializing...");
@@ -1127,6 +2020,9 @@
             if (playgen) playgen.classList.add('hidden');
             if (context) context.classList.add('hidden');
             if (atView) atView.classList.add('hidden');
+            if (viewName !== 'agenttools') {
+                closeAgentToolsClipDemoEditor({ immediate: true });
+            }
 
             // Reset all nav styles (Default Style)
             const defaultStyle = "meco-sidebar-nav-link meco-sidebar-tooltip-host flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-white hover:bg-white/5 rounded-xl transition-all group border border-transparent hover:border-white/5 cursor-pointer";
@@ -1370,6 +2266,19 @@
         const AT_TYPING_TICK_MS = 20;
         const AT_SHOW_REASONING_PANEL = false;
         const AT_SHOW_EXECUTION_PANEL = false;
+        const AT_CLIP_DEMO_PREVIEW_PATH = '/clip-demo-shot.png';
+        const AT_APP_CLIP = 'clip';
+        const AT_APP_WEB3 = 'web3';
+        const AT_APP_META = {
+            [AT_APP_CLIP]: { icon: 'movie', label: '剪辑' },
+            [AT_APP_WEB3]: { icon: 'hub', label: 'Web3 任务社区' },
+        };
+        let atClipDemoEditorOpen = false;
+        let atClipDemoEditorHideTimer = null;
+        let atClipDemoPreviewInitialized = false;
+        let atClipDemoPreviewResizeBound = false;
+        let atClipDemoSidebarWasExpandedBeforeOpen = false;
+        let atAgentToolsActiveApp = AT_APP_CLIP;
         let currentMessageDiv = null;
         let currentAgentAvatarUrl = null;
         let appRuntimeSettings = null;
@@ -1420,6 +2329,11 @@
         let mecoSidebarSuppressClickUntil = 0;
         let mecoSidebarPointerDragState = null;
         let mecoSidebarChannelPointerDragState = null;
+        let mecoMobileKeyboardBound = false;
+        let mecoMobileKeyboardFocused = false;
+        let mecoMobileKeyboardOffsetPx = 0;
+        let mecoMobileKeyboardBlurTimer = null;
+        let mecoMobileKeyboardRaf = 0;
 
         function isMecoWindowMode() {
             if (window.self !== window.top) return true;
@@ -1434,6 +2348,133 @@
         function applySidebarToggleModeClass() {
             if (!document.body) return;
             document.body.classList.toggle('meco-window-mode', isMecoWindowMode());
+        }
+
+        function isLikelyMobileH5Client() {
+            try {
+                const ua = String((navigator && navigator.userAgent) || '').toLowerCase();
+                const uaMobile = /android|iphone|ipad|ipod|mobile|windows phone|harmonyos/.test(ua);
+                const coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+                const narrowViewport = Math.min(
+                    Math.max(0, Number(window.innerWidth) || 0),
+                    Math.max(0, Number(window.innerHeight) || 0)
+                ) <= 960;
+                return uaMobile || (coarsePointer && narrowViewport);
+            } catch (_) {
+                return false;
+            }
+        }
+
+        function isAgentToolsComposerInputTarget(target) {
+            if (!target || !(target instanceof Element)) return false;
+            if (target.id === 'at-chat-input' || target.id === 'at-channel-input') return true;
+            return !!target.closest('#at-chat-input, #at-channel-input');
+        }
+
+        function computeMobileKeyboardOffsetPx() {
+            const vv = window.visualViewport;
+            if (!vv) return 0;
+            const layoutHeight = Math.max(
+                Number(window.innerHeight) || 0,
+                Number(document.documentElement && document.documentElement.clientHeight) || 0
+            );
+            const visualBottom = (Number(vv.offsetTop) || 0) + (Number(vv.height) || 0);
+            const occluded = Math.max(0, layoutHeight - visualBottom);
+            if (occluded < 66) return 0;
+            return Math.round(occluded);
+        }
+
+        function applyMobileKeyboardOffset(offsetPx) {
+            const safeOffset = Math.max(0, Math.round(Number(offsetPx) || 0));
+            if (safeOffset === mecoMobileKeyboardOffsetPx) return;
+            mecoMobileKeyboardOffsetPx = safeOffset;
+            if (document.body) {
+                document.body.style.setProperty('--meco-mobile-keyboard-offset', `${safeOffset}px`);
+            }
+        }
+
+        function syncMobileKeyboardOffset(force = false) {
+            if (!document.body) return;
+            if (!document.body.classList.contains('meco-mobile-h5')) {
+                applyMobileKeyboardOffset(0);
+                return;
+            }
+            if (!mecoMobileKeyboardFocused && !force) {
+                applyMobileKeyboardOffset(0);
+                return;
+            }
+            if (mecoMobileKeyboardRaf) {
+                cancelAnimationFrame(mecoMobileKeyboardRaf);
+                mecoMobileKeyboardRaf = 0;
+            }
+            mecoMobileKeyboardRaf = requestAnimationFrame(() => {
+                mecoMobileKeyboardRaf = 0;
+                const offset = mecoMobileKeyboardFocused ? computeMobileKeyboardOffsetPx() : 0;
+                applyMobileKeyboardOffset(offset);
+            });
+        }
+
+        function initMobileKeyboardLiftSupport() {
+            if (mecoMobileKeyboardBound) return;
+            mecoMobileKeyboardBound = true;
+
+            const applyMobileClass = () => {
+                if (!document.body) return false;
+                const mobile = isLikelyMobileH5Client();
+                document.body.classList.toggle('meco-mobile-h5', mobile);
+                if (!mobile) {
+                    mecoMobileKeyboardFocused = false;
+                    applyMobileKeyboardOffset(0);
+                }
+                return mobile;
+            };
+
+            document.addEventListener('focusin', (event) => {
+                if (!applyMobileClass()) return;
+                if (!isAgentToolsComposerInputTarget(event.target)) return;
+                mecoMobileKeyboardFocused = true;
+                if (mecoMobileKeyboardBlurTimer) {
+                    clearTimeout(mecoMobileKeyboardBlurTimer);
+                    mecoMobileKeyboardBlurTimer = null;
+                }
+                syncMobileKeyboardOffset(true);
+            }, true);
+
+            document.addEventListener('focusout', () => {
+                if (!document.body || !document.body.classList.contains('meco-mobile-h5')) return;
+                if (mecoMobileKeyboardBlurTimer) clearTimeout(mecoMobileKeyboardBlurTimer);
+                mecoMobileKeyboardBlurTimer = setTimeout(() => {
+                    mecoMobileKeyboardBlurTimer = null;
+                    mecoMobileKeyboardFocused = isAgentToolsComposerInputTarget(document.activeElement);
+                    syncMobileKeyboardOffset(true);
+                }, 70);
+            }, true);
+
+            const onViewportChange = () => {
+                if (!document.body || !document.body.classList.contains('meco-mobile-h5')) return;
+                if (!mecoMobileKeyboardFocused) return;
+                syncMobileKeyboardOffset();
+            };
+
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener('resize', onViewportChange);
+                window.visualViewport.addEventListener('scroll', onViewportChange);
+            }
+
+            window.addEventListener('resize', () => {
+                applyMobileClass();
+                onViewportChange();
+            }, { passive: true });
+
+            window.addEventListener('orientationchange', () => {
+                setTimeout(() => {
+                    applyMobileClass();
+                    syncMobileKeyboardOffset(true);
+                }, 120);
+            }, { passive: true });
+
+            applyMobileClass();
+            syncMobileKeyboardOffset(true);
         }
 
         function isSidebarNarrowViewport() {
@@ -2440,6 +3481,223 @@
             }
         }
 
+        function normalizeAgentToolsApp(appKey) {
+            const raw = typeof appKey === 'string' ? appKey.trim().toLowerCase() : '';
+            return raw === AT_APP_WEB3 ? AT_APP_WEB3 : AT_APP_CLIP;
+        }
+
+        function syncAgentToolsAppPanels() {
+            const activeApp = normalizeAgentToolsApp(atAgentToolsActiveApp);
+            const body = document.querySelector('#at-clip-editor-panel .at-clip-editor-body');
+            const clipPanel = document.querySelector('#at-clip-editor-panel [data-app-panel="clip"]');
+            const web3Panel = document.querySelector('#at-clip-editor-panel [data-app-panel="web3"]');
+            const isClip = activeApp === AT_APP_CLIP;
+            if (body) {
+                body.classList.toggle('app-clip', isClip);
+                body.classList.toggle('app-web3', !isClip);
+            }
+            if (clipPanel) {
+                clipPanel.classList.toggle('hidden', !isClip);
+                clipPanel.setAttribute('aria-hidden', isClip ? 'false' : 'true');
+            }
+            if (web3Panel) {
+                web3Panel.classList.toggle('hidden', isClip);
+                web3Panel.setAttribute('aria-hidden', isClip ? 'true' : 'false');
+            }
+        }
+
+        function updateAgentToolsClipDemoButtonUi() {
+            atAgentToolsActiveApp = normalizeAgentToolsApp(atAgentToolsActiveApp);
+            const btn = document.getElementById('at-clip-demo-btn');
+            const icon = document.getElementById('at-app-launcher-icon');
+            const meta = AT_APP_META[atAgentToolsActiveApp] || AT_APP_META[AT_APP_CLIP];
+            if (icon) {
+                icon.textContent = meta.icon;
+            }
+            if (!btn) return;
+            const active = !!atClipDemoEditorOpen;
+            btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+            btn.title = active ? `收起${meta.label}` : `打开${meta.label}`;
+            btn.classList.toggle('bg-primary/20', active);
+            btn.classList.toggle('text-primary', active);
+            btn.classList.toggle('border-primary/40', active);
+            btn.classList.toggle('bg-white/5', !active);
+            btn.classList.toggle('text-gray-300', !active);
+            btn.classList.toggle('border-white/10', !active);
+            document.querySelectorAll('#at-app-launcher-menu .at-app-launcher-item').forEach((item) => {
+                const itemApp = normalizeAgentToolsApp(item.dataset.app || '');
+                item.classList.toggle('is-active', itemApp === atAgentToolsActiveApp);
+            });
+            syncAgentToolsAppPanels();
+        }
+
+        function isDesktopClipDemoLayout() {
+            return window.innerWidth > 1024;
+        }
+
+        function syncAgentToolsClipDemoLayout() {
+            const atView = document.getElementById('agenttools-view');
+            if (!atView) return;
+            atView.classList.toggle('clip-editor-pushed', !!(atClipDemoEditorOpen && isDesktopClipDemoLayout()));
+        }
+
+        function syncClipDemoPreviewImageState(loaded) {
+            const panel = document.getElementById('at-clip-editor-panel');
+            if (panel) panel.classList.toggle('has-demo-image', !!loaded);
+        }
+
+        function fitClipDemoPreviewImage() {
+            if (normalizeAgentToolsApp(atAgentToolsActiveApp) !== AT_APP_CLIP) return;
+            const body = document.querySelector('#at-clip-editor-panel .at-clip-editor-body');
+            const stage = document.querySelector('#at-clip-editor-panel .at-clip-image-stage');
+            const image = document.querySelector('#at-clip-editor-panel .at-clip-image-demo');
+            if (!body || !stage || !image) return;
+            const bodyWidth = Math.max(1, body.clientWidth);
+            const bodyHeight = Math.max(1, body.clientHeight);
+            const naturalWidth = image.naturalWidth || 0;
+            const naturalHeight = image.naturalHeight || 0;
+            if (!naturalWidth || !naturalHeight) return;
+            const widthByHeight = (naturalWidth / naturalHeight) * bodyHeight;
+            const targetWidth = Math.max(bodyWidth + 140, Math.round(widthByHeight * 1.12));
+            image.style.height = `${bodyHeight}px`;
+            image.style.width = `${targetWidth}px`;
+            stage.style.width = `${targetWidth}px`;
+        }
+
+        function refreshClipDemoPreviewImage() {
+            const image = document.querySelector('#at-clip-editor-panel .at-clip-image-demo');
+            if (!image) return;
+            const src = `${AT_CLIP_DEMO_PREVIEW_PATH}?v=${Date.now()}`;
+            image.onload = () => {
+                syncClipDemoPreviewImageState(true);
+                requestAnimationFrame(() => {
+                    fitClipDemoPreviewImage();
+                });
+            };
+            image.onerror = () => {
+                syncClipDemoPreviewImageState(false);
+            };
+            image.src = src;
+            if (image.complete && image.naturalWidth > 0) {
+                syncClipDemoPreviewImageState(true);
+                requestAnimationFrame(() => {
+                    fitClipDemoPreviewImage();
+                });
+            }
+        }
+
+        function initClipDemoPreviewImage() {
+            if (atClipDemoPreviewInitialized) return;
+            atClipDemoPreviewInitialized = true;
+            const image = document.querySelector('#at-clip-editor-panel .at-clip-image-demo');
+            if (!image) return;
+            if (!atClipDemoPreviewResizeBound) {
+                atClipDemoPreviewResizeBound = true;
+                window.addEventListener('resize', () => {
+                    if (!atClipDemoEditorOpen) return;
+                    if (normalizeAgentToolsApp(atAgentToolsActiveApp) !== AT_APP_CLIP) return;
+                    fitClipDemoPreviewImage();
+                }, { passive: true });
+            }
+            refreshClipDemoPreviewImage();
+        }
+
+        function setAgentToolsClipDemoEditorOpen(nextOpen, options = {}) {
+            const shouldOpen = !!nextOpen;
+            const immediate = !!(options && options.immediate);
+            const overlay = document.getElementById('at-clip-editor-overlay');
+            const atView = document.getElementById('agenttools-view');
+
+            if (atClipDemoEditorHideTimer) {
+                clearTimeout(atClipDemoEditorHideTimer);
+                atClipDemoEditorHideTimer = null;
+            }
+
+            if (shouldOpen && !isHashView('agenttools')) return;
+            atClipDemoEditorOpen = shouldOpen;
+            if (shouldOpen && isDesktopClipDemoLayout()) {
+                const wasCompact = isSidebarCompact();
+                atClipDemoSidebarWasExpandedBeforeOpen = !wasCompact;
+                if (!wasCompact) {
+                    mecoSidebarManualCollapsed = true;
+                    mecoSidebarForceExpandedOnNarrow = false;
+                    applySidebarLayout();
+                }
+            }
+            if (!shouldOpen && atClipDemoSidebarWasExpandedBeforeOpen) {
+                atClipDemoSidebarWasExpandedBeforeOpen = false;
+                mecoSidebarManualCollapsed = false;
+                applySidebarLayout();
+            }
+            updateAgentToolsClipDemoButtonUi();
+            syncAgentToolsClipDemoLayout();
+
+            if (!overlay) return;
+
+            if (shouldOpen) {
+                syncAgentToolsAppPanels();
+                if (normalizeAgentToolsApp(atAgentToolsActiveApp) === AT_APP_CLIP) {
+                    refreshClipDemoPreviewImage();
+                }
+                overlay.classList.remove('hidden');
+                requestAnimationFrame(() => {
+                    if (atClipDemoEditorOpen) {
+                        overlay.classList.add('is-open');
+                        if (normalizeAgentToolsApp(atAgentToolsActiveApp) === AT_APP_CLIP) {
+                            requestAnimationFrame(() => {
+                                fitClipDemoPreviewImage();
+                            });
+                        }
+                    }
+                });
+                return;
+            }
+
+            overlay.classList.remove('is-open');
+            if (immediate) {
+                overlay.classList.add('hidden');
+                if (atView) atView.classList.remove('clip-editor-pushed');
+                atClipDemoSidebarWasExpandedBeforeOpen = false;
+                return;
+            }
+            atClipDemoEditorHideTimer = setTimeout(() => {
+                if (!atClipDemoEditorOpen) {
+                    overlay.classList.add('hidden');
+                    if (atView) atView.classList.remove('clip-editor-pushed');
+                }
+            }, 300);
+        }
+
+        function closeAgentToolsClipDemoEditor(options = {}) {
+            setAgentToolsClipDemoEditorOpen(false, options);
+        }
+
+        window.toggleAgentToolsClipDemoEditor = function() {
+            setAgentToolsClipDemoEditorOpen(!atClipDemoEditorOpen);
+        };
+
+        window.openAgentToolsAppFromMenu = function(appKey, event) {
+            if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            const nextApp = normalizeAgentToolsApp(appKey);
+            const changed = atAgentToolsActiveApp !== nextApp;
+            atAgentToolsActiveApp = nextApp;
+            updateAgentToolsClipDemoButtonUi();
+            if (!atClipDemoEditorOpen) {
+                setAgentToolsClipDemoEditorOpen(true);
+                return;
+            }
+            if (!changed) return;
+            if (nextApp === AT_APP_CLIP) {
+                refreshClipDemoPreviewImage();
+                requestAnimationFrame(() => {
+                    fitClipDemoPreviewImage();
+                });
+            }
+        };
+
         function updateAgentToolsRefreshModalUi() {
             const modal = document.getElementById('agenttools-refresh-modal');
             const titleEl = document.getElementById('agenttools-refresh-modal-title');
@@ -2689,6 +3947,14 @@
             return document.getElementById('at-chat-input');
         }
 
+        function isSingleRichComposerVisible() {
+            if (currentChannelId) return false;
+            const wrap = document.getElementById('at-channel-input-wrap');
+            const editor = getChannelInputElement();
+            if (!wrap || !editor) return false;
+            return !wrap.classList.contains('hidden') && editor.getAttribute('contenteditable') !== 'false';
+        }
+
         function focusActiveAgentToolsComposer(options = {}) {
             const expectedAgentId = (typeof options.agentId === 'string' && options.agentId.trim()) ? options.agentId.trim() : '';
             const expectedChannelId = (typeof options.channelId === 'string' && options.channelId.trim()) ? options.channelId.trim() : '';
@@ -2700,7 +3966,7 @@
                 if (expectedAgentId && currentAgentToolId !== expectedAgentId) return true;
                 if (expectedChannelId && currentChannelId !== expectedChannelId) return true;
 
-                if (currentChannelId) {
+                if (currentChannelId || isSingleRichComposerVisible()) {
                     const editor = getChannelInputElement();
                     if (!editor) return false;
                     if (editor.getAttribute('contenteditable') === 'false') return false;
@@ -2903,6 +4169,28 @@
             return getChannelMemberProfiles(channel);
         }
 
+        function getSingleMentionMembers() {
+            if (!Array.isArray(allAgents)) return [];
+            return allAgents
+                .filter((agent) => agent && (agent.id || agent.name || agent.displayName))
+                .map((agent) => {
+                    const agentId = typeof agent.id === 'string' ? agent.id : '';
+                    const fallbackName = (agent.displayName || agent.name || agentId || 'Agent');
+                    const visual = resolveAgentVisualIdentity(agentId, fallbackName, agent.avatarUrl || '');
+                    return {
+                        id: agentId,
+                        name: visual.displayName || fallbackName,
+                        avatarUrl: visual.avatarUrl
+                    };
+                });
+        }
+
+        function getMentionMembersByComposerKind(kind, channelId = currentChannelId) {
+            return kind === 'single'
+                ? getSingleMentionMembers()
+                : getChannelMentionMembers(channelId);
+        }
+
         function matchMentionTrigger(text) {
             if (typeof text !== 'string') return null;
             // Trigger on '@' unless it's part of an ASCII word/email token.
@@ -2923,10 +4211,18 @@
             return null;
         }
 
-        async function openMentionPopupByMode(mode = 'mention') {
-            const activeChannelId = currentChannelId || sidebarActiveChannelId || '';
-            if (!activeChannelId) return;
-            if (!currentChannelId) {
+        async function openMentionPopupByMode(mode = 'mention', options = {}) {
+            const requestedKind = options && options.kind === 'single'
+                ? 'single'
+                : (options && options.kind === 'channel'
+                    ? 'channel'
+                    : (currentChannelId ? 'channel' : 'single'));
+            atMentionMode = mode === 'next' ? 'next' : 'mention';
+            atMentionSelectedIndex = 0;
+
+            let activeChannelId = currentChannelId || sidebarActiveChannelId || '';
+            if (requestedKind === 'channel' && !activeChannelId) return;
+            if (requestedKind === 'channel' && !currentChannelId) {
                 currentChannelId = activeChannelId;
             }
             const editor = getChannelInputElement();
@@ -2936,20 +4232,34 @@
             }
             editor.focus();
             ensureChannelCaretInEditor(editor);
-            atMentionMode = mode === 'next' ? 'next' : 'mention';
-            atMentionSelectedIndex = 0;
-            let members = getChannelMentionMembers(activeChannelId);
-            if (!Array.isArray(members) || members.length === 0) {
+
+            let members = getMentionMembersByComposerKind(requestedKind, activeChannelId);
+            if (requestedKind === 'channel' && (!Array.isArray(members) || members.length === 0)) {
                 try {
                     await fetchAgentChannels();
                 } catch (_) {}
-                members = getChannelMentionMembers(activeChannelId);
+                members = getMentionMembersByComposerKind(requestedKind, activeChannelId);
             }
+
             if (!Array.isArray(members) || members.length === 0) {
                 hideMentionPopup();
                 return;
             }
-            renderMentionPopup(members);
+
+            const query = typeof options.query === 'string' ? options.query.trim().toLowerCase() : '';
+            const filtered = query
+                ? members.filter((candidate) => {
+                    const name = String(candidate.name || '').toLowerCase();
+                    const id = String(candidate.id || '').toLowerCase();
+                    return name.includes(query) || id.includes(query);
+                })
+                : members;
+
+            if (!Array.isArray(filtered) || filtered.length === 0) {
+                hideMentionPopup();
+                return;
+            }
+            renderMentionPopup(filtered);
         }
 
         window.openChannelMentionPicker = function(mode, event) {
@@ -2958,7 +4268,16 @@
                 if (typeof evt.preventDefault === 'function') evt.preventDefault();
                 if (typeof evt.stopPropagation === 'function') evt.stopPropagation();
             }
-            openMentionPopupByMode(mode);
+            openMentionPopupByMode(mode, { kind: 'channel' });
+        };
+
+        window.openSingleMentionPicker = function(mode, event) {
+            const evt = event || window.event || null;
+            if (evt) {
+                if (typeof evt.preventDefault === 'function') evt.preventDefault();
+                if (typeof evt.stopPropagation === 'function') evt.stopPropagation();
+            }
+            openMentionPopupByMode(mode, { kind: 'single' });
         };
 
         function renderMentionPopup(candidates) {
@@ -3002,17 +4321,14 @@
         }
 
         function updateMentionPopupFromCaret() {
-            if (!currentChannelId) {
-                hideMentionPopup();
-                return;
-            }
+            const inChannelMode = !!currentChannelId;
             const editor = getChannelInputElement();
-            if (!editor || document.activeElement !== editor) {
+            if (!editor || document.activeElement !== editor || editor.getAttribute('contenteditable') === 'false') {
                 hideMentionPopup();
                 return;
             }
-
             const before = getCaretTextBeforeChannelInput();
+            const members = getMentionMembersByComposerKind(inChannelMode ? 'channel' : 'single', currentChannelId);
             const trigger = parseComposerTrigger(before);
             if (!trigger) {
                 hideMentionPopup();
@@ -3020,7 +4336,6 @@
             }
             const query = (trigger.query || '').toLowerCase();
             atMentionMode = trigger.mode;
-            const members = getChannelMentionMembers();
             const candidates = members.filter((m) => {
                 const name = (m.name || '').toLowerCase();
                 const id = (m.id || '').toLowerCase();
@@ -3274,10 +4589,26 @@
         function tryNavigateAgentSentInputHistory(direction) {
             const agentId = typeof currentAgentToolId === 'string' ? currentAgentToolId.trim() : '';
             if (!agentId || currentChannelId) return false;
-            const input = getAgentTextInputElement();
-            if (!input) return false;
             const state = ensureSentInputHistoryState(atAgentSentInputHistory, agentId);
             if (!state) return false;
+            if (isSingleRichComposerVisible()) {
+                const currentText = getChannelComposerText();
+                if (direction === 'up' && state.navIndex === -1) {
+                    const canStartFromEmpty = currentText.length === 0;
+                    const editor = getChannelInputElement();
+                    const canStartFromTopLine = isContentEditableCaretOnFirstLine(editor);
+                    if (!canStartFromEmpty && !canStartFromTopLine) return false;
+                }
+                return navigateSentInputHistory(
+                    atAgentSentInputHistory,
+                    agentId,
+                    direction,
+                    () => getChannelComposerText(),
+                    (nextText) => setChannelComposerText(nextText)
+                );
+            }
+            const input = getAgentTextInputElement();
+            if (!input) return false;
             if (direction === 'up' && state.navIndex === -1) {
                 const currentText = input.value || '';
                 const canStartFromEmpty = currentText.length === 0;
@@ -3349,6 +4680,8 @@
                 const img = document.createElement('img');
                 img.alt = name;
                 img.className = 'w-full h-full object-cover transition-opacity duration-300 opacity-0';
+                img.draggable = false;
+                img.setAttribute('draggable', 'false');
                 const markLoaded = () => {
                     holder.classList.remove('meco-avatar-loading');
                     holder.classList.add('meco-avatar-loaded');
@@ -3517,7 +4850,10 @@
                 if (chatInput) chatInput.placeholder = 'Message channel...';
                 if (chatInput) chatInput.classList.add('hidden');
                 if (channelInputWrap) channelInputWrap.classList.remove('hidden');
-                if (channelInput) channelInput.setAttribute('contenteditable', 'true');
+                if (channelInput) {
+                    channelInput.setAttribute('contenteditable', 'true');
+                    channelInput.dataset.placeholder = 'Message channel...';
+                }
                 updateAgentToolsPersonaRefreshUi();
                 updateAgentToolsChannelRuleModeUi();
                 updateAgentToolsImmersiveToggleUi();
@@ -3566,10 +4902,13 @@
                 }
                 if (select) select.disabled = false;
                 if (chatInput) chatInput.placeholder = 'Message agent...';
-                if (chatInput) chatInput.classList.remove('hidden');
+                if (chatInput) chatInput.classList.add('hidden');
                 autosizeAgentToolsTextarea();
-                if (channelInputWrap) channelInputWrap.classList.add('hidden');
-                if (channelInput) channelInput.setAttribute('contenteditable', 'false');
+                if (channelInputWrap) channelInputWrap.classList.remove('hidden');
+                if (channelInput) {
+                    channelInput.setAttribute('contenteditable', 'true');
+                    channelInput.dataset.placeholder = 'Message agent...';
+                }
                 hideMentionPopup();
                 updateAgentToolsSoundToggleUi();
                 updateAgentToolsPersonaRefreshUi();
@@ -3651,10 +4990,13 @@
             }
             if (select) select.disabled = false;
             if (chatInput) chatInput.placeholder = 'Message agent...';
-            if (chatInput) chatInput.classList.remove('hidden');
+            if (chatInput) chatInput.classList.add('hidden');
             autosizeAgentToolsTextarea();
-            if (channelInputWrap) channelInputWrap.classList.add('hidden');
-            if (channelInput) channelInput.setAttribute('contenteditable', 'false');
+            if (channelInputWrap) channelInputWrap.classList.remove('hidden');
+            if (channelInput) {
+                channelInput.setAttribute('contenteditable', 'true');
+                channelInput.dataset.placeholder = 'Message agent...';
+            }
             hideMentionPopup();
             updateAgentToolsSoundToggleUi();
             updateAgentToolsPersonaRefreshUi();
@@ -4682,9 +6024,13 @@
 
         function bindSidebarChannelDragEvents(sidebarItem, sidebarList) {
             if (!sidebarItem || !sidebarList) return;
+            sidebarItem.addEventListener('dragstart', (event) => {
+                event.preventDefault();
+            });
             sidebarItem.addEventListener('pointerdown', (event) => {
                 if (event.button !== 0 || event.isPrimary === false) return;
-                if (event.target && event.target.closest('button, a, input, textarea, select, [contenteditable="true"], [draggable="false"]')) return;
+                if (event.target && event.target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+                event.preventDefault();
                 startSidebarChannelPointerDrag(event, sidebarItem, sidebarList);
             });
         }
@@ -4692,6 +6038,11 @@
         function startSidebarChannelPointerDrag(event, sidebarItem, sidebarList) {
             const items = Array.from(sidebarList.querySelectorAll('[data-channel-id]'));
             if (items.length < 2) return;
+            try {
+                const sel = window.getSelection && window.getSelection();
+                if (sel && typeof sel.removeAllRanges === 'function') sel.removeAllRanges();
+            } catch (_) {}
+            document.body.classList.add('meco-sidebar-drag-prep');
             if (mecoSidebarChannelPointerDragState) {
                 finishSidebarChannelPointerDrag(false);
             }
@@ -4755,6 +6106,7 @@
             } catch (_) {}
             state.item.classList.remove('meco-sidebar-dragging');
             document.body.classList.remove('meco-sidebar-drag-active');
+            document.body.classList.remove('meco-sidebar-drag-prep');
             if (state.moved && shouldPersist) {
                 persistSidebarChannelOrderFromDom(state.list);
                 mecoSidebarSuppressClickUntil = Date.now() + 280;
@@ -4787,9 +6139,13 @@
 
         function bindSidebarAgentDragEvents(sidebarItem, sidebarList) {
             if (!sidebarItem || !sidebarList) return;
+            sidebarItem.addEventListener('dragstart', (event) => {
+                event.preventDefault();
+            });
             sidebarItem.addEventListener('pointerdown', (event) => {
                 if (event.button !== 0 || event.isPrimary === false) return;
-                if (event.target && event.target.closest('button, a, input, textarea, select, [contenteditable="true"], [draggable="false"]')) return;
+                if (event.target && event.target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+                event.preventDefault();
                 startSidebarPointerDrag(event, sidebarItem, sidebarList);
             });
         }
@@ -4797,6 +6153,11 @@
         function startSidebarPointerDrag(event, sidebarItem, sidebarList) {
             const items = Array.from(sidebarList.querySelectorAll('[data-agent-id]'));
             if (items.length < 2) return;
+            try {
+                const sel = window.getSelection && window.getSelection();
+                if (sel && typeof sel.removeAllRanges === 'function') sel.removeAllRanges();
+            } catch (_) {}
+            document.body.classList.add('meco-sidebar-drag-prep');
             if (mecoSidebarPointerDragState) {
                 finishSidebarPointerDrag(false);
             }
@@ -4860,6 +6221,7 @@
             } catch (_) {}
             state.item.classList.remove('meco-sidebar-dragging');
             document.body.classList.remove('meco-sidebar-drag-active');
+            document.body.classList.remove('meco-sidebar-drag-prep');
             if (state.moved && shouldPersist) {
                 persistSidebarOrderFromDom(state.list);
                 mecoSidebarSuppressClickUntil = Date.now() + 280;
@@ -5119,6 +6481,7 @@
                             <div class="meco-avatar-placeholder absolute inset-0 rounded-full"></div>
                             <img alt="${displayName}" class="w-8 h-8 rounded-full object-cover ring-2 ring-transparent group-hover:ring-primary/50 transition-all opacity-0 group-hover:opacity-100"
                                  src="${visual.avatarUrl}"
+                                 draggable="false"
                                  loading="lazy"
                                  decoding="async"
                                  onload="handleSidebarAvatarLoaded(this)"
@@ -8919,12 +10282,17 @@
             const input = document.getElementById('at-chat-input');
             const channelId = currentChannelId;
             const agentId = currentAgentToolId;
-            const text = channelId ? getChannelComposerText() : (input ? input.value.trim() : '');
+            const singleUsesRichComposer = !channelId && isSingleRichComposerVisible();
+            const text = channelId
+                ? getChannelComposerText()
+                : (singleUsesRichComposer ? getChannelComposerText() : (input ? input.value.trim() : ''));
             if (!channelId && !agentId) return;
             if (!text && atPendingFiles.length === 0) return;
 
             if (!channelId && text === '/new' && atPendingFiles.length === 0) {
-                if (input) {
+                if (singleUsesRichComposer) {
+                    clearChannelComposer();
+                } else if (input) {
                     input.value = '';
                     autosizeAgentToolsTextarea();
                 }
@@ -8995,7 +10363,9 @@
             syncAgentPendingRequestSnapshot(agentId);
             renderAgentToolsChat(agentId);
 
-            if (input) {
+            if (singleUsesRichComposer) {
+                clearChannelComposer();
+            } else if (input) {
                 input.value = '';
                 autosizeAgentToolsTextarea();
             }
@@ -9158,6 +10528,7 @@
                 mecoUpdateLastFinishedTaskId = '';
             }
             applySidebarToggleModeClass();
+            initMobileKeyboardLiftSupport();
             loadAgentToolsSoundPref();
             loadAgentToolsChannelRuleModePref();
             loadAgentToolsImmersivePref();
@@ -9196,8 +10567,32 @@
             setAttachmentUploadIndicator(false);
             updateAgentToolsImmersiveToggleUi();
             updateAgentToolsChannelRuleModeUi();
+            updateAgentToolsClipDemoButtonUi();
+            initClipDemoPreviewImage();
             updateSidebarBusyIndicators();
             startAgentToolsRuntimeStatusPolling();
+            const clipEditorBackdrop = document.getElementById('at-clip-editor-backdrop');
+            const clipEditorPanel = document.getElementById('at-clip-editor-panel');
+            const clipEditorTopClose = document.getElementById('at-clip-editor-top-close');
+            const clipEditorCollapseBtn = document.getElementById('at-clip-editor-collapse-btn');
+            const clipEditorCloseBtn = document.getElementById('at-clip-editor-close-btn');
+            if (clipEditorBackdrop) {
+                clipEditorBackdrop.addEventListener('click', () => {
+                    if (!isDesktopClipDemoLayout()) closeAgentToolsClipDemoEditor();
+                });
+            }
+            if (clipEditorPanel) {
+                clipEditorPanel.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                });
+            }
+            [clipEditorTopClose, clipEditorCollapseBtn, clipEditorCloseBtn].forEach((btn) => {
+                if (!btn) return;
+                btn.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    closeAgentToolsClipDemoEditor();
+                });
+            });
             const searchInput = document.getElementById('search-input');
             const compactSearchInput = document.getElementById('search-input-compact');
             let syncingSearchValue = false;
@@ -9266,7 +10661,10 @@
             });
             document.addEventListener('keyup', (event) => {
                 if (event.key === 'Alt') atAltPressed = false;
-                if (event.key === 'Escape') closeAttachPicker();
+                if (event.key === 'Escape') {
+                    closeAttachPicker();
+                    closeAgentToolsClipDemoEditor();
+                }
             });
             window.addEventListener('blur', () => {
                 atAltPressed = false;
@@ -9316,7 +10714,10 @@
                     if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !atMentionPopupVisible && !hasModifier) {
                         if (atChannelComposing || event.isComposing || event.keyCode === 229 || event.which === 229) return;
                         const direction = event.key === 'ArrowUp' ? 'up' : 'down';
-                        if (tryNavigateChannelSentInputHistory(direction)) {
+                        const didNavigate = currentChannelId
+                            ? tryNavigateChannelSentInputHistory(direction)
+                            : tryNavigateAgentSentInputHistory(direction);
+                        if (didNavigate) {
                             event.preventDefault();
                             return;
                         }
@@ -9394,6 +10795,9 @@
                 syncSidebarLayoutForViewport();
                 applyHeaderLayout();
                 hideSidebarFloatingTooltip();
+                if (atClipDemoEditorOpen) {
+                    syncAgentToolsClipDemoLayout();
+                }
                 if (isHashView('agenttools') && (currentChannelId || currentAgentToolId)) {
                     applyAgentToolsLayoutMode();
                     if (currentChannelId) {
@@ -9404,6 +10808,9 @@
                 }
             });
             window.addEventListener('hashchange', () => {
+                if (!isHashView('agenttools')) {
+                    closeAgentToolsClipDemoEditor({ immediate: true });
+                }
                 checkMecoUpdateStatus();
             });
             document.addEventListener('visibilitychange', () => {
@@ -9732,6 +11139,36 @@
                                      class="inline-flex items-center justify-center h-9 px-3 rounded-full border bg-white/5 text-gray-300 border-white/10 hover:bg-white/10 transition-colors">
                                  <span id="at-persona-refresh-icon" class="material-icons-round text-[18px]">refresh</span>
                              </button>
+                             <div id="at-app-launcher-root" class="at-app-launcher-root relative">
+                                 <button id="at-clip-demo-btn"
+                                         type="button"
+                                         onclick="toggleAgentToolsClipDemoEditor()"
+                                         aria-pressed="false"
+                                         title="打开应用"
+                                         class="inline-flex items-center justify-center h-9 px-3 rounded-full border bg-white/5 text-gray-300 border-white/10 hover:bg-white/10 transition-colors">
+                                     <span id="at-app-launcher-icon" class="material-icons-round text-[18px]">movie</span>
+                                 </button>
+                                 <div id="at-app-launcher-menu" class="at-app-launcher-menu" role="menu" aria-label="应用列表">
+                                     <button type="button"
+                                             class="at-app-launcher-item"
+                                             data-app="clip"
+                                             role="menuitem"
+                                             aria-label="Clip"
+                                             title="Clip"
+                                             onclick="openAgentToolsAppFromMenu('clip', event)">
+                                         <span class="material-icons-round text-[18px]">movie</span>
+                                     </button>
+                                     <button type="button"
+                                             class="at-app-launcher-item"
+                                             data-app="web3"
+                                             role="menuitem"
+                                             aria-label="Web3 Tasks"
+                                             title="Web3 Tasks"
+                                             onclick="openAgentToolsAppFromMenu('web3', event)">
+                                         <span class="material-icons-round text-[18px]">hub</span>
+                                     </button>
+                                 </div>
+                             </div>
                          </div>
                      </div>
                      <div id="at-chat-composer-row" class="relative max-w-3xl mx-auto flex items-end gap-3">
@@ -9770,7 +11207,7 @@
                                  <span id="at-attachment-uploading-text">Uploading attachments...</span>
                              </div>
                              <textarea id="at-chat-input" 
-                                    class="w-full bg-transparent border-none px-4 py-3 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none h-12 min-h-[48px] max-h-[96px] leading-5 overflow-y-hidden box-border"
+                                    class="hidden w-full bg-transparent border-none px-4 py-3 text-white placeholder-gray-500 focus:ring-0 outline-none resize-none h-12 min-h-[48px] max-h-[96px] leading-5 overflow-y-hidden box-border"
                                     placeholder="Message agent..."
                                     rows="1"
                                     disabled></textarea>
@@ -9779,13 +11216,13 @@
                                      <div class="flex items-center gap-2 pr-2">
                                          <button type="button"
                                                  class="channel-shortcut-btn"
-                                                 onclick="openChannelMentionPicker('mention')"
-                                                 title="Mention member">
+                                                 onclick="openMentionPopupByMode('mention', { kind: currentChannelId ? 'channel' : 'single' })"
+                                                 title="Mention">
                                              @
                                          </button>
                                          <button type="button"
                                                  class="channel-shortcut-btn"
-                                                 onclick="openChannelMentionPicker('next')"
+                                                 onclick="openMentionPopupByMode('next', { kind: currentChannelId ? 'channel' : 'single' })"
                                                  title="Insert next speaker">
                                              &gt;
                                          </button>
@@ -9889,6 +11326,154 @@
                         <div class="p-4 text-center text-gray-500 text-sm">Select an agent to view skills</div>
                     </div>
                 </div>
+            </div>
+            <div id="at-clip-editor-overlay" class="at-clip-editor-overlay hidden" aria-hidden="true">
+                <div id="at-clip-editor-backdrop" class="at-clip-editor-backdrop"></div>
+                <aside id="at-clip-editor-panel" class="at-clip-editor-panel" role="dialog" aria-label="剪辑应用演示面板">
+                    <button id="at-clip-editor-top-close" type="button" class="at-clip-editor-peek-close" title="收起剪辑演示">
+                        <span class="at-clip-editor-peek-handle"></span>
+                    </button>
+                    <div class="at-clip-editor-head">
+                        <div class="at-clip-editor-title">
+                            <span class="material-icons-round text-[16px] text-cyan-300">movie_creation</span>
+                            <span>Clip Editor · Demo</span>
+                        </div>
+                        <div class="at-clip-editor-head-actions">
+                            <button id="at-clip-editor-collapse-btn" type="button" class="at-clip-editor-head-btn" title="收起">
+                                <span class="material-icons-round text-[17px]">keyboard_double_arrow_right</span>
+                            </button>
+                            <button id="at-clip-editor-close-btn" type="button" class="at-clip-editor-head-btn" title="关闭">
+                                <span class="material-icons-round text-[17px]">close</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="at-clip-editor-body app-clip">
+                        <div class="at-app-page at-app-page-clip" data-app-panel="clip">
+                            <div class="at-clip-image-stage">
+                                <img class="at-clip-image-demo" alt="Clip demo preview" />
+                            </div>
+                        </div>
+                        <div class="at-app-page at-app-page-web3 hidden" data-app-panel="web3">
+                            <div class="at-web3-demo">
+                                <div class="at-web3-hero">
+                                    <div>
+                                        <p class="at-web3-kicker">Web3 Task Community · JumpTask</p>
+                                        <h3>Earn U by completing tasks and claiming rewards.</h3>
+                                        <p class="at-web3-sub">Data source: JumpTask. Most tasks pay around $0.01 - $0.03 each.</p>
+                                    </div>
+                                    <div class="at-web3-stats">
+                                        <div class="at-web3-stat">
+                                            <span>Tasks Today</span>
+                                            <strong>128</strong>
+                                        </div>
+                                        <div class="at-web3-stat">
+                                            <span>Typical Reward</span>
+                                            <strong>$0.01 - $0.03</strong>
+                                        </div>
+                                        <div class="at-web3-stat">
+                                            <span>Online Users</span>
+                                            <strong>9.6k</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="at-web3-layout">
+                                    <section class="at-web3-board">
+                                        <header class="at-web3-board-head">
+                                            <h4>Hot Tasks</h4>
+                                            <span>Sorted by payout</span>
+                                        </header>
+                                        <div class="at-web3-task-list">
+                                            <article class="at-web3-task-card">
+                                                <div class="at-web3-task-top">
+                                                    <span class="at-web3-tag">Airdrop</span>
+                                                    <span class="at-web3-reward">$0.01</span>
+                                                </div>
+                                                <h5>Connect wallet and follow project socials</h5>
+                                                <p>Bind your wallet and complete 2 social actions to submit.</p>
+                                                <div class="at-web3-task-meta">
+                                                    <span>~8 min</span>
+                                                    <button type="button">Join</button>
+                                                </div>
+                                            </article>
+                                            <article class="at-web3-task-card">
+                                                <div class="at-web3-task-top">
+                                                    <span class="at-web3-tag">Testnet</span>
+                                                    <span class="at-web3-reward">$0.02</span>
+                                                </div>
+                                                <h5>Complete 3 testnet interactions and submit hashes</h5>
+                                                <p>Follow guide steps and upload your transaction proof.</p>
+                                                <div class="at-web3-task-meta">
+                                                    <span>~20 min</span>
+                                                    <button type="button">Join</button>
+                                                </div>
+                                            </article>
+                                            <article class="at-web3-task-card">
+                                                <div class="at-web3-task-top">
+                                                    <span class="at-web3-tag">Content</span>
+                                                    <span class="at-web3-reward">$0.03</span>
+                                                </div>
+                                                <h5>Publish one review post with referral link</h5>
+                                                <p>X / Reddit / Xiaohongshu supported, subject to review.</p>
+                                                <div class="at-web3-task-meta">
+                                                    <span>~35 min</span>
+                                                    <button type="button">Join</button>
+                                                </div>
+                                            </article>
+                                            <article class="at-web3-task-card">
+                                                <div class="at-web3-task-top">
+                                                    <span class="at-web3-tag">Node</span>
+                                                    <span class="at-web3-reward">$0.02</span>
+                                                </div>
+                                                <h5>Install a light node and keep it online for 24h</h5>
+                                                <p>Installation bonus plus uptime rewards.</p>
+                                                <div class="at-web3-task-meta">
+                                                    <span>~12 min setup</span>
+                                                    <button type="button">Join</button>
+                                                </div>
+                                            </article>
+                                        </div>
+                                    </section>
+                                    <aside class="at-web3-side">
+                                        <div class="at-web3-side-card">
+                                            <h5>My Earnings</h5>
+                                            <p class="at-web3-big">$12.84</p>
+                                            <p class="at-web3-dim">This week +$0.42</p>
+                                        </div>
+                                        <div class="at-web3-side-card">
+                                            <h5>Leaderboard</h5>
+                                            <ul>
+                                                <li><span>NeoHunter</span><strong>$18.20</strong></li>
+                                                <li><span>ChainPilot</span><strong>$17.42</strong></li>
+                                                <li><span>AirdropFox</span><strong>$15.34</strong></li>
+                                            </ul>
+                                        </div>
+                                        <div class="at-web3-side-card">
+                                            <div class="at-web3-usdt-head">
+                                                <h5>USDT Trend (24H)</h5>
+                                                <span>+0.08%</span>
+                                            </div>
+                                            <svg class="at-web3-usdt-chart" viewBox="0 0 260 90" preserveAspectRatio="none" aria-label="USDT trend chart">
+                                                <line x1="0" y1="18" x2="260" y2="18" class="grid"></line>
+                                                <line x1="0" y1="45" x2="260" y2="45" class="grid"></line>
+                                                <line x1="0" y1="72" x2="260" y2="72" class="grid"></line>
+                                                <polyline class="line" points="0,49 22,47 44,50 66,46 88,45 110,43 132,44 154,41 176,42 198,39 220,40 240,37 260,38"></polyline>
+                                            </svg>
+                                            <div class="at-web3-usdt-axis">
+                                                <span>00:00</span><span>12:00</span><span>Now</span>
+                                            </div>
+                                        </div>
+                                        <div class="at-web3-side-card">
+                                            <h5>Categories</h5>
+                                            <div class="at-web3-pill-wrap">
+                                                <span>Beginner</span><span>Social</span><span>On-chain</span><span>Content</span><span>Node</span>
+                                            </div>
+                                        </div>
+                                    </aside>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
             </div>
         </div>
     </main>

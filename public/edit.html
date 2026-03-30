@@ -92,6 +92,36 @@
             border-color: rgba(192, 132, 252, 0.3);
             background: linear-gradient(145deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%);
         }
+        body.meco-sidebar-drag-active {
+            cursor: grabbing !important;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        body.meco-sidebar-drag-prep,
+        body.meco-sidebar-drag-prep * {
+            -webkit-user-select: none !important;
+            user-select: none !important;
+            -webkit-touch-callout: none !important;
+        }
+        body.meco-sidebar-drag-active * {
+            cursor: grabbing !important;
+        }
+        .meco-sidebar-entry.meco-sidebar-dragging {
+            opacity: 0.92;
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.16);
+        }
+        #sidebar-list,
+        #sidebar-list .meco-sidebar-entry {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
+        #sidebar-list .meco-sidebar-entry img {
+            pointer-events: none;
+            -webkit-user-drag: none;
+            user-select: none;
+        }
         @keyframes float {
             0% { transform: translate(0px, 0px) scale(1); }
             33% { transform: translate(30px, -50px) scale(1.1); }
@@ -524,6 +554,10 @@
     window.knowledgeRuleExperienceLineNumber = null;
     window.knowledgeRuleExperienceUploadingLineNumber = null;
     window.knowledgeRuleBusy = false;
+    const MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.agentOrder.v1';
+    let mecoSidebarSuppressClickUntil = 0;
+    let mecoSidebarPointerDragState = null;
+    let mecoAgentDeleteInFlight = false;
     const AVATAR_COLOR_CLASSES = [
         'bg-red-600', 'bg-orange-600', 'bg-amber-600',
         'bg-yellow-600', 'bg-lime-600', 'bg-green-600',
@@ -583,6 +617,293 @@
         img.src = src;
     }
     // --------------------------------
+
+    function readSidebarAgentOrderIds() {
+        try {
+            const raw = localStorage.getItem(MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY);
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return [];
+            return parsed
+                .map((id) => String(id || '').trim())
+                .filter(Boolean);
+        } catch (_) {
+            return [];
+        }
+    }
+
+    function writeSidebarAgentOrderIds(ids) {
+        const clean = normalizeSidebarAgentIdList(ids);
+        try {
+            localStorage.setItem(MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY, JSON.stringify(clean));
+        } catch (_) {}
+        return clean;
+    }
+
+    function normalizeSidebarAgentIdList(ids) {
+        const seen = new Set();
+        const clean = [];
+        (Array.isArray(ids) ? ids : []).forEach((id) => {
+            const normalized = String(id || '').trim();
+            if (!normalized || seen.has(normalized)) return;
+            seen.add(normalized);
+            clean.push(normalized);
+        });
+        return clean;
+    }
+
+    function orderAgentsBySidebarPreference(agents) {
+        const base = sortAgentsMainFirst(agents);
+        const saved = readSidebarAgentOrderIds();
+        if (!saved.length) return base;
+        const orderMap = new Map();
+        saved.forEach((id, index) => orderMap.set(id, index));
+        return base.slice().sort((a, b) => {
+            const idA = String(a?.id || '').trim();
+            const idB = String(b?.id || '').trim();
+            const hasA = orderMap.has(idA);
+            const hasB = orderMap.has(idB);
+            if (hasA && hasB) return orderMap.get(idA) - orderMap.get(idB);
+            if (hasA) return -1;
+            if (hasB) return 1;
+            return 0;
+        });
+    }
+
+    function persistSidebarOrderFromVisibleIds(visibleIds) {
+        const normalizedVisible = normalizeSidebarAgentIdList(visibleIds);
+        if (!normalizedVisible.length) return;
+
+        const fullCurrent = orderAgentsBySidebarPreference(window.allAgents || [])
+            .map((agent) => String(agent?.id || '').trim())
+            .filter(Boolean);
+        if (!fullCurrent.length) {
+            writeSidebarAgentOrderIds(normalizedVisible);
+            return;
+        }
+
+        const visibleSet = new Set(normalizedVisible);
+        let replacementIndex = 0;
+        const merged = fullCurrent.map((id) => {
+            if (!visibleSet.has(id)) return id;
+            const nextId = normalizedVisible[replacementIndex] || id;
+            replacementIndex += 1;
+            return nextId;
+        });
+        normalizedVisible.forEach((id) => {
+            if (!merged.includes(id)) merged.push(id);
+        });
+        writeSidebarAgentOrderIds(merged);
+    }
+
+    function persistSidebarOrderFromDom(sidebarList) {
+        if (!sidebarList) return;
+        const ids = Array.from(sidebarList.querySelectorAll('[data-agent-id]'))
+            .map((node) => String(node.dataset.agentId || '').trim())
+            .filter(Boolean);
+        if (ids.length < 2) return;
+        persistSidebarOrderFromVisibleIds(ids);
+    }
+
+    function bindSidebarAgentDragEvents(sidebarItem, sidebarList) {
+        if (!sidebarItem || !sidebarList) return;
+        sidebarItem.addEventListener('dragstart', (event) => {
+            event.preventDefault();
+        });
+        sidebarItem.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0 || event.isPrimary === false) return;
+            if (event.target && event.target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+            event.preventDefault();
+            startSidebarPointerDrag(event, sidebarItem, sidebarList);
+        });
+    }
+
+    function startSidebarPointerDrag(event, sidebarItem, sidebarList) {
+        const items = Array.from(sidebarList.querySelectorAll('[data-agent-id]'));
+        if (items.length < 2) return;
+        try {
+            const sel = window.getSelection && window.getSelection();
+            if (sel && typeof sel.removeAllRanges === 'function') sel.removeAllRanges();
+        } catch (_) {}
+        document.body.classList.add('meco-sidebar-drag-prep');
+        if (mecoSidebarPointerDragState) {
+            finishSidebarPointerDrag(false);
+        }
+        const pointerId = event.pointerId;
+        const state = {
+            pointerId,
+            item: sidebarItem,
+            list: sidebarList,
+            startY: event.clientY,
+            moved: false,
+            pendingClientY: event.clientY,
+            rafId: 0,
+            moveHandler: null,
+            endHandler: null,
+        };
+        const moveHandler = (moveEvent) => {
+            if (!mecoSidebarPointerDragState || moveEvent.pointerId !== pointerId) return;
+            state.pendingClientY = moveEvent.clientY;
+            if (!state.moved && Math.abs(moveEvent.clientY - state.startY) < 3) return;
+            if (!state.moved) {
+                state.moved = true;
+                state.item.classList.add('meco-sidebar-dragging');
+                document.body.classList.add('meco-sidebar-drag-active');
+            }
+            mecoSidebarSuppressClickUntil = Date.now() + 1200;
+            if (!state.rafId) {
+                state.rafId = window.requestAnimationFrame(() => {
+                    state.rafId = 0;
+                    applySidebarDragReorder(state, state.pendingClientY);
+                });
+            }
+            moveEvent.preventDefault();
+        };
+        const endHandler = (endEvent) => {
+            if (!mecoSidebarPointerDragState || endEvent.pointerId !== pointerId) return;
+            finishSidebarPointerDrag(true);
+        };
+        state.moveHandler = moveHandler;
+        state.endHandler = endHandler;
+        mecoSidebarPointerDragState = state;
+        document.addEventListener('pointermove', moveHandler, true);
+        document.addEventListener('pointerup', endHandler, true);
+        document.addEventListener('pointercancel', endHandler, true);
+        try {
+            sidebarItem.setPointerCapture(pointerId);
+        } catch (_) {}
+    }
+
+    function finishSidebarPointerDrag(shouldPersist) {
+        const state = mecoSidebarPointerDragState;
+        if (!state) return;
+        if (state.rafId) {
+            window.cancelAnimationFrame(state.rafId);
+            state.rafId = 0;
+        }
+        document.removeEventListener('pointermove', state.moveHandler, true);
+        document.removeEventListener('pointerup', state.endHandler, true);
+        document.removeEventListener('pointercancel', state.endHandler, true);
+        try {
+            state.item.releasePointerCapture(state.pointerId);
+        } catch (_) {}
+        state.item.classList.remove('meco-sidebar-dragging');
+        document.body.classList.remove('meco-sidebar-drag-active');
+        document.body.classList.remove('meco-sidebar-drag-prep');
+        if (state.moved && shouldPersist) {
+            persistSidebarOrderFromDom(state.list);
+            mecoSidebarSuppressClickUntil = Date.now() + 280;
+        }
+        mecoSidebarPointerDragState = null;
+    }
+
+    function applySidebarDragReorder(state, clientY) {
+        if (!state || !state.list || !state.item) return;
+        const referenceNode = findSidebarDragReferenceNode(state.list, state.item, clientY);
+        if (!referenceNode) {
+            if (state.list.lastElementChild !== state.item) {
+                animateSidebarListReorder(state.list, state.item, null);
+            }
+            return;
+        }
+        if (referenceNode === state.item || referenceNode === state.item.nextElementSibling) return;
+        animateSidebarListReorder(state.list, state.item, referenceNode);
+    }
+
+    function findSidebarDragReferenceNode(sidebarList, dragItem, clientY) {
+        const items = Array.from(sidebarList.querySelectorAll('[data-agent-id]')).filter((el) => el !== dragItem);
+        for (const item of items) {
+            const rect = item.getBoundingClientRect();
+            const centerY = rect.top + (rect.height / 2);
+            if (clientY < centerY) return item;
+        }
+        return null;
+    }
+
+    function animateSidebarListReorder(sidebarList, dragItem, referenceNode) {
+        const beforeItems = Array.from(sidebarList.querySelectorAll('[data-agent-id]'));
+        const beforeTop = new Map(beforeItems.map((item) => [item, item.getBoundingClientRect().top]));
+        if (referenceNode) {
+            sidebarList.insertBefore(dragItem, referenceNode);
+        } else {
+            sidebarList.appendChild(dragItem);
+        }
+        const afterItems = Array.from(sidebarList.querySelectorAll('[data-agent-id]'));
+        afterItems.forEach((item) => {
+            if (item === dragItem) return;
+            const from = beforeTop.get(item);
+            if (typeof from !== 'number') return;
+            const to = item.getBoundingClientRect().top;
+            const delta = from - to;
+            if (Math.abs(delta) < 0.5) return;
+            item.style.transition = 'none';
+            item.style.transform = `translateY(${delta}px)`;
+            item.style.willChange = 'transform';
+            window.requestAnimationFrame(() => {
+                item.style.transition = 'transform 180ms cubic-bezier(0.2, 0.82, 0.2, 1)';
+                item.style.transform = '';
+                window.setTimeout(() => {
+                    item.style.transition = '';
+                    item.style.willChange = '';
+                }, 220);
+            });
+        });
+    }
+
+    async function cloneAgentFromSidebar(agentId, sourceName) {
+        const fromId = String(agentId || '').trim();
+        if (!fromId) return;
+        const baseName = String(sourceName || fromId || 'Agent').trim() || 'Agent';
+        const requestedName = window.prompt('请输入复制后的角色名称', `${baseName} Copy`);
+        if (!requestedName || !requestedName.trim()) return;
+
+        try {
+            const res = await fetch(`/api/agents/${encodeURIComponent(fromId)}/clone`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: requestedName.trim() })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || 'clone agent failed');
+            }
+            const targetId = String(data.id || '').trim();
+            if (!targetId) {
+                throw new Error('clone succeeded but no new id returned');
+            }
+            window.location.href = `edit.html?id=${encodeURIComponent(targetId)}`;
+        } catch (e) {
+            alert(`复制失败: ${e.message || e}`);
+        }
+    }
+
+    async function deleteAgentFromSidebar(agentId, agentName) {
+        const id = String(agentId || '').trim();
+        if (!id) return;
+        if (mecoAgentDeleteInFlight) return;
+        const displayName = String(agentName || id).trim() || id;
+        if (!window.confirm(`确认删除角色「${displayName}」？此操作不可撤销。`)) return;
+
+        mecoAgentDeleteInFlight = true;
+        showAgentDeleteLoading(`正在删除角色「${displayName}」...`);
+        try {
+            const res = await fetch(`/api/agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || 'delete agent failed');
+            }
+            if (window.currentAgentId === id) {
+                window.location.href = 'index.html';
+                return;
+            }
+            await loadAgentData();
+        } catch (e) {
+            alert(`删除失败: ${e.message || e}`);
+        } finally {
+            mecoAgentDeleteInFlight = false;
+            hideAgentDeleteLoading();
+        }
+    }
 
     function openFileViewer(title, content, editable = false) {
         const modal = document.getElementById('fileViewerModal');
@@ -746,7 +1067,7 @@
     function renderSidebar(agentsList) {
         const sidebarList = document.getElementById('sidebar-list');
         const currentId = window.currentAgentId;
-        const sortedAgents = sortAgentsMainFirst(agentsList);
+        const sortedAgents = orderAgentsBySidebarPreference(agentsList);
         
         if (sidebarList) {
             sidebarList.innerHTML = '';
@@ -760,6 +1081,7 @@
                     sidebarAvatarHtml = `
                         <img alt="${displayName}" class="w-8 h-8 rounded-full object-cover ring-2 ${isActive ? 'ring-primary/50' : 'ring-transparent'} group-hover:ring-primary/50 transition-all opacity-80 group-hover:opacity-100" 
                              src="${a.avatarUrl}" 
+                             draggable="false"
                              onerror="handleSidebarAvatarError(this, '${displayName}')">
                     `;
                 } else {
@@ -772,13 +1094,43 @@
                     `;
                 }
 
-                const sidebarItem = document.createElement('a');
-                sidebarItem.href = `edit.html?id=${encodeURIComponent(a.id)}`;
-                sidebarItem.className = `flex items-center gap-3 px-3 py-2 rounded-xl transition-colors group ${isActive ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white hover:bg-white/5'}`;
+                const sidebarItem = document.createElement('div');
+                sidebarItem.dataset.agentId = String(a.id || '');
+                sidebarItem.className = `meco-sidebar-entry flex items-center gap-3 px-3 py-2 rounded-xl transition-colors group border border-transparent ${isActive ? 'bg-white/10 text-white border-primary/20' : 'text-gray-400 hover:text-white hover:bg-white/5'}`;
+                sidebarItem.onclick = (event) => {
+                    if (Date.now() < mecoSidebarSuppressClickUntil) {
+                        event.preventDefault();
+                        return;
+                    }
+                    window.location.href = `edit.html?id=${encodeURIComponent(a.id)}`;
+                };
                 sidebarItem.innerHTML = `
-                    ${sidebarAvatarHtml}
-                    <span class="text-sm truncate font-medium">${displayName}</span>
+                    <div class="w-8 h-8 shrink-0">${sidebarAvatarHtml}</div>
+                    <span class="text-sm truncate font-medium flex-1 min-w-0">${displayName}</span>
+                    <div class="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button class="js-agent-clone-btn text-gray-500 hover:text-cyan-300 transition-colors" title="复制智能体" draggable="false">
+                            <span class="material-icons-round text-sm">content_copy</span>
+                        </button>
+                        <button class="js-agent-delete-btn text-gray-500 hover:text-red-400 transition-colors" title="删除智能体" draggable="false">
+                            <span class="material-icons-round text-sm">close</span>
+                        </button>
+                    </div>
                 `;
+                const cloneBtn = sidebarItem.querySelector('.js-agent-clone-btn');
+                if (cloneBtn) {
+                    cloneBtn.onclick = (event) => {
+                        event.stopPropagation();
+                        cloneAgentFromSidebar(a.id, displayName);
+                    };
+                }
+                const deleteBtn = sidebarItem.querySelector('.js-agent-delete-btn');
+                if (deleteBtn) {
+                    deleteBtn.onclick = (event) => {
+                        event.stopPropagation();
+                        deleteAgentFromSidebar(a.id, displayName);
+                    };
+                }
+                bindSidebarAgentDragEvents(sidebarItem, sidebarList);
                 sidebarList.appendChild(sidebarItem);
             });
         }
@@ -1547,6 +1899,31 @@
     function hideUploadLoading() {
         const el = document.getElementById('upload-loading-overlay');
         if (el) el.remove();
+    }
+
+    function showAgentDeleteLoading(msg = 'Deleting agent...') {
+        let overlay = document.getElementById('agent-delete-loading-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'agent-delete-loading-overlay';
+            overlay.className = 'fixed inset-0 z-[120] flex flex-col items-center justify-center bg-black/85 backdrop-blur-sm';
+            overlay.innerHTML = `
+                <svg class="animate-spin h-10 w-10 text-primary mb-3" viewBox="0 0 24 24" fill="none">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <span id="agent-delete-loading-text" class="text-sm text-gray-200"></span>
+            `;
+            document.body.appendChild(overlay);
+        }
+        const textEl = document.getElementById('agent-delete-loading-text');
+        if (textEl) textEl.textContent = String(msg || 'Deleting agent...');
+        overlay.classList.remove('hidden');
+    }
+
+    function hideAgentDeleteLoading() {
+        const overlay = document.getElementById('agent-delete-loading-overlay');
+        if (overlay) overlay.classList.add('hidden');
     }
 
     // Avatar upload handler

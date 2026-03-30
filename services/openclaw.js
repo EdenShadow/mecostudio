@@ -208,8 +208,8 @@ const getAgents = async () => {
 const createAgent = async (name, prompt) => {
     // Generate a safe alphanumeric ID for OpenClaw CLI
     const safeId = name.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || ('agent_' + Date.now().toString(36));
-    // Avoid collision with existing reserved names
-    const agentId = ['main', 'feishu'].includes(safeId) ? safeId + '_' + Date.now().toString(36) : safeId;
+    // Avoid collision with reserved default ID
+    const agentId = ['main'].includes(safeId) ? safeId + '_' + Date.now().toString(36) : safeId;
 
     const workspaceDir = path.join(HOME_DIR, '.openclaw', `workspace-${agentId}`);
 
@@ -790,6 +790,57 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
 
     let buffer = '';
     let pending = ''; // Buffer for incomplete lines
+    let stderrPending = ''; // Stderr line buffer
+    const isNoisyCliLogLine = (trimmedLine) => {
+        const trimmed = String(trimmedLine || '');
+        if (!trimmed) return true;
+        const lower = trimmed.toLowerCase();
+        if (trimmed.startsWith('[plugins]')) return true;
+        if (trimmed.includes('Config warnings')) return true;
+        if (trimmed.includes('duplicate plugin id')) return true;
+        if (trimmed.includes('/openclaw/extensions/')) return true;
+        if (trimmed.includes('later plugin may be overridden')) return true;
+        if (trimmed === '│') return true;
+        if (trimmed.includes('[agents/auth-profiles]')) return true;
+        if (lower.includes('tools.profile') && lower.includes('allowlist contains unknown entries')) return true;
+        if (lower.includes('unavailable in the current runtime/provider/model/config')) return true;
+        if (lower.includes('stale config entry ignored')) return true;
+        if (lower.includes('plugin not found')) return true;
+        if (lower === 'command not found') return true;
+        return false;
+    };
+    const emitReasoningLogLine = (rawLine) => {
+        const clean = String(rawLine || '').replace(/\x1b\[[0-9;]*m/g, '');
+        const compact = clean
+            .replace(/^[\s│├╮╯╰─]+/, '')
+            .replace(/^◇\s*/, '')
+            .trim();
+        if (!compact) return false;
+        onChunk({ type: 'reasoning_stream', content: `${compact}\n` });
+        return true;
+    };
+    const tryEmitProgressReasoning = (trimmedLine, cleanLine) => {
+        const trimmed = String(trimmedLine || '').trim();
+        if (!trimmed) return false;
+        if (trimmed.startsWith('◇') || /^[│├╮╯╰─]/.test(trimmed)) {
+            return emitReasoningLogLine(cleanLine);
+        }
+        if (
+            trimmed.startsWith('[agents/') ||
+            trimmed.startsWith('[gateway/') ||
+            trimmed.startsWith('[model/') ||
+            trimmed.startsWith('[openclaw/') ||
+            trimmed.startsWith('[runtime/') ||
+            trimmed.startsWith('[room/') ||
+            trimmed.startsWith('[tool/') ||
+            trimmed.startsWith('[tools/') ||
+            trimmed.startsWith('[tools]') ||
+            trimmed.startsWith('[skills/')
+        ) {
+            return emitReasoningLogLine(cleanLine);
+        }
+        return false;
+    };
     
     child.stdout.on('data', (data) => {
         if (settled) return;
@@ -818,17 +869,11 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
                 return;
             }
 
-            // Filter logs
-            if (trimmed.startsWith('[plugins]')) return;
-            if (trimmed.startsWith('◇')) return;
-            if (/^[│├╮╯╰─]/.test(trimmed)) return;
-            if (trimmed.includes('Config warnings')) return;
-            if (trimmed.includes('duplicate plugin id')) return;
-            if (trimmed.includes('/openclaw/extensions/')) return;
-            if (trimmed.includes('later plugin may be overridden')) return;
-            if (trimmed === '│') return;
-            // Filter specific log: [agents/auth-profiles] inherited auth-profiles from main agent
-            if (trimmed.includes('[agents/auth-profiles]')) return;
+            if (isNoisyCliLogLine(trimmed)) return;
+
+            if (tryEmitProgressReasoning(trimmed, cleanLine)) {
+                return;
+            }
 
             // Valid line
             onChunk(line + '\n');
@@ -846,6 +891,13 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
         } else if (cleanPending.startsWith('[')) {
             if (cleanPending.startsWith('[plugins]')) isLogStart = true;
             else if (cleanPending.startsWith('[agents/')) isLogStart = true;
+            else if (cleanPending.startsWith('[gateway/')) isLogStart = true;
+            else if (cleanPending.startsWith('[model/')) isLogStart = true;
+            else if (cleanPending.startsWith('[openclaw/')) isLogStart = true;
+            else if (cleanPending.startsWith('[runtime/')) isLogStart = true;
+            else if (cleanPending.startsWith('[room/')) isLogStart = true;
+            else if (cleanPending.startsWith('[tool/')) isLogStart = true;
+            else if (cleanPending.startsWith('[skills/')) isLogStart = true;
             else if ('[plugins]'.startsWith(cleanPending)) isLogStart = true;
             else if ('[agents/'.startsWith(cleanPending)) isLogStart = true;
             else if (cleanPending.length < 10) isLogStart = true;
@@ -863,7 +915,36 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     
     child.stderr.on('data', (data) => {
         if (settled) return;
-        console.error(`[sendMessageStream] stderr: ${data}`);
+        const chunk = data.toString();
+        const full = stderrPending + chunk;
+        const lines = full.split('\n');
+        stderrPending = lines.pop();
+
+        lines.forEach((line) => {
+            const cleanLine = String(line || '').replace(/\x1b\[[0-9;]*m/g, '');
+            const trimmed = cleanLine.trim();
+            if (!trimmed) return;
+
+            const structuredEvents = extractStructuredStreamEvents(trimmed);
+            if (structuredEvents) {
+                structuredEvents.forEach(evt => onChunk(evt));
+                return;
+            }
+
+            if (isNoisyCliLogLine(trimmed)) return;
+
+            if (tryEmitProgressReasoning(trimmed, cleanLine)) return;
+
+            if (
+                /^(warn|warning|error|retry|timeout|connecting|connected|starting|started|loading|loaded)\b/i.test(trimmed) ||
+                trimmed.startsWith('[')
+            ) {
+                emitReasoningLogLine(cleanLine);
+                return;
+            }
+
+            console.error(`[sendMessageStream] stderr: ${trimmed}`);
+        });
     });
     
     child.on('close', (code) => {
@@ -881,6 +962,19 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
                 onChunk(cleanPending);
             }
             pending = '';
+        }
+        if (stderrPending && stderrPending.length > 0) {
+            const cleanPending = stderrPending.replace(/\x1b\[[0-9;]*m/g, '');
+            const trimmed = cleanPending.trim();
+            if (trimmed) {
+                const structuredEvents = extractStructuredStreamEvents(trimmed);
+                if (structuredEvents) {
+                    structuredEvents.forEach(evt => onChunk(evt));
+                } else if (!isNoisyCliLogLine(trimmed)) {
+                    tryEmitProgressReasoning(trimmed, cleanPending);
+                }
+            }
+            stderrPending = '';
         }
 
         if (code === 0) {

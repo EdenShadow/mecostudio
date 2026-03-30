@@ -9,6 +9,19 @@
 - `scripts/install-meco-studio.sh`（安装/更新下发逻辑）
 - `README.md` / `MECO-STUDIO-INSTALL.md` / `GITHUB-SYNC-RULES.md`（策略文档）
 
+### 1.2 智能体白名单（强制）
+
+上传/打包到 GitHub 时，智能体仅允许：
+
+- `main`
+- `gates`
+- `hawking`
+- `jobs`
+- `kobe`
+- `munger`
+
+其他本机新建智能体不进入仓库。
+
 ### 1.1 打包依赖铁律（强制）
 
 凡是“打包提交”必须检查并同步以下依赖范围（按业务口径）：

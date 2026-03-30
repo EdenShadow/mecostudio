@@ -173,6 +173,21 @@
     }
   }
 
+  function isLikelyMobileH5() {
+    try {
+      const ua = String((navigator && navigator.userAgent) || '').toLowerCase();
+      const uaMobile = /android|iphone|ipad|ipod|mobile|windows phone|harmonyos/.test(ua);
+      const coarsePointer = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+      const narrowViewport = Math.min(
+        Math.max(0, Number(window.innerWidth) || 0),
+        Math.max(0, Number(window.innerHeight) || 0)
+      ) <= 960;
+      return uaMobile || (coarsePointer && narrowViewport);
+    } catch (_) {
+      return false;
+    }
+  }
+
   function hideRemoteDockUiForEmbed() {
     const remoteDock = q('remote-dock');
     if (remoteDock) {
@@ -1270,6 +1285,24 @@
     if (!target) return false;
     const timeoutMs = Math.max(300, Math.round(Number(options.timeoutMs) || 1200));
     const retries = Math.max(1, Math.min(4, Math.round(Number(options.retries) || 1)));
+    try {
+      const res = await fetch('/api/remote/probe-lan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: target,
+          timeoutMs,
+          retries
+        }),
+        cache: 'no-store'
+      });
+      const body = await readJson(res, '探测内网地址失败');
+      if (body && typeof body.reachable === 'boolean') {
+        return !!body.reachable;
+      }
+    } catch (_) {
+      // Fall back to browser direct probe when backend probe is temporarily unavailable.
+    }
     for (let i = 0; i < retries; i += 1) {
       const controller = new AbortController();
       const timer = setTimeout(() => {
@@ -1468,6 +1501,36 @@
   function isLoopbackHostname(hostname) {
     const host = toSafeString(hostname).toLowerCase();
     return host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  }
+
+  function isPrivateIpv4Hostname(hostname) {
+    const host = toSafeString(hostname).toLowerCase();
+    return (
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+    );
+  }
+
+  function extractHostnameFromUrl(rawUrl) {
+    const text = toSafeString(rawUrl);
+    if (!text) return '';
+    try {
+      const u = new URL(text, window.location.origin);
+      if (!/^https?:$/i.test(u.protocol)) return '';
+      return toSafeString(u.hostname).toLowerCase();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function isLikelyPublicWebSessionUrl(rawUrl, device) {
+    const host = extractHostnameFromUrl(rawUrl);
+    if (!host) return false;
+    if (isLoopbackHostname(host) || isPrivateIpv4Hostname(host)) return false;
+    const deviceLanHost = extractHostnameFromUrl(device && device.lanUrl);
+    if (deviceLanHost && host === deviceLanHost) return false;
+    return true;
   }
 
   function normalizeRustDeskWebEmbedUrl(rawUrl) {
@@ -2583,8 +2646,18 @@
         activateSession(session.id);
       }
       const hasError = session.loadingEl && session.loadingEl.dataset && session.loadingEl.dataset.error === '1';
-      if (session.mode !== targetMode || forceReconnect || hasError) {
-        await switchSessionMode(session.id, targetMode, { forceReconnect: forceReconnect || hasError });
+      const shouldRefreshForLanUpgrade = (
+        !forceReconnect &&
+        !hasError &&
+        targetMode === 'web' &&
+        toSafeString(device.lanUrl) &&
+        !isLocalDevice(device) &&
+        isLikelyPublicWebSessionUrl(session.url, device)
+      );
+      if (session.mode !== targetMode || forceReconnect || hasError || shouldRefreshForLanUpgrade) {
+        await switchSessionMode(session.id, targetMode, {
+          forceReconnect: forceReconnect || hasError || shouldRefreshForLanUpgrade
+        });
       } else {
         activateSession(session.id);
       }
@@ -3157,7 +3230,7 @@
   }
 
   async function init() {
-    if (isEmbeddedMecoWindow()) {
+    if (isEmbeddedMecoWindow() && !isLikelyMobileH5()) {
       hideRemoteDockUiForEmbed();
       return;
     }

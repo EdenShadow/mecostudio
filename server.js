@@ -1432,6 +1432,34 @@ function normalizeHistoryFiles(files) {
     .slice(0, ATTACHMENT_MAX_FILES_PER_MESSAGE);
 }
 
+function normalizeExecutionEventItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const code = typeof item.code === 'string' ? item.code.trim() : '';
+  const label = typeof item.label === 'string' ? item.label.trim() : '';
+  const detail = typeof item.detail === 'string' ? item.detail.trim() : '';
+  if (!code && !label && !detail) return null;
+  const source = typeof item.source === 'string' ? item.source.trim() : '';
+  const agentId = typeof item.agentId === 'string' ? item.agentId.trim() : '';
+  const senderName = typeof item.senderName === 'string' ? item.senderName.trim() : '';
+  return {
+    code: code || undefined,
+    label: label || undefined,
+    detail: detail || undefined,
+    source: source || undefined,
+    agentId: agentId || undefined,
+    senderName: senderName || undefined,
+    timestamp: typeof item.timestamp === 'string' ? item.timestamp : new Date().toISOString()
+  };
+}
+
+function normalizeExecutionEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return [];
+  return events
+    .map(normalizeExecutionEventItem)
+    .filter(Boolean)
+    .slice(-120);
+}
+
 function buildPublicUploadUrl(filePath) {
   const source = typeof filePath === 'string' ? filePath.trim() : '';
   if (!source) return '';
@@ -1490,10 +1518,20 @@ function normalizeAgentToolsHistoryItem(item) {
   const role = item.role === 'assistant' ? 'assistant' : (item.role === 'user' ? 'user' : null);
   const content = typeof item.content === 'string' ? item.content : '';
   if (!role || !content.trim()) return null;
+  const senderName = typeof item.senderName === 'string'
+    ? item.senderName.trim()
+    : (typeof item.agentName === 'string' ? item.agentName.trim() : '');
+  const senderAgentId = typeof item.agentId === 'string' ? item.agentId.trim() : '';
+  const reasoning = typeof item.reasoning === 'string' ? item.reasoning : '';
+  const executionEvents = normalizeExecutionEvents(item.executionEvents || item.events);
   const files = normalizeHistoryFiles(item.files);
   return {
     role,
     content,
+    senderName: senderName || undefined,
+    agentId: senderAgentId || undefined,
+    reasoning: reasoning || undefined,
+    executionEvents: executionEvents.length > 0 ? executionEvents : undefined,
     files: files.length > 0 ? files : undefined,
     timestamp: typeof item.timestamp === 'string' ? item.timestamp : new Date().toISOString()
   };
@@ -1532,15 +1570,32 @@ function saveAgentToolsHistory(agentId) {
   }
 }
 
-function appendAgentToolsHistory(agentId, role, content, files = []) {
+function appendAgentToolsHistory(agentId, role, content, filesOrOptions = [], extraOptions = null) {
   const normalizedRole = role === 'assistant' ? 'assistant' : (role === 'user' ? 'user' : null);
   const normalizedContent = typeof content === 'string' ? content.trim() : '';
   if (!normalizedRole || !normalizedContent) return;
-  const normalizedFiles = normalizeHistoryFiles(files);
+  let options = {};
+  let rawFiles = [];
+  if (Array.isArray(filesOrOptions)) {
+    rawFiles = filesOrOptions;
+    options = (extraOptions && typeof extraOptions === 'object') ? extraOptions : {};
+  } else if (filesOrOptions && typeof filesOrOptions === 'object') {
+    options = filesOrOptions;
+    rawFiles = Array.isArray(filesOrOptions.files) ? filesOrOptions.files : [];
+  }
+  const normalizedFiles = normalizeHistoryFiles(rawFiles);
+  const senderName = typeof options.senderName === 'string' ? options.senderName.trim() : '';
+  const senderAgentId = typeof options.agentId === 'string' ? options.agentId.trim() : '';
+  const reasoning = typeof options.reasoning === 'string' ? options.reasoning : '';
+  const executionEvents = normalizeExecutionEvents(options.executionEvents || options.events);
   const history = getAgentToolsHistory(agentId);
   history.push({
     role: normalizedRole,
     content: normalizedContent,
+    senderName: senderName || undefined,
+    agentId: senderAgentId || undefined,
+    reasoning: reasoning || undefined,
+    executionEvents: executionEvents.length > 0 ? executionEvents : undefined,
     files: normalizedFiles.length > 0 ? normalizedFiles : undefined,
     timestamp: new Date().toISOString()
   });
@@ -1664,6 +1719,50 @@ function stripNextDirectives(text) {
     .trim();
 }
 
+function buildAgentToolsCollaborationMemoryBlock(agentId, options = {}) {
+  const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() : '';
+  if (!normalizedAgentId) return '';
+  const history = getAgentToolsHistory(normalizedAgentId);
+  if (!Array.isArray(history) || history.length === 0) return '';
+
+  const maxCount = Number.isFinite(Number(options.maxCount)) && Number(options.maxCount) > 0
+    ? Math.max(1, Math.floor(Number(options.maxCount)))
+    : 4;
+  const maxCharsPerItem = Number.isFinite(Number(options.maxCharsPerItem)) && Number(options.maxCharsPerItem) > 0
+    ? Math.max(80, Math.floor(Number(options.maxCharsPerItem)))
+    : 520;
+
+  const collected = [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i];
+    if (!item || item.role !== 'assistant') continue;
+    const senderAgentId = typeof item.agentId === 'string' ? item.agentId.trim() : '';
+    if (!senderAgentId || senderAgentId === normalizedAgentId) continue;
+    const rawContent = typeof item.content === 'string' ? item.content.trim() : '';
+    if (!rawContent) continue;
+    const senderName = (typeof item.senderName === 'string' && item.senderName.trim())
+      ? item.senderName.trim()
+      : (getAgentDisplayName(senderAgentId) || senderAgentId);
+    const collapsed = rawContent.replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    const shortContent = collapsed.length > maxCharsPerItem
+      ? `${collapsed.slice(0, Math.max(60, maxCharsPerItem - 1))}…`
+      : collapsed;
+    collected.push({
+      senderName,
+      senderAgentId,
+      content: shortContent
+    });
+    if (collected.length >= maxCount) break;
+  }
+  if (collected.length === 0) return '';
+
+  const lines = collected
+    .reverse()
+    .map((item, idx) => `${idx + 1}. ${item.senderName}\n${item.content}`);
+
+  return `[Collaboration Memory]\n以下是本会话里其他协作智能体的最近回复，请将其视为当前上下文的一部分：\n\n${lines.join('\n\n')}\n\n[Instruction: If the user asks what another agent said (e.g. “比尔说了什么”), answer strictly based on this collaboration memory instead of saying you did not receive it.]`;
+}
+
 function escapeRegexLiteral(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -1758,6 +1857,35 @@ function ensureAllRequiredNextDirectives(content, requiredNames) {
 
   const appended = missingNames.map((name) => `{next: "${name}"}`).join('\n');
   return `${source}\n\n${appended}`.trim();
+}
+
+function listKnownAgentIdsForRouting() {
+  const ids = [];
+  const seen = new Set();
+  const push = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  };
+
+  Object.keys(AGENTS || {}).forEach(push);
+  (Array.isArray(activeAgentIds) ? activeAgentIds : []).forEach(push);
+  try {
+    Object.keys(scanOpenClawAgents() || {}).forEach(push);
+  } catch (_) {}
+
+  return ids;
+}
+
+function resolveGlobalDesignatedAgentsInDirectiveOrder(messageText, options = {}) {
+  const exclude = new Set(
+    (Array.isArray(options.excludeAgentIds) ? options.excludeAgentIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+  const candidates = listKnownAgentIdsForRouting().filter((id) => !exclude.has(id));
+  return resolveChannelDesignatedAgentsInDirectiveOrder(messageText, candidates);
 }
 
 function resolveChannelMentionedAgents(messageText, channelMembers) {
@@ -1863,6 +1991,7 @@ function normalizeAgentChannelHistoryItem(item) {
     ? item.senderName.trim()
     : (typeof item.agentName === 'string' ? item.agentName.trim() : '');
   const reasoning = typeof item.reasoning === 'string' ? item.reasoning : '';
+  const executionEvents = normalizeExecutionEvents(item.executionEvents || item.events);
   const files = normalizeHistoryFiles(item.files);
   return {
     role,
@@ -1870,6 +1999,7 @@ function normalizeAgentChannelHistoryItem(item) {
     agentId: agentId || undefined,
     senderName: senderName || undefined,
     reasoning: reasoning || undefined,
+    executionEvents: executionEvents.length > 0 ? executionEvents : undefined,
     files: files.length > 0 ? files : undefined,
     timestamp: typeof item.timestamp === 'string' ? item.timestamp : new Date().toISOString()
   };
@@ -4201,6 +4331,70 @@ function normalizeRemoteHttpBase(raw, defaultProtocol = 'https://') {
   } catch (_) {
     return '';
   }
+}
+
+function normalizeRemoteProbeUrl(raw, defaultProtocol = 'http://') {
+  const value = remoteSafeString(raw);
+  if (!value) return '';
+  const candidate = /^https?:\/\//i.test(value) ? value : `${defaultProtocol}${value}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!/^https?:$/i.test(parsed.protocol)) return '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+async function probeRemoteLanReachable(rawUrl, options = {}) {
+  const target = normalizeRemoteProbeUrl(rawUrl, 'http://');
+  if (!target) {
+    return {
+      reachable: false,
+      url: '',
+      status: 0,
+      error: 'invalid_url'
+    };
+  }
+
+  const timeoutMs = Math.max(250, Math.min(5000, Number(options.timeoutMs) || 1200));
+  const retries = Math.max(1, Math.min(5, Number(options.retries) || 1));
+  let lastError = '';
+  let lastStatus = 0;
+
+  for (let i = 0; i < retries; i += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      try { controller.abort(); } catch (_) {}
+    }, timeoutMs);
+    try {
+      const response = await fetch(target, {
+        method: 'GET',
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      lastStatus = Number(response && response.status) || 0;
+      return {
+        reachable: true,
+        url: target,
+        status: lastStatus,
+        error: ''
+      };
+    } catch (e) {
+      lastError = remoteSafeString(e && e.message) || 'probe_failed';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return {
+    reachable: false,
+    url: target,
+    status: lastStatus,
+    error: lastError || 'probe_failed'
+  };
 }
 
 const RUSTDESK_WEB_PROXY_BASE_URL = 'https://rustdesk.com/web/';
@@ -6558,6 +6752,29 @@ app.post('/api/remote/devices/:id/mesh/auto-discover', async (req, res) => {
     code: 'meshcentral_removed',
     error: 'MeshCentral 自动发现已移除，请改用 RustDesk ID/链接绑定。'
   });
+});
+
+app.post('/api/remote/probe-lan', async (req, res) => {
+  try {
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const rawUrl = remoteSafeString(payload.url || payload.lanUrl || '');
+    if (!rawUrl) {
+      return res.status(400).json({
+        success: false,
+        code: 'url_required',
+        error: 'url is required'
+      });
+    }
+    const timeoutMs = Math.max(250, Math.min(5000, Number(payload.timeoutMs) || 1200));
+    const retries = Math.max(1, Math.min(5, Number(payload.retries) || 1));
+    const result = await probeRemoteLanReachable(rawUrl, { timeoutMs, retries });
+    return res.json({
+      success: true,
+      ...result
+    });
+  } catch (e) {
+    return sendRemoteControlError(res, e);
+  }
 });
 
 app.post('/api/remote/devices/:id/resolve', (req, res) => {
@@ -14964,12 +15181,37 @@ wss.on('connection', (ws, req) => {
               console.log(`[AgentChannels] 🎯 {next} 命中，仅向指定成员发送: ${designatedByNextMembers.join(', ')}`);
           }
 
-          const runChannelAgentTurn = async ({ targetAgentId, targetAgentName, inputText, multimodalMessages = null, postProcessContent = null }) => {
+          const runChannelAgentTurn = async ({ targetAgentId, targetAgentName, inputText, multimodalMessages = null, postProcessContent = null, executionPreface = [] }) => {
               const safeAgentId = targetAgentId;
               const safeAgentName = targetAgentName || getAgentDisplayName(targetAgentId) || targetAgentId;
               let fullResponse = '';
               let fullReasoning = '';
               let hasStartedStreaming = false;
+              const executionEvents = [];
+              const emitExecutionEvent = (payload) => {
+                  const normalized = normalizeExecutionEventItem({
+                      ...(payload && typeof payload === 'object' ? payload : {}),
+                      source: 'agent-channel',
+                      agentId: safeAgentId,
+                      senderName: safeAgentName
+                  });
+                  if (!normalized) return;
+                  executionEvents.push(normalized);
+                  if (executionEvents.length > 120) {
+                      executionEvents.splice(0, executionEvents.length - 120);
+                  }
+                  if (ws.readyState !== WebSocket.OPEN) return;
+                  const isNew = !hasStartedStreaming;
+                  hasStartedStreaming = true;
+                  ws.send(JSON.stringify({
+                      type: 'channel_execution_event',
+                      channelId: activeChannel.id,
+                      agentId: safeAgentId,
+                      agentName: safeAgentName,
+                      event: normalized,
+                      isNew
+                  }));
+              };
               let agentBusyMarked = false;
               const markAgentBusyStart = () => {
                   if (agentBusyMarked) return;
@@ -14984,6 +15226,7 @@ wss.on('connection', (ws, req) => {
                   agentBusyMarked = false;
               };
               markAgentBusyStart();
+              (Array.isArray(executionPreface) ? executionPreface : []).forEach((evt) => emitExecutionEvent(evt));
 
               await new Promise((resolveAgent) => {
                   const onChunk = (chunk) => {
@@ -15034,6 +15277,11 @@ wss.on('connection', (ws, req) => {
                   const onDone = () => {
                       ws._agentChannelStreamHandle = null;
                       markAgentBusyEnd();
+                      emitExecutionEvent({
+                          code: 'stream_done',
+                          label: '执行完成',
+                          detail: '流式响应已结束'
+                      });
                       if (typeof postProcessContent === 'function') {
                           try {
                               const patched = postProcessContent(fullResponse);
@@ -15070,7 +15318,8 @@ wss.on('connection', (ws, req) => {
                           content,
                           agentId: safeAgentId,
                           senderName: safeAgentName,
-                          reasoning: fullReasoning.trim()
+                          reasoning: fullReasoning.trim(),
+                          executionEvents
                       });
                       if (ws.readyState === WebSocket.OPEN) {
                           ws.send(JSON.stringify({
@@ -15086,6 +15335,11 @@ wss.on('connection', (ws, req) => {
                   const onError = (error) => {
                       ws._agentChannelStreamHandle = null;
                       markAgentBusyEnd();
+                      emitExecutionEvent({
+                          code: 'stream_error',
+                          label: '执行失败',
+                          detail: error && error.message ? String(error.message) : 'unknown error'
+                      });
                       const errorText = `[Error: ${error.message}]`;
                       fullResponse = errorText;
                       if (ws.readyState === WebSocket.OPEN) {
@@ -15108,12 +15362,18 @@ wss.on('connection', (ws, req) => {
                           role: 'assistant',
                           content: errorText,
                           agentId: safeAgentId,
-                          senderName: safeAgentName
+                          senderName: safeAgentName,
+                          executionEvents
                       });
                       resolveAgent();
                   };
 
                   if (multimodalMessages) {
+                      emitExecutionEvent({
+                          code: 'gateway_http',
+                          label: '执行通道',
+                          detail: 'Gateway HTTP SSE（reasoning enabled）'
+                      });
                       const controller = new AbortController();
                       ws._agentChannelStreamHandle = { abort: () => controller.abort() };
                       streamOpenClawHTTP(
@@ -15132,19 +15392,25 @@ wss.on('connection', (ws, req) => {
                               messages: multimodalMessages,
                               model: `openclaw:${safeAgentId}`,
                               gatewayAgentId: safeAgentId,
-                              sessionKey: `agent:${safeAgentId}:main`
+                              sessionKey: `agent:${safeAgentId}:main`,
+                              reasoningEnabled: true
                           }
                       );
                       return;
                   }
 
+                  emitExecutionEvent({
+                      code: 'cli_local',
+                      label: '执行通道',
+                      detail: 'OpenClaw CLI 本地流式（thinking=high）'
+                  });
                   ws._agentChannelStreamHandle = openclaw.sendMessageStream(
                       safeAgentId,
                       inputText,
                       onChunk,
                       onDone,
                       onError,
-                      { thinking: 'medium' }
+                      { thinking: 'high' }
                   );
               });
 
@@ -15176,11 +15442,39 @@ wss.on('connection', (ws, req) => {
                   const multimodalMessages = hasMultimodalAttachments
                       ? buildOpenClawMultimodalMessages(agentInputText, binaryUploads, savedFiles, systemPaths)
                       : null;
+              const executionPreface = [];
+              if (routeByMention) {
+                  executionPreface.push({
+                      code: 'route',
+                      label: '路由决策',
+                      detail: `命中 @mention，仅执行: ${designatedByMentionMembers.join(', ')}`
+                  });
+              } else if (routeByNext) {
+                  executionPreface.push({
+                      code: 'route',
+                      label: '路由决策',
+                      detail: `命中 {next}，仅执行: ${designatedByNextMembers.join(', ')}`
+                  });
+              } else {
+                  executionPreface.push({
+                      code: 'route',
+                      label: '路由决策',
+                      detail: `默认执行当前频道成员: ${channelMembers.join(', ')}`
+                  });
+              }
+              if (requiredHandoffTargetNames.length > 0) {
+                  executionPreface.push({
+                      code: 'handoff_guard',
+                      label: '转发约束',
+                      detail: `强制保留 {next}: ${requiredHandoffTargetNames.join(', ')}`
+                  });
+              }
               const result = await runChannelAgentTurn({
                   targetAgentId: agentId,
                   targetAgentName: agentName,
                   inputText: agentInputText,
                   multimodalMessages,
+                  executionPreface,
                   postProcessContent: requiredHandoffTargetNames.length > 0
                       ? (rawContent) => ensureAllRequiredNextDirectives(rawContent, requiredHandoffTargetNames)
                       : (routeByMention ? (rawContent) => {
@@ -15272,6 +15566,7 @@ wss.on('connection', (ws, req) => {
       }
       ws._agentToolsAgentId = agentId;
       ws._agentToolsBusyMarked = false;
+      ws._agentToolsRelayBusyAgents = new Set();
       trackAgentToolsSocket(agentId, ws);
       
       console.log(`[AgentTools] Connected to ${agentId}`);
@@ -15290,9 +15585,6 @@ wss.on('connection', (ws, req) => {
                   const binaryUploads = uploads.filter((f) => f && typeof f.data === 'string' && /^data:/i.test(f.data));
                   const hasMultimodalAttachments = binaryUploads.length > 0 || systemPaths.length > 0;
                   const { savedFiles, fileNames } = saveUploadedFilesAndBuildContext(binaryUploads);
-                  const multimodalMessages = hasMultimodalAttachments
-                      ? buildOpenClawMultimodalMessages(userText, binaryUploads, savedFiles, systemPaths)
-                      : null;
                   if (uploads.length > 0) {
                       const attachmentContext = buildOpenClawAttachmentContext(savedFiles, systemPaths);
                       if (attachmentContext) {
@@ -15313,6 +15605,38 @@ wss.on('connection', (ws, req) => {
                       }
                   }
 
+                  const routeCandidates = listKnownAgentIdsForRouting().filter((id) => id && id !== agentId);
+                  const userRequestedHandoffTargets = resolveGlobalDesignatedAgentsInDirectiveOrder(finalText, {
+                      excludeAgentIds: [agentId]
+                  });
+                  const userMentionedHandoffTargets = resolveChannelMentionedAgents(finalText, routeCandidates);
+                  const mergedHandoffTargets = Array.from(new Set([
+                      ...userRequestedHandoffTargets,
+                      ...userMentionedHandoffTargets
+                  ]));
+                  const requiredHandoffTargetNames = userRequestedHandoffTargets
+                      .map((id) => getAgentDisplayName(id) || id)
+                      .filter(Boolean);
+                  if (requiredHandoffTargetNames.length === 0 && mergedHandoffTargets.length > 0) {
+                      mergedHandoffTargets.forEach((targetId) => {
+                          const targetName = getAgentDisplayName(targetId) || targetId;
+                          if (targetName) requiredHandoffTargetNames.push(targetName);
+                      });
+                  }
+                  if (requiredHandoffTargetNames.length > 0) {
+                      finalText = `${finalText}\n\n[System Instruction: The user requested a multi-target handoff. You MUST include ALL required {next} directives in your final reply (one per line, exact format, no omissions):\n${requiredHandoffTargetNames.map((name) => `{next: "${name}"`).join('\n')}\nDo not keep only one target. Keep all required targets.]`;
+                  }
+                  const collaborationMemory = buildAgentToolsCollaborationMemoryBlock(agentId, {
+                      maxCount: 4,
+                      maxCharsPerItem: 520
+                  });
+                  if (collaborationMemory) {
+                      finalText = `${collaborationMemory}\n\n${finalText}`;
+                  }
+                  const multimodalMessages = hasMultimodalAttachments
+                      ? buildOpenClawMultimodalMessages(finalText, binaryUploads, savedFiles, systemPaths)
+                      : null;
+
                   let historyUserText = typeof userText === 'string' ? userText.trim() : '';
                   if (!historyUserText && (uploads.length > 0 || systemPaths.length > 0)) {
                       if (systemPaths.length > 0) {
@@ -15327,12 +15651,41 @@ wss.on('connection', (ws, req) => {
 
                   // Stream Response (OpenClaw CLI streaming)
                   let fullResponse = '';
+                  let fullReasoning = '';
                   let hasStartedStreaming = false;
-                  const thinkingLevel = (typeof data.thinkingLevel === 'string' && data.thinkingLevel.trim()) ? data.thinkingLevel.trim() : 'medium';
+                  const thinkingLevel = (typeof data.thinkingLevel === 'string' && data.thinkingLevel.trim()) ? data.thinkingLevel.trim() : 'high';
+                  const primaryExecutionEvents = [];
+                  const emitPrimaryExecutionEvent = (payload) => {
+                      const normalized = normalizeExecutionEventItem({
+                          ...(payload && typeof payload === 'object' ? payload : {}),
+                          source: 'agent-tools',
+                          agentId,
+                          senderName: getAgentDisplayName(agentId) || agentId
+                      });
+                      if (!normalized) return;
+                      primaryExecutionEvents.push(normalized);
+                      if (primaryExecutionEvents.length > 120) {
+                          primaryExecutionEvents.splice(0, primaryExecutionEvents.length - 120);
+                      }
+                      if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                      const isNew = !hasStartedStreaming;
+                      hasStartedStreaming = true;
+                      ws.send(JSON.stringify({
+                          type: 'execution_event',
+                          event: normalized,
+                          isNew
+                      }));
+                  };
 
                   // 新请求进来时，中断之前仍在流式中的请求，避免串流互相覆盖
                   if (ws._agentToolsStreamHandle && typeof ws._agentToolsStreamHandle.abort === 'function') {
                       try { ws._agentToolsStreamHandle.abort(); } catch(e) {}
+                  }
+                  if (ws._agentToolsRelayBusyAgents && ws._agentToolsRelayBusyAgents.size > 0) {
+                      for (const busyAgentId of ws._agentToolsRelayBusyAgents) {
+                          markAgentRuntimeBusyEnd(busyAgentId);
+                      }
+                      ws._agentToolsRelayBusyAgents.clear();
                   }
                   if (ws._agentToolsBusyMarked) {
                       markAgentRuntimeBusyEnd(agentId);
@@ -15348,6 +15701,270 @@ wss.on('connection', (ws, req) => {
                       streamOptions.thinking = thinkingLevel;
                   }
 
+                  if (userRequestedHandoffTargets.length > 0) {
+                      emitPrimaryExecutionEvent({
+                          code: 'route',
+                          label: '路由决策',
+                          detail: `命中 {next}: ${userRequestedHandoffTargets.join(', ')}`
+                      });
+                  } else if (userMentionedHandoffTargets.length > 0) {
+                      emitPrimaryExecutionEvent({
+                          code: 'route',
+                          label: '路由决策',
+                          detail: `命中 @mention: ${userMentionedHandoffTargets.join(', ')}`
+                      });
+                  } else {
+                      emitPrimaryExecutionEvent({
+                          code: 'route',
+                          label: '路由决策',
+                          detail: '默认当前会话智能体执行'
+                      });
+                  }
+                  emitPrimaryExecutionEvent({
+                      code: 'thinking_level',
+                      label: '思考等级',
+                      detail: `thinking=${thinkingLevel || 'off'}`
+                  });
+
+                  const runRelayTurn = async (targetAgentId, relaySourceName, relayContent, relayOptions = {}) => {
+                      const targetId = typeof targetAgentId === 'string' ? targetAgentId.trim() : '';
+                      const relayMessage = typeof relayContent === 'string' ? relayContent.trim() : '';
+                      if (!targetId || !relayMessage) return;
+
+                      const targetName = getAgentDisplayName(targetId) || targetId;
+                      const customInput = relayOptions && typeof relayOptions.customInput === 'string'
+                          ? relayOptions.customInput.trim()
+                          : '';
+                      const safeRelaySourceName = relaySourceName.replace(/"/g, '\\"');
+                      const relayInput = customInput
+                          || `${relaySourceName} 给你转达了一条消息，请直接回应ta：\n${relayMessage}\n\n[System Instruction: This is a routed handoff triggered by {next}. The {next} directive has been removed before forwarding. Reply naturally. If you need another collaborator, you MAY append one or more directives at the end (one per line): {next: "Agent Name"}. If you think ${relaySourceName} should continue from your answer, you MAY append this as the last line: {next: "${safeRelaySourceName}"}. This is optional and not mandatory.]`;
+                      const startCode = (relayOptions && typeof relayOptions.startCode === 'string' && relayOptions.startCode.trim())
+                          ? relayOptions.startCode.trim()
+                          : 'relay_start';
+                      const startLabel = (relayOptions && typeof relayOptions.startLabel === 'string' && relayOptions.startLabel.trim())
+                          ? relayOptions.startLabel.trim()
+                          : '转发执行';
+                      const startDetail = (relayOptions && typeof relayOptions.startDetail === 'string' && relayOptions.startDetail.trim())
+                          ? relayOptions.startDetail.trim()
+                          : `已转发给 ${targetName}`;
+                      const doneCode = (relayOptions && typeof relayOptions.doneCode === 'string' && relayOptions.doneCode.trim())
+                          ? relayOptions.doneCode.trim()
+                          : 'relay_done';
+                      const doneLabel = (relayOptions && typeof relayOptions.doneLabel === 'string' && relayOptions.doneLabel.trim())
+                          ? relayOptions.doneLabel.trim()
+                          : '转发完成';
+                      const doneDetail = (relayOptions && typeof relayOptions.doneDetail === 'string' && relayOptions.doneDetail.trim())
+                          ? relayOptions.doneDetail.trim()
+                          : `来自 ${targetName} 的回复已完成`;
+                      let relayResponse = '';
+                      let relayReasoning = '';
+                      let relayStarted = false;
+                      const relayExecutionEvents = [];
+                      const emitRelayExecution = (payload) => {
+                          const normalized = normalizeExecutionEventItem({
+                              ...(payload && typeof payload === 'object' ? payload : {}),
+                              source: 'relay',
+                              agentId: targetId,
+                              senderName: targetName
+                          });
+                          if (!normalized) return;
+                          relayExecutionEvents.push(normalized);
+                          if (relayExecutionEvents.length > 120) {
+                              relayExecutionEvents.splice(0, relayExecutionEvents.length - 120);
+                          }
+                          if (ws.readyState !== WebSocket.OPEN || ws._agentToolsActiveRequestId !== requestId) return;
+                          const isNew = !relayStarted;
+                          relayStarted = true;
+                          ws.send(JSON.stringify({
+                              type: 'execution_event',
+                              event: normalized,
+                              senderName: targetName,
+                              senderAgentId: targetId,
+                              isNew
+                          }));
+                      };
+                      let relayBusyMarked = false;
+                      const markRelayBusyStart = () => {
+                          if (relayBusyMarked) return;
+                          markAgentRuntimeBusyStart(targetId);
+                          if (ws._agentToolsRelayBusyAgents && typeof ws._agentToolsRelayBusyAgents.add === 'function') {
+                              ws._agentToolsRelayBusyAgents.add(targetId);
+                          }
+                          relayBusyMarked = true;
+                      };
+                      const markRelayBusyEnd = () => {
+                          if (!relayBusyMarked) return;
+                          markAgentRuntimeBusyEnd(targetId);
+                          if (ws._agentToolsRelayBusyAgents && typeof ws._agentToolsRelayBusyAgents.delete === 'function') {
+                              ws._agentToolsRelayBusyAgents.delete(targetId);
+                          }
+                          relayBusyMarked = false;
+                      };
+                      markRelayBusyStart();
+                      emitRelayExecution({
+                          code: startCode,
+                          label: startLabel,
+                          detail: startDetail
+                      });
+                      emitRelayExecution({
+                          code: 'cli_local',
+                          label: '执行通道',
+                          detail: 'OpenClaw CLI 本地流式（thinking=high）'
+                      });
+
+                      const relayResult = await new Promise((resolveRelay) => {
+                          const emitRelayText = (content) => {
+                              if (typeof content !== 'string' || !content) return;
+                              const isNew = !relayStarted;
+                              relayStarted = true;
+                              relayResponse += content;
+                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
+                                  ws.send(JSON.stringify({
+                                      type: 'relay_text_stream',
+                                      relayAgentId: targetId,
+                                      relayAgentName: targetName,
+                                      content,
+                                      isNew
+                                  }));
+                              }
+                          };
+                          const emitRelayReasoning = (content) => {
+                              if (typeof content !== 'string' || !content) return;
+                              const isNew = !relayStarted;
+                              relayStarted = true;
+                              relayReasoning += content;
+                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
+                                  ws.send(JSON.stringify({
+                                      type: 'relay_reasoning_stream',
+                                      relayAgentId: targetId,
+                                      relayAgentName: targetName,
+                                      content,
+                                      isNew
+                                  }));
+                              }
+                          };
+                          const onRelayChunk = (chunk) => {
+                              if (ws._agentToolsActiveRequestId !== requestId) return;
+                              if (typeof chunk === 'string') {
+                                  emitRelayText(chunk);
+                                  return;
+                              }
+                              if (!chunk || typeof chunk !== 'object') return;
+                              if (chunk.type === 'reasoning_stream') {
+                                  emitRelayReasoning(chunk.content);
+                                  return;
+                              }
+                              if (chunk.type === 'text_stream') {
+                                  emitRelayText(chunk.content);
+                              }
+                          };
+                          const onRelayDone = () => {
+                              ws._agentToolsStreamHandle = null;
+                              markRelayBusyEnd();
+                              if (ws._agentToolsActiveRequestId !== requestId) {
+                                  resolveRelay({
+                                      targetId,
+                                      targetName,
+                                      output: '',
+                                      rawOutput: '',
+                                      reasoning: '',
+                                      forwardedTargets: []
+                                  });
+                                  return;
+                              }
+                              emitRelayExecution({
+                                  code: doneCode,
+                                  label: doneLabel,
+                                  detail: doneDetail
+                              });
+                              const rawRelay = relayResponse.trim() || '[No response]';
+                              const cleanedRelay = stripNextDirectives(rawRelay);
+                              const relayOutput = cleanedRelay && cleanedRelay.trim()
+                                  ? cleanedRelay.trim()
+                                  : rawRelay;
+                              const relayForwardedTargets = rawRelay && rawRelay !== '[No response]'
+                                  ? resolveGlobalDesignatedAgentsInDirectiveOrder(rawRelay, {
+                                      excludeAgentIds: [targetId]
+                                  })
+                                  : [];
+                              if (relayForwardedTargets.length > 0) {
+                                  emitRelayExecution({
+                                      code: 'relay_handoff_next',
+                                      label: '继续转发',
+                                      detail: `{next}: ${relayForwardedTargets.join(', ')}`
+                                  });
+                              }
+                              appendAgentToolsHistory(agentId, 'assistant', relayOutput, {
+                                  agentId: targetId,
+                                  senderName: targetName,
+                                  reasoning: relayReasoning.trim(),
+                                  executionEvents: relayExecutionEvents
+                              });
+                              resolveRelay({
+                                  targetId,
+                                  targetName,
+                                  output: relayOutput,
+                                  rawOutput: rawRelay,
+                                  reasoning: relayReasoning.trim(),
+                                  forwardedTargets: relayForwardedTargets
+                              });
+                          };
+                          const onRelayError = (error) => {
+                              ws._agentToolsStreamHandle = null;
+                              markRelayBusyEnd();
+                              if (ws._agentToolsActiveRequestId !== requestId) {
+                                  resolveRelay({
+                                      targetId,
+                                      targetName,
+                                      output: '',
+                                      rawOutput: '',
+                                      reasoning: '',
+                                      forwardedTargets: []
+                                  });
+                                  return;
+                              }
+                              const errorText = `[Relay Error ${targetName}: ${error.message}]`;
+                              emitRelayExecution({
+                                  code: 'relay_error',
+                                  label: '转发失败',
+                                  detail: error && error.message ? String(error.message) : 'unknown error'
+                              });
+                              if (ws.readyState === WebSocket.OPEN) {
+                                  ws.send(JSON.stringify({
+                                      type: 'relay_text_stream',
+                                      relayAgentId: targetId,
+                                      relayAgentName: targetName,
+                                      content: errorText,
+                                      isNew: !relayStarted
+                                  }));
+                              }
+                              appendAgentToolsHistory(agentId, 'assistant', errorText, {
+                                  agentId: targetId,
+                                  senderName: targetName,
+                                  executionEvents: relayExecutionEvents
+                              });
+                              resolveRelay({
+                                  targetId,
+                                  targetName,
+                                  output: errorText,
+                                  rawOutput: errorText,
+                                  reasoning: '',
+                                  forwardedTargets: []
+                              });
+                          };
+
+                          ws._agentToolsStreamHandle = openclaw.sendMessageStream(
+                              targetId,
+                              relayInput,
+                              onRelayChunk,
+                              onRelayDone,
+                              onRelayError,
+                              { thinking: 'high' }
+                          );
+                      });
+                      return relayResult;
+                  };
+
                   const onChunk = (chunk) => {
                           if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
                           const emitText = (content) => {
@@ -15361,6 +15978,7 @@ wss.on('connection', (ws, req) => {
                               if (typeof content !== 'string' || !content) return;
                               const isNew = !hasStartedStreaming;
                               hasStartedStreaming = true;
+                              fullReasoning += content;
                               ws.send(JSON.stringify({ type: 'reasoning_stream', content, isNew }));
                           };
 
@@ -15378,52 +15996,193 @@ wss.on('connection', (ws, req) => {
                           }
                       };
                   const onDone = () => {
-                          if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                          if (ws._agentToolsActiveRequestId !== requestId) return;
                           ws._agentToolsStreamHandle = null;
-                          ws._agentToolsActiveRequestId = null;
-                          if (ws._agentToolsBusyMarked) {
-                              markAgentRuntimeBusyEnd(agentId);
-                              ws._agentToolsBusyMarked = false;
-                          }
-                          console.log(`[AgentTools] Response complete`);
-                          if (fullResponse.trim()) {
-                              appendAgentToolsHistory(agentId, 'assistant', fullResponse);
-                          }
-                          ws.send(JSON.stringify({ type: 'stream_done' }));
-
-                          // Send state update event to refresh UI (Prompt, Skills, etc.)
-                          ws.send(JSON.stringify({ type: 'state_updated' }));
-
-                          // Generate Audio
-                          const agent = AGENTS[agentId];
-                          const voiceId = agent ? agent.voiceId : DEFAULT_VOICE_IDS[0];
-                          if (voiceId && fullResponse.trim()) {
-                              console.log(`[AgentTools] Generating audio for ${voiceId}`);
-                              generateAudioStream(fullResponse, voiceId, (audioChunk) => {
-                                  if (ws.readyState === WebSocket.OPEN) {
-                                      ws.send(JSON.stringify({ type: 'audio_stream', audio: audioChunk }));
+                          const finalizeTurn = async () => {
+                              if (ws._agentToolsActiveRequestId !== requestId) return;
+                              let primaryResponse = fullResponse.trim();
+                              const primaryReasoning = fullReasoning.trim();
+                              if (requiredHandoffTargetNames.length > 0 && primaryResponse) {
+                                  const patchedResponse = ensureAllRequiredNextDirectives(primaryResponse, requiredHandoffTargetNames);
+                                  if (patchedResponse && patchedResponse !== primaryResponse) {
+                                      const appendedDelta = patchedResponse.startsWith(primaryResponse)
+                                          ? patchedResponse.slice(primaryResponse.length)
+                                          : `\n\n${patchedResponse}`;
+                                      if (appendedDelta && ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
+                                          ws.send(JSON.stringify({
+                                              type: 'text_stream',
+                                              content: appendedDelta,
+                                              isNew: !hasStartedStreaming
+                                          }));
+                                      }
+                                      fullResponse = patchedResponse;
+                                      primaryResponse = patchedResponse;
+                                      hasStartedStreaming = true;
                                   }
+                              }
+                              console.log(`[AgentTools] Response complete`);
+
+                              const forwardedTargets = primaryResponse
+                                  ? resolveGlobalDesignatedAgentsInDirectiveOrder(primaryResponse, {
+                                      excludeAgentIds: [agentId]
+                                  })
+                                  : [];
+                              const forwardedContent = stripNextDirectives(primaryResponse);
+                              if (forwardedTargets.length > 0 && forwardedContent) {
+                                  emitPrimaryExecutionEvent({
+                                      code: 'handoff_next',
+                                      label: '触发转发',
+                                      detail: `{next}: ${forwardedTargets.join(', ')}`
+                                  });
+                              }
+                              emitPrimaryExecutionEvent({
+                                  code: 'stream_done',
+                                  label: '执行完成',
+                                  detail: '主回复流式已完成'
                               });
-                          }
+                              if (primaryResponse) {
+                                  appendAgentToolsHistory(agentId, 'assistant', primaryResponse, {
+                                      reasoning: primaryReasoning,
+                                      executionEvents: primaryExecutionEvents
+                                  });
+                              }
+
+                              if (forwardedTargets.length > 0 && forwardedContent) {
+                                  const relaySourceName = getAgentDisplayName(agentId) || agentId;
+                                  console.log(`[AgentTools] ↪️ ${agentId} 回复触发 {next} 转发: ${forwardedTargets.join(', ')}`);
+                                  const relayQueue = forwardedTargets.map((targetId) => ({
+                                      targetId,
+                                      sourceName: relaySourceName,
+                                      content: forwardedContent
+                                  }));
+                                  const relayVisitCounts = new Map();
+                                  const relayHopLimit = 8;
+                                  let relayHopCount = 0;
+
+                                  while (relayQueue.length > 0 && ws._agentToolsActiveRequestId === requestId) {
+                                      if (relayHopCount >= relayHopLimit) {
+                                          emitPrimaryExecutionEvent({
+                                              code: 'relay_hop_limit',
+                                              label: '转发已限流',
+                                              detail: `超过最大转发链路 ${relayHopLimit}，已停止继续转发`
+                                          });
+                                          break;
+                                      }
+                                      const nextRelay = relayQueue.shift();
+                                      if (!nextRelay || !nextRelay.targetId || !nextRelay.content) continue;
+                                      const currentVisit = relayVisitCounts.get(nextRelay.targetId) || 0;
+                                      if (currentVisit >= 3) continue;
+                                      relayVisitCounts.set(nextRelay.targetId, currentVisit + 1);
+                                      relayHopCount += 1;
+
+                                      const relayResult = await runRelayTurn(
+                                          nextRelay.targetId,
+                                          nextRelay.sourceName,
+                                          nextRelay.content
+                                      );
+                                      if (!relayResult) continue;
+
+                                      const chainedTargets = Array.isArray(relayResult.forwardedTargets)
+                                          ? relayResult.forwardedTargets
+                                          : [];
+                                      if (chainedTargets.length === 0) continue;
+
+                                      const chainedSourceName = relayResult.targetName
+                                          || (getAgentDisplayName(relayResult.targetId) || relayResult.targetId);
+                                      const chainedContent = (typeof relayResult.output === 'string' && relayResult.output.trim() && relayResult.output.trim() !== '[No response]')
+                                          ? relayResult.output.trim()
+                                          : nextRelay.content;
+
+                                      for (const chainedTargetId of chainedTargets) {
+                                          if (ws._agentToolsActiveRequestId !== requestId) break;
+                                          if (!chainedTargetId || chainedTargetId === relayResult.targetId) continue;
+                                          if (!chainedContent) continue;
+                                          relayQueue.push({
+                                              targetId: chainedTargetId,
+                                              sourceName: chainedSourceName,
+                                              content: chainedContent
+                                          });
+                                      }
+                                  }
+                              }
+
+                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
+                                  ws.send(JSON.stringify({ type: 'stream_done' }));
+                                  // Send state update event to refresh UI (Prompt, Skills, etc.)
+                                  ws.send(JSON.stringify({ type: 'state_updated' }));
+                              }
+
+                              // Generate Audio (primary response only)
+                              const agent = AGENTS[agentId];
+                              const voiceId = agent ? agent.voiceId : DEFAULT_VOICE_IDS[0];
+                              if (voiceId && primaryResponse && ws._agentToolsActiveRequestId === requestId) {
+                                  console.log(`[AgentTools] Generating audio for ${voiceId}`);
+                                  generateAudioStream(primaryResponse, voiceId, (audioChunk) => {
+                                      if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
+                                          ws.send(JSON.stringify({ type: 'audio_stream', audio: audioChunk }));
+                                      }
+                                  });
+                              }
+                          };
+
+                          finalizeTurn().catch((error) => {
+                              console.error('[AgentTools] finalize turn error', error);
+                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
+                                  ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
+                                  ws.send(JSON.stringify({ type: 'stream_done' }));
+                              }
+                          }).finally(() => {
+                              if (ws._agentToolsActiveRequestId !== requestId) return;
+                              ws._agentToolsStreamHandle = null;
+                              ws._agentToolsActiveRequestId = null;
+                              if (ws._agentToolsRelayBusyAgents && ws._agentToolsRelayBusyAgents.size > 0) {
+                                  for (const busyAgentId of ws._agentToolsRelayBusyAgents) {
+                                      markAgentRuntimeBusyEnd(busyAgentId);
+                                  }
+                                  ws._agentToolsRelayBusyAgents.clear();
+                              }
+                              if (ws._agentToolsBusyMarked) {
+                                  markAgentRuntimeBusyEnd(agentId);
+                                  ws._agentToolsBusyMarked = false;
+                              }
+                          });
                       };
                   const onError = (error) => {
-                          if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                          if (ws._agentToolsActiveRequestId !== requestId) return;
+                          emitPrimaryExecutionEvent({
+                              code: 'stream_error',
+                              label: '执行失败',
+                              detail: error && error.message ? String(error.message) : 'unknown error'
+                          });
                           ws._agentToolsStreamHandle = null;
                           ws._agentToolsActiveRequestId = null;
+                          if (ws._agentToolsRelayBusyAgents && ws._agentToolsRelayBusyAgents.size > 0) {
+                              for (const busyAgentId of ws._agentToolsRelayBusyAgents) {
+                                  markAgentRuntimeBusyEnd(busyAgentId);
+                              }
+                              ws._agentToolsRelayBusyAgents.clear();
+                          }
                           if (ws._agentToolsBusyMarked) {
                               markAgentRuntimeBusyEnd(agentId);
                               ws._agentToolsBusyMarked = false;
                           }
-                          ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
-                          ws.send(JSON.stringify({ type: 'stream_done' }));
+                          if (ws.readyState === WebSocket.OPEN) {
+                              ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
+                              ws.send(JSON.stringify({ type: 'stream_done' }));
+                          }
                       };
 
                   if (multimodalMessages) {
+                      emitPrimaryExecutionEvent({
+                          code: 'gateway_http',
+                          label: '执行通道',
+                          detail: 'Gateway HTTP SSE（reasoning enabled）'
+                      });
                       const controller = new AbortController();
                       ws._agentToolsStreamHandle = { abort: () => controller.abort() };
                       streamOpenClawHTTP(
                           agentId,
-                          userText,
+                          finalText,
                           {
                               onText: (content) => onChunk({ type: 'text_stream', content }),
                               onReasoning: (content) => onChunk({ type: 'reasoning_stream', content }),
@@ -15437,10 +16196,16 @@ wss.on('connection', (ws, req) => {
                               messages: multimodalMessages,
                               model: `openclaw:${agentId}`,
                               gatewayAgentId: agentId,
-                              sessionKey: `agent:${agentId}:main`
+                              sessionKey: `agent:${agentId}:main`,
+                              reasoningEnabled: true
                           }
                       );
                   } else {
+                      emitPrimaryExecutionEvent({
+                          code: 'cli_local',
+                          label: '执行通道',
+                          detail: `OpenClaw CLI 本地流式（thinking=${thinkingLevel || 'off'}）`
+                      });
                       ws._agentToolsStreamHandle = openclaw.sendMessageStream(
                           agentId,
                           finalText,
@@ -15462,6 +16227,12 @@ wss.on('connection', (ws, req) => {
               ws._agentToolsStreamHandle = null;
           }
           ws._agentToolsActiveRequestId = null;
+          if (ws._agentToolsRelayBusyAgents && ws._agentToolsRelayBusyAgents.size > 0) {
+              for (const busyAgentId of ws._agentToolsRelayBusyAgents) {
+                  markAgentRuntimeBusyEnd(busyAgentId);
+              }
+              ws._agentToolsRelayBusyAgents.clear();
+          }
           if (ws._agentToolsBusyMarked) {
               markAgentRuntimeBusyEnd(agentId);
               ws._agentToolsBusyMarked = false;

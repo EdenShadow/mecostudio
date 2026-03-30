@@ -11,6 +11,21 @@
 - `bootstrap/openclaw/openclaw-agents/*/agent/*`（OpenClaw 智能体配置）
 - `bootstrap/openclaw/knowledge-rule-folders/*`（Rule 模式知识库文件夹）
 
+### 1.2 智能体白名单（强制）
+
+GitHub 仅提交以下 6 个内置智能体：
+
+- `main`
+- `gates`（比尔盖茨）
+- `hawking`（霍金）
+- `jobs`（乔布斯）
+- `kobe`（科比）
+- `munger`（芒格）
+
+说明：
+- 其他本地新建智能体属于运行态/个性化资产，不提交到 GitHub。
+- `scripts/build-bootstrap-package.sh` 默认白名单即上述 6 个（可通过 `MECO_BOOTSTRAP_AGENTS` 显式覆盖）。
+
 ### 1.1 打包依赖铁律（每次“打包/发布”都要核对）
 
 以下 6 类是强依赖，打包提交时必须逐项确认，不得漏项：

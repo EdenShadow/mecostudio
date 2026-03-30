@@ -1,6 +1,6 @@
 # Meco Studio 🚀
 
-> 文档版本：`0.0.7`
+> 文档版本：`0.0.8`
 
 ## ⚡ 一行安装 / 升级
 
@@ -326,14 +326,17 @@ bash scripts/build-bootstrap-package.sh
 - `./data/agents`
 - `~/Meco Studio/public/uploads/knowledge-rule-folders`
 
+默认仅打包并提交 6 个内置智能体：`main,gates,hawking,jobs,kobe,munger`。  
+其他本机新建智能体不会进入 GitHub（受脚本默认白名单 + `.gitignore` 保护）。
+
 然后写回 `bootstrap/openclaw/`，提交到 GitHub 后，安装/更新会自动同步下发。
 
-可选定向打包：
+可选临时覆盖白名单打包：
 
 ```bash
 MECO_BOOTSTRAP_AGENTS="main,gates,hawking,jobs,kobe,munger" \
 MECO_BOOTSTRAP_OPENCLAW_SKILLS="hot-topics,kimi-search,twitter-scraper,tikhub-api,x-grok" \
-MECO_BOOTSTRAP_CONFIG_SKILLS="hot-topics" \
+MECO_BOOTSTRAP_CONFIG_SKILLS="hot-topics,tikhub-tiktok,tikhubapi" \
 bash scripts/build-bootstrap-package.sh
 ```
 

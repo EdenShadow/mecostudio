@@ -1,16 +1,11 @@
 {
   "version": 1,
-  "createdAt": "2026-03-26T03:30:41.575Z",
+  "createdAt": "2026-03-30T06:51:19.140Z",
   "agents": [
     {
-      "id": "eden",
-      "displayName": "Eden",
-      "workspaceDirName": "workspace-eden"
-    },
-    {
-      "id": "feishu",
-      "displayName": "workspace-feishu",
-      "workspaceDirName": "workspace-feishu"
+      "id": "main",
+      "displayName": "Main",
+      "workspaceDirName": "workspace"
     },
     {
       "id": "gates",
@@ -31,11 +26,6 @@
       "id": "kobe",
       "displayName": "Kobe Bryant",
       "workspaceDirName": "workspace-kobe"
-    },
-    {
-      "id": "main",
-      "displayName": "Main",
-      "workspaceDirName": "workspace"
     },
     {
       "id": "munger",
@@ -60,7 +50,8 @@
     "config": [
       "hot-topics",
       "notebooklm-mcp-cli",
-      "tikhub-tiktok"
+      "tikhub-tiktok",
+      "tikhubapi"
     ],
     "state": {
       "doc-to-md": true,

@@ -987,6 +987,32 @@ function Copy-Overlay {
   }
 }
 
+function Sync-BootstrapSkills {
+  $bootstrapRoot = Join-Path $MecoInstallDir 'bootstrap\openclaw\skills'
+  $openclawSkillsDir = Join-Path $bootstrapRoot 'openclaw'
+  $configSkillsDir = Join-Path $bootstrapRoot 'config'
+
+  if (Test-Path $openclawSkillsDir) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $OpenclawRoot 'skills') | Out-Null
+    $dirs = Get-ChildItem -Path $openclawSkillsDir -Directory -ErrorAction SilentlyContinue
+    foreach ($dir in $dirs) {
+      $target = Join-Path (Join-Path $OpenclawRoot 'skills') $dir.Name
+      Copy-Overlay -Source $dir.FullName -Target $target
+      Write-Log "Synced OpenClaw skill: $($dir.Name)"
+    }
+  }
+
+  if (Test-Path $configSkillsDir) {
+    New-Item -ItemType Directory -Force -Path $ConfigSkillsRoot | Out-Null
+    $dirs = Get-ChildItem -Path $configSkillsDir -Directory -ErrorAction SilentlyContinue
+    foreach ($dir in $dirs) {
+      $target = Join-Path $ConfigSkillsRoot $dir.Name
+      Copy-Overlay -Source $dir.FullName -Target $target
+      Write-Log "Synced config skill: $($dir.Name)"
+    }
+  }
+}
+
 function Ensure-HotTopicsSkill {
   $hotTopicsTarget = Join-Path $ConfigSkillsRoot 'hot-topics'
   $src1 = Join-Path $MecoInstallDir 'bootstrap\openclaw\skills\config\hot-topics'
@@ -1006,6 +1032,86 @@ function Ensure-HotTopicsSkill {
   New-Item -ItemType Directory -Force -Path $ConfigSkillsRoot | Out-Null
   Copy-Overlay -Source $src -Target $hotTopicsTarget
   Write-Log "Installed hot-topics skill to $hotTopicsTarget"
+}
+
+function Ensure-TikhubAliasSkill {
+  $aliasDir = Join-Path $ConfigSkillsRoot 'tikhubapi'
+  New-Item -ItemType Directory -Force -Path $aliasDir | Out-Null
+  $skillPath = Join-Path $aliasDir 'SKILL.md'
+  $content = @'
+---
+name: tikhubapi
+description: Alias of tikhub-tiktok. Use this skill name when users ask for "tikhubapi" and route to the same TikHub social APIs.
+---
+
+# TikHub API Alias
+
+`tikhubapi` is a compatibility alias for `tikhub-tiktok`.
+
+Use:
+
+```bash
+python3 ~/.config/agents/skills/tikhub-tiktok/scripts/tiktok_api.py video_by_url "<share_url>"
+python3 ~/.config/agents/skills/tikhub-tiktok/scripts/twitter_api.py tweet "<tweet_id_or_url>"
+python3 ~/.config/agents/skills/tikhub-tiktok/scripts/youtube_api.py video_info "<video_id>"
+```
+'@
+  Set-Content -Path $skillPath -Value $content -Encoding UTF8
+  Write-Log "Ensured alias config skill: $aliasDir"
+}
+
+function Ensure-TikhubSkills {
+  $configTarget = Join-Path $ConfigSkillsRoot 'tikhub-tiktok'
+  $configSrc1 = Join-Path $MecoInstallDir 'bootstrap\openclaw\skills\config\tikhub-tiktok'
+  $configSrc2 = Join-Path $MecoInstallDir 'bootstrap\openclaw\skills\openclaw\tikhub-api'
+  $configSrc3 = Join-Path $OpenclawRoot 'skills\tikhub-api'
+  $configSrc = $null
+
+  if (Test-Path $configSrc1) { $configSrc = $configSrc1 }
+  elseif (Test-Path $configSrc2) { $configSrc = $configSrc2 }
+  elseif (Test-Path $configSrc3) { $configSrc = $configSrc3 }
+
+  if ($configSrc) {
+    New-Item -ItemType Directory -Force -Path $ConfigSkillsRoot | Out-Null
+    Copy-Overlay -Source $configSrc -Target $configTarget
+    Write-Log "Installed tikhub-tiktok skill to $configTarget"
+  }
+  else {
+    Write-Warn 'tikhub-tiktok skill source not found, skipped'
+  }
+
+  $openclawTarget = Join-Path $OpenclawRoot 'skills\tikhub-api'
+  $openclawSrc1 = Join-Path $MecoInstallDir 'bootstrap\openclaw\skills\openclaw\tikhub-api'
+  $openclawSrc2 = $configTarget
+  $openclawSrc = $null
+
+  if (Test-Path $openclawSrc1) { $openclawSrc = $openclawSrc1 }
+  elseif (Test-Path $openclawSrc2) { $openclawSrc = $openclawSrc2 }
+
+  if ($openclawSrc) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $OpenclawRoot 'skills') | Out-Null
+    Copy-Overlay -Source $openclawSrc -Target $openclawTarget
+    Write-Log "Installed tikhub-api skill to $openclawTarget"
+  }
+  else {
+    Write-Warn 'tikhub-api skill source not found, skipped'
+  }
+
+  Ensure-TikhubAliasSkill
+}
+
+function Configure-SkillRuntimeEnv {
+  $runtimeDir = Join-Path $env:USERPROFILE '.meco-studio'
+  New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
+  $envPath = Join-Path $runtimeDir 'skill-runtime.env'
+  $lines = @(
+    "TIKHUB_API_KEY=$MecoTikhubApiKey"
+    "HOT_TOPICS_KB_PATH=$HotTopicsRoot"
+    "OPENAI_API_KEY=$MecoOpenAIApiKey"
+    'KIMI_COMMAND=kimi'
+  )
+  Set-Content -Path $envPath -Value ($lines -join "`n") -Encoding UTF8
+  Write-Log "Updated skill runtime env: $envPath"
 }
 
 function Sync-OpenclawSkillSwitchesFromManifest {
@@ -1373,12 +1479,15 @@ function Main {
   Normalize-RustDeskNetwork
   Grant-RustDeskPermissions
   Ensure-HotTopicsKnowledgeBase
+  Sync-BootstrapSkills
   Ensure-HotTopicsSkill
+  Ensure-TikhubSkills
   Sync-OpenclawSkillSwitchesFromManifest
   Ensure-HotTopicsKnowledgeBase
   Install-SkillRuntimeDependencies
   Configure-KimiApiKey -KimiApiKey $MecoKimiCodingApiKey
   Configure-MecoRuntimeSettings -KimiApiKey $MecoKimiCodingApiKey -OpenclawModelApiKey $effectiveModelKey
+  Configure-SkillRuntimeEnv
   Reset-RuntimeState
   Ensure-OpenclawGateway
   Stop-ActiveRoomsIfUpdate
