@@ -9,6 +9,7 @@ import os
 import re
 import json
 import random
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from fetch_tweets import (
     sanitize_folder_name, download_image, download_video, create_1x1_cover,
     create_video_cover, get_cover_for_category, get_video_duration,
     extract_top_comments, extract_original_from_rt, extract_kimi_text_content,
-    extract_title_from_kimi_output, generate_fallback_title,
+    extract_title_from_kimi_output, generate_fallback_title, extract_tweet_meta_from_url,
     run_with_retry, HOT_TOPICS, COVER_POOL
 )
 
@@ -637,22 +638,22 @@ def process_tweet_contextual(tweet, author, api, language='zh', analyze_audio=Fa
 
 def fetch_by_url_with_context(url, api, language=None, analyze_audio=False, user_query=None):
     """Fetch single tweet by URL with user's question context"""
-    tweet_id = None
-    for pattern in [r'twitter\.com/\w+/status/(\d+)', r'x\.com/\w+/status/(\d+)']:
-        match = re.search(pattern, url)
-        if match:
-            tweet_id = match.group(1)
-            break
+    tweet_id, screen_name = extract_tweet_meta_from_url(url)
     
     if not tweet_id:
         log(f"  ✗ Cannot extract tweet ID from URL: {url}")
         return None
     
     log(f"  Fetching tweet ID: {tweet_id}")
+    if screen_name:
+        log(f"  Resolving via timeline: @{screen_name}")
     if user_query:
         log(f"  💭 User question: {user_query[:50]}...")
     
-    result = api.twitter_get_tweet_detail(tweet_id)
+    result = api.twitter_get_tweet_from_user_posts(screen_name, tweet_id) if screen_name else {'code': 404}
+    if result.get('code') != 200:
+        log(f"  ⚠ Timeline resolve failed ({result.get('code')}), fallback to fetch_tweet_detail")
+        result = api.twitter_get_tweet_detail(tweet_id)
     
     if result.get('code') != 200:
         log(f"  ✗ API error: {result.get('code')}")

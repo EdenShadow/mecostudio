@@ -12,6 +12,8 @@ import random
 import subprocess
 import shutil
 import urllib.parse
+import urllib.request
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -75,29 +77,149 @@ class TikHubAPI:
         self.base_url = base_url or TIKHUB_BASE_URL
         self.headers = {
             'Authorization': f'Bearer {self.api_key}',
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/plain, */*',
+            'User-Agent': (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36'
+            )
         }
     
     def _request(self, endpoint, params=None):
-        """Make HTTP request using requests library"""
+        """Make HTTP request using requests first, urllib fallback"""
+        url = f"{self.base_url}{endpoint}"
+        clean_params = {}
+        for key, value in (params or {}).items():
+            if value is None:
+                continue
+            val = str(value).strip()
+            if val == '':
+                continue
+            clean_params[key] = val
+        if clean_params:
+            url = f"{url}?{urllib.parse.urlencode(clean_params)}"
+
         try:
             import requests
-            url = f"{self.base_url}{endpoint}"
-            response = requests.get(url, headers=self.headers, params=params, timeout=30)
-            return response.json()
-        except Exception as e:
-            return {'code': 500, 'message': str(e)}
+            response = requests.get(url, headers=self.headers, timeout=30)
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {'code': response.status_code, 'message': (response.text or '')[:500]}
+            if isinstance(payload, dict) and 'code' not in payload:
+                payload['code'] = response.status_code
+            return payload
+        except Exception:
+            try:
+                req = urllib.request.Request(url, headers=self.headers, method='GET')
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    body = response.read().decode('utf-8', errors='replace')
+                    try:
+                        payload = json.loads(body)
+                    except Exception:
+                        payload = {'code': response.status, 'message': body[:500]}
+                    if isinstance(payload, dict) and 'code' not in payload:
+                        payload['code'] = response.status
+                    return payload
+            except urllib.error.HTTPError as e:
+                raw = ''
+                try:
+                    raw = e.read().decode('utf-8', errors='replace')
+                except Exception:
+                    raw = str(e)
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        parsed.setdefault('code', e.code)
+                        return parsed
+                except Exception:
+                    pass
+                return {'code': e.code, 'message': raw[:500] or str(e)}
+            except Exception as e:
+                return {'code': 500, 'message': str(e)}
+
+    @staticmethod
+    def _extract_timeline(result):
+        data = result.get('data', {}) if isinstance(result, dict) else {}
+        if isinstance(data, dict):
+            timeline = data.get('timeline')
+            if isinstance(timeline, list):
+                return timeline
+            nested = data.get('data')
+            if isinstance(nested, dict):
+                nested_timeline = nested.get('timeline')
+                if isinstance(nested_timeline, list):
+                    return nested_timeline
+        return []
+
+    @staticmethod
+    def _extract_next_cursor(result):
+        data = result.get('data', {}) if isinstance(result, dict) else {}
+        if not isinstance(data, dict):
+            return ''
+        for key in ('next_cursor', 'cursor', 'nextCursor'):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ''
+
+    @staticmethod
+    def _normalize_tweet_id(tweet):
+        if not isinstance(tweet, dict):
+            return ''
+        for key in ('tweet_id', 'id', 'rest_id'):
+            value = tweet.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ''
     
     def twitter_get_tweet_detail(self, tweet_id):
         """Get tweet detail by ID"""
         return self._request('/api/v1/twitter/web/fetch_tweet_detail', {'tweet_id': tweet_id})
     
-    def twitter_get_user_posts(self, screen_name, limit=5):
+    def twitter_get_user_posts(self, screen_name, limit=5, cursor=None):
         """Get user's posts"""
-        return self._request('/api/v1/twitter/web/fetch_user_post_tweet', {
+        params = {
             'screen_name': screen_name,
+            'user_name': screen_name,
             'limit': limit
-        })
+        }
+        if cursor:
+            params['cursor'] = cursor
+        return self._request('/api/v1/twitter/web/fetch_user_post_tweet', params)
+
+    def twitter_get_tweet_from_user_posts(self, screen_name, tweet_id, limit=40, max_pages=3):
+        """
+        Resolve tweet from user timeline first.
+        More stable than fetch_tweet_detail in some environments.
+        """
+        user = str(screen_name or '').strip().lstrip('@')
+        target_id = str(tweet_id or '').strip()
+        if not user or not target_id:
+            return {'code': 400, 'message': 'missing screen_name or tweet_id'}
+
+        cursor = None
+        last_err = None
+        for _ in range(max_pages):
+            result = self.twitter_get_user_posts(user, limit=limit, cursor=cursor)
+            if result.get('code') != 200:
+                last_err = result
+                break
+            timeline = self._extract_timeline(result)
+            for item in timeline:
+                if self._normalize_tweet_id(item) == target_id:
+                    return {'code': 200, 'data': item, 'source': 'fetch_user_post_tweet'}
+            cursor = self._extract_next_cursor(result)
+            if not cursor:
+                break
+
+        if isinstance(last_err, dict):
+            return last_err
+        return {'code': 404, 'message': f'tweet not found in user timeline: @{user}/{target_id}'}
     
     def twitter_get_comments(self, tweet_id):
         """Get tweet comments (using fetch_post_comments for better results)"""
@@ -1362,28 +1484,33 @@ def process_tweet(tweet, author, api, language='zh', analyze_audio=False):
     }
 
 
-def extract_tweet_id_from_url(url):
-    """Extract tweet ID from URL"""
+def extract_tweet_meta_from_url(url):
+    """Extract tweet ID + screen_name from URL"""
     patterns = [
-        r'twitter\.com/\w+/status/(\d+)',
-        r'x\.com/\w+/status/(\d+)',
+        r'twitter\.com/([A-Za-z0-9_]+)/status/(\d+)',
+        r'x\.com/([A-Za-z0-9_]+)/status/(\d+)',
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
         if match:
-            return match.group(1)
-    return None
+            return match.group(2), match.group(1)
+    return None, None
 
 
 def fetch_by_url(url, api, language=None, analyze_audio=False):
     """Fetch single tweet by URL"""
-    tweet_id = extract_tweet_id_from_url(url)
+    tweet_id, screen_name = extract_tweet_meta_from_url(url)
     if not tweet_id:
         log(f"  ✗ Cannot extract tweet ID from URL: {url}")
         return None
     
     log(f"  Fetching tweet ID: {tweet_id}")
-    result = api.twitter_get_tweet_detail(tweet_id)
+    if screen_name:
+        log(f"  Resolving via timeline: @{screen_name}")
+    result = api.twitter_get_tweet_from_user_posts(screen_name, tweet_id) if screen_name else {'code': 404}
+    if result.get('code') != 200:
+        log(f"  ⚠ Timeline resolve failed ({result.get('code')}), fallback to fetch_tweet_detail")
+        result = api.twitter_get_tweet_detail(tweet_id)
     
     if result.get('code') != 200:
         log(f"  ✗ API error: {result.get('code')}")

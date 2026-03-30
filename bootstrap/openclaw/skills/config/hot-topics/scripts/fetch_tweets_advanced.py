@@ -313,14 +313,21 @@ async def main_async():
             log(f"\n📎 Fetching: {args.url}")
             
             tweet_id = None
-            for pattern in [r'twitter\.com/\w+/status/(\d+)', r'x\.com/\w+/status/(\d+)']:
+            screen_name = None
+            for pattern in [r'twitter\.com/([A-Za-z0-9_]+)/status/(\d+)', r'x\.com/([A-Za-z0-9_]+)/status/(\d+)']:
                 match = re.search(pattern, args.url)
                 if match:
-                    tweet_id = match.group(1)
+                    screen_name = match.group(1)
+                    tweet_id = match.group(2)
                     break
             
             if tweet_id:
-                result = await api.twitter_get_tweet_detail(tweet_id)
+                if screen_name:
+                    log(f"  Resolving via timeline: @{screen_name}")
+                result = await api.twitter_get_tweet_from_user_posts(screen_name, tweet_id) if screen_name else {'code': 404}
+                if result.get('code') != 200:
+                    log(f"  ⚠ Timeline resolve failed ({result.get('code')}), fallback to fetch_tweet_detail")
+                    result = await api.twitter_get_tweet_detail(tweet_id)
                 if result.get('code') == 200:
                     tweet = result.get('data', {})
                     author = tweet.get('author', {}).get('screen_name', 'unknown')

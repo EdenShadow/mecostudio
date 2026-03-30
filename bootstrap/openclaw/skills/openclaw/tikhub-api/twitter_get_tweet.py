@@ -23,15 +23,21 @@ def main():
     
     # 提取 tweet_id
     tweet_id = param
-    match = re.search(r'status/(\d+)', param)
+    screen_name = None
+    match = re.search(r'(?:twitter|x)\.com/([A-Za-z0-9_]+)/status/(\d+)', param)
     if match:
-        tweet_id = match.group(1)
+        screen_name = match.group(1)
+        tweet_id = match.group(2)
     
     print(f"获取 Twitter 推文: {tweet_id}")
     print("-" * 50)
     
     api = TikHubAPI()
-    result = api.twitter_get_tweet_detail(tweet_id)
+    result = api.twitter_get_tweet_from_user_posts(screen_name, tweet_id) if screen_name else {"code": 404}
+    if result.get("code") != 200:
+        if screen_name:
+            print(f"提示: 时间线检索失败(code={result.get('code')}), 回退 fetch_tweet_detail")
+        result = api.twitter_get_tweet_detail(tweet_id)
     
     print_json(result)
 

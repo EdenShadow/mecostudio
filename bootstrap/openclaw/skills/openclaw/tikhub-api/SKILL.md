@@ -43,6 +43,10 @@ metadata:
 
 ## 使用方法
 
+Twitter/X 单条推文查询已增加稳态策略：
+- 优先 `fetch_user_post_tweet` 时间线定位目标推文
+- 未命中时自动回退 `fetch_tweet_detail`
+
 ### 方法1: 统一 CLI 工具
 
 ```bash

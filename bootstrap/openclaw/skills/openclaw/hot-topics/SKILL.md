@@ -20,6 +20,8 @@ Automatically fetch tweets from followed influencers, analyze content using Kimi
 
 - Read followed influencers from knowledge base categories
 - Fetch real tweet data via TikHub API (likes, retweets, comments, views)
+- URL 抓取稳态兜底：优先使用 `fetch_user_post_tweet` 时间线反查 tweet，失败才回退 `fetch_tweet_detail`
+- API 请求已加浏览器 User-Agent + HTTP 兼容兜底，降低 403/500 概率
 - **Contextual title generation** with emoji - considers user's question when provided
 - Smart categorization (AI_Tech, Food, Health, Finance, Military, Sports, etc.)
 - Automatic deduplication - skips already-fetched tweets

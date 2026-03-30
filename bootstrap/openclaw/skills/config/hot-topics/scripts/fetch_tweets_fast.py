@@ -174,7 +174,13 @@ class AsyncTikHubAPI:
             timeout=REQUEST_TIMEOUT,
             headers={
                 'Authorization': f'Bearer {self.api_key}',
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Accept': 'application/json, text/plain, */*',
+                'User-Agent': (
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/124.0.0.0 Safari/537.36'
+                )
             }
         )
         return self
@@ -187,8 +193,23 @@ class AsyncTikHubAPI:
         """Make async HTTP request"""
         try:
             url = f"{self.base_url}{endpoint}"
-            async with self.session.get(url, params=params) as response:
-                return await response.json()
+            clean_params = {}
+            for key, value in (params or {}).items():
+                if value is None:
+                    continue
+                val = str(value).strip()
+                if val == '':
+                    continue
+                clean_params[key] = val
+            async with self.session.get(url, params=clean_params) as response:
+                text = await response.text()
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    payload = {'code': response.status, 'message': text[:500]}
+                if isinstance(payload, dict) and 'code' not in payload:
+                    payload['code'] = response.status
+                return payload
         except Exception as e:
             return {'code': 500, 'message': str(e)}
     
@@ -196,12 +217,78 @@ class AsyncTikHubAPI:
         """Get tweet detail by ID"""
         return await self._request('/api/v1/twitter/web/fetch_tweet_detail', {'tweet_id': tweet_id})
     
-    async def twitter_get_user_posts(self, screen_name: str, limit: int = 5) -> Dict:
+    async def twitter_get_user_posts(self, screen_name: str, limit: int = 5, cursor: str = None) -> Dict:
         """Get user's posts"""
-        return await self._request('/api/v1/twitter/web/fetch_user_post_tweet', {
+        params = {
             'screen_name': screen_name,
+            'user_name': screen_name,
             'limit': limit
-        })
+        }
+        if cursor:
+            params['cursor'] = cursor
+        return await self._request('/api/v1/twitter/web/fetch_user_post_tweet', params)
+
+    @staticmethod
+    def _extract_timeline(result: Dict) -> List[Dict]:
+        data = result.get('data', {}) if isinstance(result, dict) else {}
+        if isinstance(data, dict):
+            timeline = data.get('timeline')
+            if isinstance(timeline, list):
+                return timeline
+            nested = data.get('data')
+            if isinstance(nested, dict):
+                nested_timeline = nested.get('timeline')
+                if isinstance(nested_timeline, list):
+                    return nested_timeline
+        return []
+
+    @staticmethod
+    def _extract_next_cursor(result: Dict) -> str:
+        data = result.get('data', {}) if isinstance(result, dict) else {}
+        if not isinstance(data, dict):
+            return ''
+        for key in ('next_cursor', 'cursor', 'nextCursor'):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ''
+
+    @staticmethod
+    def _normalize_tweet_id(tweet: Dict) -> str:
+        if not isinstance(tweet, dict):
+            return ''
+        for key in ('tweet_id', 'id', 'rest_id'):
+            value = tweet.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ''
+
+    async def twitter_get_tweet_from_user_posts(self, screen_name: str, tweet_id: str, limit: int = 40, max_pages: int = 3) -> Dict:
+        user = str(screen_name or '').strip().lstrip('@')
+        target_id = str(tweet_id or '').strip()
+        if not user or not target_id:
+            return {'code': 400, 'message': 'missing screen_name or tweet_id'}
+
+        cursor = None
+        last_err = None
+        for _ in range(max_pages):
+            result = await self.twitter_get_user_posts(user, limit=limit, cursor=cursor)
+            if result.get('code') != 200:
+                last_err = result
+                break
+            for item in self._extract_timeline(result):
+                if self._normalize_tweet_id(item) == target_id:
+                    return {'code': 200, 'data': item, 'source': 'fetch_user_post_tweet'}
+            cursor = self._extract_next_cursor(result)
+            if not cursor:
+                break
+
+        if isinstance(last_err, dict):
+            return last_err
+        return {'code': 404, 'message': f'tweet not found in user timeline: @{user}/{target_id}'}
     
     async def twitter_get_comments(self, tweet_id: str) -> Dict:
         """Get tweet comments"""
@@ -821,9 +908,15 @@ async def main_async():
         # Single URL mode
         log(f"\n📎 Fetching: {args.url}")
         async with AsyncTikHubAPI() as api:
-            tweet_id = re.search(r'(?:twitter|x)\.com/\w+/status/(\d+)', args.url)
-            if tweet_id:
-                result = await api.twitter_get_tweet_detail(tweet_id.group(1))
+            match = re.search(r'(?:twitter|x)\.com/([A-Za-z0-9_]+)/status/(\d+)', args.url)
+            if match:
+                screen_name = match.group(1)
+                tweet_id = match.group(2)
+                log(f"  Resolving via timeline: @{screen_name}")
+                result = await api.twitter_get_tweet_from_user_posts(screen_name, tweet_id)
+                if result.get('code') != 200:
+                    log(f"  ⚠ Timeline resolve failed ({result.get('code')}), fallback to fetch_tweet_detail")
+                    result = await api.twitter_get_tweet_detail(tweet_id)
                 if result.get('code') == 200:
                     tweet = result.get('data', {})
                     author = tweet.get('author', {}).get('screen_name', 'unknown')
