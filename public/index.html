@@ -5435,39 +5435,6 @@
             loadApiSettings();
         }
 
-        async function openRustDeskWebClient() {
-            closeProfileMenu();
-            const popup = window.open('', '_blank');
-            if (!popup) {
-                alert('打开 RustDesk Web 失败: 浏览器拦截了新窗口，请允许本站弹窗后重试。');
-                return;
-            }
-
-            try {
-                popup.document.title = 'Opening RustDesk Web...';
-                popup.document.body.style.margin = '0';
-                popup.document.body.style.fontFamily = 'system-ui, -apple-system, Segoe UI, sans-serif';
-                popup.document.body.innerHTML = '<div style="padding:18px;color:#111;">正在打开 RustDesk Web...</div>';
-                try {
-                    popup.opener = null;
-                } catch (_) {}
-            } catch (_) {
-                // Ignore if browser blocks writing to the popup document.
-            }
-
-            try {
-                const res = await fetch('/api/remote/rustdesk/web-client-url');
-                const data = await readJsonResponse(res, '获取 RustDesk Web 地址失败');
-                const targetUrl = (data && data.url) ? String(data.url).trim() : 'https://rustdesk.com/web/';
-                popup.location.replace(targetUrl);
-            } catch (e) {
-                try {
-                    popup.close();
-                } catch (_) {}
-                alert(`打开 RustDesk Web 失败: ${e.message}`);
-            }
-        }
-
         function closeApiSettingsModal() {
             const modal = document.getElementById('api-settings-modal');
             if (modal) modal.classList.add('hidden');
@@ -5488,6 +5455,8 @@
                 setValue('cfg-openclaw-model-key', appRuntimeSettings.openclawModelApiKey);
                 setValue('cfg-minimax-key', appRuntimeSettings.minimaxApiKey);
                 setValue('cfg-minimax-ws-url', appRuntimeSettings.minimaxWsUrl);
+                setValue('cfg-doubao-o2o-appid', appRuntimeSettings.doubaoO2oAppId);
+                setValue('cfg-doubao-o2o-token', appRuntimeSettings.doubaoO2oToken);
                 setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
                 setValue('cfg-meowload-key', appRuntimeSettings.meowloadApiKey);
                 setValue('cfg-kimi-key', appRuntimeSettings.kimiApiKey);
@@ -5517,6 +5486,8 @@
                 openclawModelApiKey: document.getElementById('cfg-openclaw-model-key')?.value || '',
                 minimaxApiKey: document.getElementById('cfg-minimax-key')?.value || '',
                 minimaxWsUrl: document.getElementById('cfg-minimax-ws-url')?.value || '',
+                doubaoO2oAppId: document.getElementById('cfg-doubao-o2o-appid')?.value || '',
+                doubaoO2oToken: document.getElementById('cfg-doubao-o2o-token')?.value || '',
                 tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
                 meowloadApiKey: document.getElementById('cfg-meowload-key')?.value || '',
                 kimiApiKey: document.getElementById('cfg-kimi-key')?.value || '',
@@ -10898,10 +10869,6 @@
                     <span class="material-icons-outlined text-base">vpn_key</span>
                     <span>API Keys</span>
                 </button>
-                <button type="button" onclick="openRustDeskWebClient()" class="w-full px-4 py-3 text-left text-sm text-gray-200 hover:bg-white/10 transition-colors flex items-center gap-2 border-t border-white/5">
-                    <span class="material-icons-outlined text-base">desktop_windows</span>
-                    <span>RustDesk Web</span>
-                </button>
             </div>
         </div>
     </div>
@@ -11669,6 +11636,14 @@
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">MiniMax API Key</label>
                 <input id="cfg-minimax-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="MiniMax key">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Doubao O2O AppID</label>
+                <input id="cfg-doubao-o2o-appid" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="e.g. 5022xxxxxx">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Doubao O2O Token</label>
+                <input id="cfg-doubao-o2o-token" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Doubao token">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">TikHub API Key (hot-topics)</label>

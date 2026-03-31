@@ -18,6 +18,8 @@ MECO_OPENCLAW_MODEL="${MECO_OPENCLAW_MODEL:-kimi-coding/k2p5}"
 MECO_OPENCLAW_MODEL_API_KEY="${MECO_OPENCLAW_MODEL_API_KEY:-}"
 MECO_MINIMAX_API_KEY="${MECO_MINIMAX_API_KEY:-}"
 MECO_MINIMAX_WS_URL="${MECO_MINIMAX_WS_URL:-wss://api.minimaxi.com/ws/v1/t2a_v2}"
+MECO_DOUBAO_O2O_APP_ID="${MECO_DOUBAO_O2O_APP_ID:-}"
+MECO_DOUBAO_O2O_TOKEN="${MECO_DOUBAO_O2O_TOKEN:-}"
 MECO_TIKHUB_API_KEY="${MECO_TIKHUB_API_KEY:-}"
 MECO_MEOWLOAD_API_KEY="${MECO_MEOWLOAD_API_KEY:-}"
 MECO_OPENAI_API_KEY="${MECO_OPENAI_API_KEY:-}"
@@ -976,21 +978,23 @@ configure_meco_runtime_settings() {
       openclawModelApiKey: String(process.argv[3] || "").trim(),
       minimaxApiKey: String(process.argv[4] || "").trim(),
       minimaxWsUrl: String(process.argv[5] || "").trim(),
-      tikhubApiKey: String(process.argv[6] || "").trim(),
-      meowloadApiKey: String(process.argv[7] || "").trim(),
-      kimiApiKey: String(process.argv[8] || "").trim(),
-      hotTopicsKbPath: String(process.argv[9] || "").trim(),
-      openaiApiKey: String(process.argv[10] || "").trim(),
-      ossEndpoint: String(process.argv[11] || "").trim(),
-      ossBucket: String(process.argv[12] || "").trim(),
-      ossAccessKeyId: String(process.argv[13] || "").trim(),
-      ossAccessKeySecret: String(process.argv[14] || "").trim(),
-      cloudflarePublicHost: String(process.argv[15] || "").trim(),
-      cloudflarePathPrefix: String(process.argv[16] || "").trim(),
-      cloudflareTunnelToken: String(process.argv[17] || "").trim(),
-      rustdeskWebBaseUrl: String(process.argv[18] || "").trim(),
-      rustdeskSchemeAuthority: String(process.argv[19] || "").trim() || "connect",
-      rustdeskPreferredRendezvous: String(process.argv[20] || "").trim()
+      doubaoO2oAppId: String(process.argv[6] || "").trim(),
+      doubaoO2oToken: String(process.argv[7] || "").trim(),
+      tikhubApiKey: String(process.argv[8] || "").trim(),
+      meowloadApiKey: String(process.argv[9] || "").trim(),
+      kimiApiKey: String(process.argv[10] || "").trim(),
+      hotTopicsKbPath: String(process.argv[11] || "").trim(),
+      openaiApiKey: String(process.argv[12] || "").trim(),
+      ossEndpoint: String(process.argv[13] || "").trim(),
+      ossBucket: String(process.argv[14] || "").trim(),
+      ossAccessKeyId: String(process.argv[15] || "").trim(),
+      ossAccessKeySecret: String(process.argv[16] || "").trim(),
+      cloudflarePublicHost: String(process.argv[17] || "").trim(),
+      cloudflarePathPrefix: String(process.argv[18] || "").trim(),
+      cloudflareTunnelToken: String(process.argv[19] || "").trim(),
+      rustdeskWebBaseUrl: String(process.argv[20] || "").trim(),
+      rustdeskSchemeAuthority: String(process.argv[21] || "").trim() || "connect",
+      rustdeskPreferredRendezvous: String(process.argv[22] || "").trim()
     };
 
     let current = {};
@@ -1015,6 +1019,8 @@ configure_meco_runtime_settings() {
     "$openclaw_model_api_key" \
     "$MECO_MINIMAX_API_KEY" \
     "$MECO_MINIMAX_WS_URL" \
+    "$MECO_DOUBAO_O2O_APP_ID" \
+    "$MECO_DOUBAO_O2O_TOKEN" \
     "$MECO_TIKHUB_API_KEY" \
     "$MECO_MEOWLOAD_API_KEY" \
     "$kimi_api_key" \

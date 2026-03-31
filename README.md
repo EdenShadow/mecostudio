@@ -137,6 +137,7 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 - `TikHub API Key`
 - `MeowLoad API Key`（哼哼猫 / media-downloader）
 - `MiniMax API Key`（TTS 必需）
+- `Doubao O2O AppID / Token`（豆包语音克隆）
 - `Aliyun OSS Endpoint`（默认：`https://oss-cn-hongkong.aliyuncs.com/`）
 - `Aliyun OSS Bucket`（固定默认：`cfplusvideo`）
 - `Aliyun OSS AccessKey ID`（仓库不内置默认值，需手动填写）
@@ -172,6 +173,8 @@ MECO_OPENCLAW_MODEL="kimi-coding/k2p5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
 MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
 MECO_MINIMAX_API_KEY="xxxx" \
+MECO_DOUBAO_O2O_APP_ID="5022xxxxxx" \
+MECO_DOUBAO_O2O_TOKEN="xxxx" \
 MECO_TIKHUB_API_KEY="xxxx" \
 MECO_MEOWLOAD_API_KEY="xxxx" \
 MECO_OSS_ENDPOINT="https://oss-cn-hongkong.aliyuncs.com/" \
@@ -203,6 +206,8 @@ $env:MECO_INSTALL_DIR = "$env:USERPROFILE\\meco-studio"
 $env:MECO_OPENCLAW_MODEL = "kimi-coding/k2p5"
 $env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
 $env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
+$env:MECO_DOUBAO_O2O_APP_ID = "<your-doubao-o2o-appid>"
+$env:MECO_DOUBAO_O2O_TOKEN = "<your-doubao-o2o-token>"
 $env:MECO_TIKHUB_API_KEY = "<your-tikhub-key>"
 $env:MECO_MEOWLOAD_API_KEY = "<your-meowload-key>"
 $env:MECO_OSS_ENDPOINT = "https://oss-cn-hongkong.aliyuncs.com/"
@@ -232,6 +237,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 ```bash
 MECO_KIMI_CODING_API_KEY="<your-kimi-coding-key>" \
 MECO_MINIMAX_API_KEY="<your-minimax-key>" \
+MECO_DOUBAO_O2O_APP_ID="<your-doubao-o2o-appid>" \
+MECO_DOUBAO_O2O_TOKEN="<your-doubao-o2o-token>" \
 MECO_TIKHUB_API_KEY="<your-tikhub-key>" \
 MECO_MEOWLOAD_API_KEY="<your-meowload-key>" \
 MECO_OSS_ENDPOINT="https://oss-cn-hongkong.aliyuncs.com/" \

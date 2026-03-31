@@ -20,55 +20,6 @@
           },
           "contextWindow": 200000,
           "maxTokens": ""
-        },
-        {
-          "id": "MiniMax-VL-01",
-          "name": "MiniMax VL 01",
-          "reasoning": false,
-          "input": [
-            "text",
-            "image"
-          ],
-          "cost": {
-            "input": 0.3,
-            "output": 1.2,
-            "cacheRead": 0.03,
-            "cacheWrite": 0.12
-          },
-          "contextWindow": 200000,
-          "maxTokens": ""
-        },
-        {
-          "id": "MiniMax-M2.5",
-          "name": "MiniMax M2.5",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0.3,
-            "output": 1.2,
-            "cacheRead": 0.03,
-            "cacheWrite": 0.12
-          },
-          "contextWindow": 200000,
-          "maxTokens": ""
-        },
-        {
-          "id": "MiniMax-M2.5-highspeed",
-          "name": "MiniMax M2.5 Highspeed",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "cost": {
-            "input": 0.3,
-            "output": 1.2,
-            "cacheRead": 0.03,
-            "cacheWrite": 0.12
-          },
-          "contextWindow": 200000,
-          "maxTokens": ""
         }
       ],
       "apiKey": ""
@@ -103,25 +54,8 @@
       "authHeader": true,
       "models": [
         {
-          "id": "MiniMax-VL-01",
-          "name": "MiniMax VL 01",
-          "reasoning": false,
-          "input": [
-            "text",
-            "image"
-          ],
-          "cost": {
-            "input": 0.3,
-            "output": 1.2,
-            "cacheRead": 0.03,
-            "cacheWrite": 0.12
-          },
-          "contextWindow": 200000,
-          "maxTokens": ""
-        },
-        {
-          "id": "MiniMax-M2.5",
-          "name": "MiniMax M2.5",
+          "id": "MiniMax-M2.7",
+          "name": "MiniMax M2.7",
           "reasoning": true,
           "input": [
             "text"
@@ -129,15 +63,15 @@
           "cost": {
             "input": 0.3,
             "output": 1.2,
-            "cacheRead": 0.03,
-            "cacheWrite": 0.12
+            "cacheRead": 0.06,
+            "cacheWrite": 0.375
           },
-          "contextWindow": 200000,
+          "contextWindow": 204800,
           "maxTokens": ""
         },
         {
-          "id": "MiniMax-M2.5-highspeed",
-          "name": "MiniMax M2.5 Highspeed",
+          "id": "MiniMax-M2.7-highspeed",
+          "name": "MiniMax M2.7 Highspeed",
           "reasoning": true,
           "input": [
             "text"
@@ -145,16 +79,27 @@
           "cost": {
             "input": 0.3,
             "output": 1.2,
-            "cacheRead": 0.03,
-            "cacheWrite": 0.12
+            "cacheRead": 0.06,
+            "cacheWrite": 0.375
           },
-          "contextWindow": 200000,
+          "contextWindow": 204800,
           "maxTokens": ""
         }
       ],
       "apiKey": ""
     },
     "kimi-coding": {
+      "baseUrl": "https://api.kimi.com/coding/",
+      "apiKey": "",
+      "api": "anthropic-messages",
+      "models": [
+        {
+          "id": "k2p5",
+          "name": "Kimi K2.5"
+        }
+      ]
+    },
+    "kimi": {
       "baseUrl": "https://api.kimi.com/coding/",
       "api": "anthropic-messages",
       "headers": {
@@ -163,17 +108,15 @@
       "models": [
         {
           "id": "k2p5",
-          "name": "Kimi K2.5",
-          "input": [
-            "text",
-            "image"
-          ],
-          "reasoning": true,
-          "contextWindow": 262144,
-          "maxTokens": ""
+          "name": "Kimi K2.5"
         }
       ],
       "apiKey": ""
+    },
+    "openai-codex": {
+      "baseUrl": "https://chatgpt.com/backend-api",
+      "api": "openai-codex-responses",
+      "models": []
     }
   }
 }

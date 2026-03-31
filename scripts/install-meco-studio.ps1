@@ -29,6 +29,8 @@ $MecoKimiCodingApiKey = Get-EnvOrDefault -Name 'MECO_KIMI_CODING_API_KEY' -Defau
 $MecoOpenclawModelApiKey = Get-EnvOrDefault -Name 'MECO_OPENCLAW_MODEL_API_KEY' -Default ''
 $MecoMinimaxApiKey = Get-EnvOrDefault -Name 'MECO_MINIMAX_API_KEY' -Default ''
 $MecoMinimaxWsUrl = Get-EnvOrDefault -Name 'MECO_MINIMAX_WS_URL' -Default 'wss://api.minimaxi.com/ws/v1/t2a_v2'
+$MecoDoubaoO2oAppId = Get-EnvOrDefault -Name 'MECO_DOUBAO_O2O_APP_ID' -Default ''
+$MecoDoubaoO2oToken = Get-EnvOrDefault -Name 'MECO_DOUBAO_O2O_TOKEN' -Default ''
 $MecoTikhubApiKey = Get-EnvOrDefault -Name 'MECO_TIKHUB_API_KEY' -Default ''
 $MecoMeowloadApiKey = Get-EnvOrDefault -Name 'MECO_MEOWLOAD_API_KEY' -Default ''
 $MecoOpenAIApiKey = Get-EnvOrDefault -Name 'MECO_OPENAI_API_KEY' -Default ''
@@ -789,6 +791,8 @@ function Configure-MecoRuntimeSettings {
     openclawModelApiKey = $OpenclawModelApiKey
     minimaxApiKey = $MecoMinimaxApiKey
     minimaxWsUrl = $MecoMinimaxWsUrl
+    doubaoO2oAppId = $MecoDoubaoO2oAppId
+    doubaoO2oToken = $MecoDoubaoO2oToken
     tikhubApiKey = $MecoTikhubApiKey
     meowloadApiKey = $MecoMeowloadApiKey
     kimiApiKey = $KimiApiKey

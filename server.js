@@ -8,6 +8,7 @@ const os = require('os');
 const { EnhancedRoundTableModerator } = require('./enhanced-moderator');
 const openclaw = require('./services/openclaw');
 const voiceService = require('./services/voice'); // Voice Training Service
+const doubaoO2oService = require('./services/doubao-o2o');
 const appSettings = require('./services/app-settings');
 const integrationSetup = require('./services/integration-setup');
 const ossStorage = require('./services/oss-storage');
@@ -907,6 +908,61 @@ const OPENCLAW_ROOT_DIR = path.join(os.homedir(), '.openclaw');
 const OPENCLAW_HOME_DIR = path.join(OPENCLAW_ROOT_DIR, 'agents');
 const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_ROOT_DIR, 'openclaw.json');
 
+function resolveLocalAgentDir(agentId, createIfMissing = false) {
+  const normalizedId = String(agentId || '').trim();
+  if (!normalizedId) return '';
+
+  if (fs.existsSync(DATA_AGENTS_DIR)) {
+    try {
+      const dirs = fs.readdirSync(DATA_AGENTS_DIR);
+      const matchDir = dirs.find((d) => d.toLowerCase() === normalizedId.toLowerCase());
+      if (matchDir) return path.join(DATA_AGENTS_DIR, matchDir);
+    } catch (_) {}
+  }
+
+  const target = path.join(DATA_AGENTS_DIR, normalizedId);
+  if (createIfMissing) {
+    try {
+      fs.mkdirSync(target, { recursive: true });
+    } catch (_) {}
+  }
+  return target;
+}
+
+function readAgentMeta(agentId) {
+  const localDir = resolveLocalAgentDir(agentId, false);
+  if (!localDir) return { meta: {}, metaPath: '' };
+  const metaPath = path.join(localDir, 'meta.json');
+  if (!fs.existsSync(metaPath)) return { meta: {}, metaPath };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    if (parsed && typeof parsed === 'object') {
+      return { meta: parsed, metaPath };
+    }
+    return { meta: {}, metaPath };
+  } catch (_) {
+    return { meta: {}, metaPath };
+  }
+}
+
+function writeAgentMeta(agentId, patch = {}) {
+  const localDir = resolveLocalAgentDir(agentId, true);
+  if (!localDir) {
+    throw new Error('invalid agentId');
+  }
+  const metaPath = path.join(localDir, 'meta.json');
+  let current = {};
+  if (fs.existsSync(metaPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+      if (parsed && typeof parsed === 'object') current = parsed;
+    } catch (_) {}
+  }
+  const next = { ...current, ...patch };
+  fs.writeFileSync(metaPath, `${JSON.stringify(next, null, 2)}\n`, 'utf-8');
+  return { meta: next, metaPath, localDir };
+}
+
 function resolvePreferredWorkspacePath(agentId, fallbackPath = '') {
   const normalizedId = String(agentId || '').trim();
   const lowerId = normalizedId.toLowerCase();
@@ -1017,6 +1073,7 @@ function scanOpenClawAgents() {
       let voiceId = 'default';
       let voiceUrl = null;
       let videoUrl = null;
+      let o2oAudioId = '';
       
       // Check for matching local agent data (case-insensitive)
       const localAgent = localAgentsLookup[id.toLowerCase()];
@@ -1029,6 +1086,7 @@ function scanOpenClawAgents() {
           if (localAgent.voiceId) voiceId = localAgent.voiceId;
           if (localAgent.voiceUrl) voiceUrl = localAgent.voiceUrl;
           if (localAgent.videoUrl) videoUrl = localAgent.videoUrl;
+          if (localAgent.o2oAudioId) o2oAudioId = localAgent.o2oAudioId;
       } else {
           // Fallback manual check (as before, but less needed if scanLocalAgents covers it)
           // ... (existing manual check logic can be simplified or kept as fallback)
@@ -1135,6 +1193,9 @@ function scanOpenClawAgents() {
                       try {
                           const m = JSON.parse(fs.readFileSync(path.join(localPath, 'meta.json'), 'utf-8'));
                           if (m.voiceId || m.voice_id) voiceId = m.voiceId || m.voice_id;
+                          if (!o2oAudioId && (m.o2o_audio_id || m.o2oAudioId)) {
+                              o2oAudioId = String(m.o2o_audio_id || m.o2oAudioId || '').trim();
+                          }
                       } catch(e) {}
                   }
 
@@ -1188,6 +1249,7 @@ function scanOpenClawAgents() {
         videoUrl: videoUrl, 
         voiceId: voiceId,
         voiceUrl: voiceUrl,
+        o2oAudioId: o2oAudioId,
         source: 'openclaw_system',
         workspace: wsPath
       };
@@ -1327,6 +1389,7 @@ function scanLocalAgents() {
               videoUrl: fs.existsSync(path.join(agentPath, 'video.mp4')) ? `/api/local-agents/${agentId}/video` : null,
               voiceId: voiceId, // Load Voice ID from voice.json
               voiceUrl: fs.existsSync(path.join(agentPath, 'voice.mp3')) ? `/api/local-agents/${agentId}/voice` : null, // Add voice.mp3 route
+              o2oAudioId: String(meta.o2o_audio_id || meta.o2oAudioId || '').trim(),
               source: 'local',
               workspace: agentPath
             };
@@ -2779,7 +2842,8 @@ function getAgentById(agentId) {
                  name: openclawAgent.name,
                  workspace: openclawAgent.workspace, // Force OpenClaw workspace
                  voiceId: localAgent.voiceId || openclawAgent.voiceId, // Prefer local voice ID
-                 voiceUrl: localAgent.voiceUrl // Prefer local voice file
+                 voiceUrl: localAgent.voiceUrl, // Prefer local voice file
+                 o2oAudioId: localAgent.o2oAudioId || openclawAgent.o2oAudioId || ''
              };
         }
         return openclawAgent;
@@ -7220,6 +7284,156 @@ app.get('/api/agents/:agentId/file', (req, res) => {
 
 const multer = require('multer');
 const upload = multer({ dest: path.join(__dirname, 'temp_uploads') });
+
+function inferAudioFormatFromUpload(file = null) {
+  if (!file) return 'wav';
+  const ext = path.extname(String(file.originalname || '')).replace('.', '').toLowerCase();
+  if (ext) return doubaoO2oService.normalizeAudioFormat(ext);
+  const mime = String(file.mimetype || '').toLowerCase();
+  if (mime.includes('mpeg') || mime.includes('mp3')) return 'mp3';
+  if (mime.includes('wav') || mime.includes('x-wav')) return 'wav';
+  return 'wav';
+}
+
+app.get('/api/agents/:agentId/o2o-audio', (req, res) => {
+  const { agentId } = req.params;
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  try {
+    const { meta } = readAgentMeta(agentId);
+    const o2oAudioId = String(meta.o2o_audio_id || meta.o2oAudioId || '').trim();
+    return res.json({
+      success: true,
+      o2o_audio_id: o2oAudioId,
+      o2o_audio_status: meta.o2o_audio_status || '',
+      o2o_audio_status_code: Number.isFinite(Number(meta.o2o_audio_status_code)) ? Number(meta.o2o_audio_status_code) : null,
+      o2o_audio_updated_at: meta.o2o_audio_updated_at || ''
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'failed to load o2o audio id' });
+  }
+});
+
+app.put('/api/agents/:agentId/o2o-audio', (req, res) => {
+  const { agentId } = req.params;
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const o2oAudioId = String(req.body?.o2o_audio_id || req.body?.o2oAudioId || '').trim();
+
+  try {
+    const nowIso = new Date().toISOString();
+    const { meta } = writeAgentMeta(agentId, {
+      o2o_audio_id: o2oAudioId,
+      o2oAudioId: o2oAudioId,
+      o2o_audio_updated_at: nowIso
+    });
+    if (AGENTS[agentId]) {
+      AGENTS[agentId].o2oAudioId = o2oAudioId;
+    }
+    return res.json({
+      success: true,
+      o2o_audio_id: o2oAudioId,
+      updatedAt: meta.o2o_audio_updated_at || nowIso
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'failed to save o2o audio id' });
+  }
+});
+
+app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (req, res) => {
+  const { agentId } = req.params;
+  const agent = getAgentById(agentId);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  if (!req.file) return res.status(400).json({ error: 'audio file is required' });
+
+  const runtimeSettings = appSettings.getSettings();
+  const doubaoAppId = String(req.body?.appid || runtimeSettings?.doubaoO2oAppId || '').trim();
+  const doubaoToken = String(req.body?.token || runtimeSettings?.doubaoO2oToken || '').trim();
+  const doubaoResourceId = String(req.body?.resource_id || '').trim();
+  if (!doubaoAppId || !doubaoToken) {
+    return res.status(400).json({
+      error: 'Doubao O2O AppID/Token 未配置，请先在 API Keys 中填写'
+    });
+  }
+
+  const tempFilePath = req.file.path;
+  try {
+    const localDir = resolveLocalAgentDir(agentId, true);
+    if (!localDir) {
+      return res.status(500).json({ error: 'failed to resolve local agent directory' });
+    }
+
+    const inputExt = path.extname(String(req.file.originalname || '')).toLowerCase();
+    const sampleExt = inputExt || '.wav';
+    const samplePath = path.join(localDir, `o2o-voice-sample${sampleExt}`);
+    fs.copyFileSync(tempFilePath, samplePath);
+
+    const audioBytes = fs.readFileSync(samplePath).toString('base64');
+    const audioFormat = doubaoO2oService.normalizeAudioFormat(req.body?.audio_format || inferAudioFormatFromUpload(req.file));
+
+    const submit = await doubaoO2oService.submitO2oClone({
+      agentId,
+      audioBytes,
+      audioFormat,
+      speakerId: req.body?.speaker_id || '',
+      appId: doubaoAppId,
+      token: doubaoToken,
+      resourceId: doubaoResourceId
+    });
+
+    let statusInfo = null;
+    try {
+      statusInfo = await doubaoO2oService.pollO2oReady({
+        speakerId: submit.speakerId,
+        appId: doubaoAppId,
+        token: doubaoToken,
+        resourceId: doubaoResourceId,
+        maxAttempts: 8,
+        intervalMs: 2500
+      });
+    } catch (statusErr) {
+      console.warn(`[DoubaoO2O] status polling failed: ${statusErr.message}`);
+    }
+
+    const speakerStatus = Number(statusInfo?.speakerStatus);
+    const speakerStatusLabel = String(statusInfo?.speakerStatusLabel || 'submitted');
+    const nowIso = new Date().toISOString();
+
+    writeAgentMeta(agentId, {
+      o2o_audio_id: submit.speakerId,
+      o2oAudioId: submit.speakerId,
+      o2o_audio_provider: 'doubao',
+      o2o_audio_status: speakerStatusLabel,
+      o2o_audio_status_code: Number.isFinite(speakerStatus) ? speakerStatus : null,
+      o2o_audio_updated_at: nowIso
+    });
+
+    if (AGENTS[agentId]) {
+      AGENTS[agentId].o2oAudioId = submit.speakerId;
+    }
+
+    return res.json({
+      success: true,
+      o2o_audio_id: submit.speakerId,
+      speakerStatus: Number.isFinite(speakerStatus) ? speakerStatus : null,
+      speakerStatusLabel,
+      ready: !!statusInfo?.ready,
+      done: !!statusInfo?.done,
+      attempts: Number.isFinite(Number(statusInfo?.attempts)) ? Number(statusInfo.attempts) : 0
+    });
+  } catch (e) {
+    console.error(`[DoubaoO2O] train failed for ${agentId}: ${e.message}`);
+    return res.status(500).json({ error: e.message || 'doubao o2o train failed' });
+  } finally {
+    if (tempFilePath) {
+      try {
+        if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
+      } catch (_) {}
+    }
+  }
+});
 
 // OSS Storage API (configurable via /api/settings)
 app.get('/api/oss/config', (req, res) => {

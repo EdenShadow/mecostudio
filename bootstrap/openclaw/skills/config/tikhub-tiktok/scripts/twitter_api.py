@@ -8,67 +8,14 @@ import sys
 import json
 import requests
 import re
-import urllib.request
-import urllib.parse
-import urllib.error
 
 API_BASE = "https://api.tikhub.io"
 API_TOKEN = ""
 
 headers = {
     "Authorization": f"Bearer {API_TOKEN}",
-    "Content-Type": "application/json",
-    "Accept": "application/json, text/plain, */*",
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "Content-Type": "application/json"
 }
-
-
-def _request_json(endpoint, params=None, timeout=30):
-    clean = {}
-    for key, value in (params or {}).items():
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text == "":
-            continue
-        clean[key] = text
-    try:
-        response = requests.get(endpoint, headers=headers, params=clean, timeout=timeout)
-        try:
-            payload = response.json()
-        except Exception:
-            payload = {"code": response.status_code, "message": (response.text or "")[:500]}
-        if isinstance(payload, dict) and "code" not in payload:
-            payload["code"] = response.status_code
-        return payload
-    except Exception:
-        try:
-            url = endpoint
-            if clean:
-                url = f"{endpoint}?{urllib.parse.urlencode(clean)}"
-            req = urllib.request.Request(url, headers=headers, method="GET")
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                body = response.read().decode("utf-8", errors="replace")
-                try:
-                    payload = json.loads(body)
-                except Exception:
-                    payload = {"code": response.status, "message": body[:500]}
-                if isinstance(payload, dict) and "code" not in payload:
-                    payload["code"] = response.status
-                return payload
-        except urllib.error.HTTPError as e:
-            raw = ""
-            try:
-                raw = e.read().decode("utf-8", errors="replace")
-            except Exception:
-                raw = str(e)
-            return {"code": e.code, "error": raw[:500] or str(e)}
-        except Exception as e:
-            return {"code": 500, "error": str(e)}
 
 
 def extract_tweet_id(url_or_id):
@@ -88,77 +35,6 @@ def extract_tweet_id(url_or_id):
             return match.group(1)
     
     return url_or_id
-
-
-def extract_tweet_meta(url_or_id):
-    text = str(url_or_id or "").strip()
-    if text.isdigit():
-        return text, None
-    match = re.search(r'(?:twitter|x)\.com/([A-Za-z0-9_]+)/status/(\d+)', text)
-    if match:
-        return match.group(2), match.group(1)
-    return extract_tweet_id(text), None
-
-
-def _extract_timeline(result):
-    data = result.get("data", {}) if isinstance(result, dict) else {}
-    if isinstance(data, dict):
-        timeline = data.get("timeline")
-        if isinstance(timeline, list):
-            return timeline
-        nested = data.get("data")
-        if isinstance(nested, dict):
-            nested_timeline = nested.get("timeline")
-            if isinstance(nested_timeline, list):
-                return nested_timeline
-    return []
-
-
-def _extract_next_cursor(result):
-    data = result.get("data", {}) if isinstance(result, dict) else {}
-    if not isinstance(data, dict):
-        return None
-    for key in ("next_cursor", "cursor", "nextCursor"):
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
-def _tweet_obj_id(tweet):
-    if not isinstance(tweet, dict):
-        return ""
-    for key in ("tweet_id", "id", "rest_id"):
-        value = tweet.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return ""
-
-
-def get_tweet_from_user_posts(screen_name, tweet_id, limit=40, max_pages=3):
-    user = extract_screen_name(screen_name)
-    target_id = str(tweet_id or "").strip()
-    if not user or not target_id:
-        return {"code": 400, "error": "missing screen_name or tweet_id"}
-    cursor = None
-    last_error = None
-    for _ in range(max_pages):
-        result = get_user_posts(user, cursor=cursor, limit=limit)
-        if result.get("code") != 200:
-            last_error = result
-            break
-        for tweet in _extract_timeline(result):
-            if _tweet_obj_id(tweet) == target_id:
-                return {"code": 200, "data": tweet, "source": "fetch_user_post_tweet"}
-        cursor = _extract_next_cursor(result)
-        if not cursor:
-            break
-    if isinstance(last_error, dict):
-        return last_error
-    return {"code": 404, "error": f"tweet not found in user timeline: @{user}/{target_id}"}
 
 
 def extract_screen_name(url_or_name):
@@ -184,14 +60,15 @@ def extract_screen_name(url_or_name):
 
 def get_tweet_detail(tweet_id):
     """获取单个推文数据"""
-    tweet_id, screen_name = extract_tweet_meta(tweet_id)
-    if screen_name:
-        timeline_result = get_tweet_from_user_posts(screen_name, tweet_id)
-        if timeline_result.get("code") == 200:
-            return timeline_result
+    tweet_id = extract_tweet_id(tweet_id)
     endpoint = f"{API_BASE}/api/v1/twitter/web/fetch_tweet_detail"
     params = {"tweet_id": tweet_id}
-    return _request_json(endpoint, params)
+    
+    try:
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def get_comments(tweet_id, cursor=None):
@@ -260,7 +137,7 @@ def get_user_profile(screen_name=None, rest_id=None):
         return {"error": str(e)}
 
 
-def get_user_posts(screen_name=None, rest_id=None, cursor=None, limit=20):
+def get_user_posts(screen_name=None, rest_id=None, cursor=None):
     """获取用户发帖"""
     endpoint = f"{API_BASE}/api/v1/twitter/web/fetch_user_post_tweet"
     params = {}
@@ -268,16 +145,18 @@ def get_user_posts(screen_name=None, rest_id=None, cursor=None, limit=20):
     if rest_id:
         params["rest_id"] = rest_id
     elif screen_name:
-        normalized = extract_screen_name(screen_name)
-        params["screen_name"] = normalized
-        params["user_name"] = normalized
+        params["screen_name"] = extract_screen_name(screen_name)
     else:
         return {"error": "Must provide either screen_name or rest_id"}
     
-    params["limit"] = limit
     if cursor:
         params["cursor"] = cursor
-    return _request_json(endpoint, params)
+    
+    try:
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def get_user_replies(screen_name=None, rest_id=None, cursor=None):

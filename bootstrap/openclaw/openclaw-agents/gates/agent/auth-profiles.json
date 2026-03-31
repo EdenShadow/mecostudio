@@ -15,6 +15,14 @@
       "type": "api_key",
       "provider": "kimi-coding",
       "key": ""
+    },
+    "openai-codex:default": {
+      "type": "oauth",
+      "provider": "openai-codex",
+      "access": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjE5MzQ0ZTY1LWJiYzktNDRkMS1hOWQwLWY5NTdiMDc5YmQwZSIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfRU1vYW1FRVo3M2YwQ2tYYVhwN2hyYW5uIiwiZXhwIjoxNzc1MjEzNDMzLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiMGU1N2Y0YjctYjZjNy00NDk1LTgyYzUtODU5MzQ0MmY1ZjJlIiwiY2hhdGdwdF9hY2NvdW50X3VzZXJfaWQiOiJ1c2VyLVA3SGtCZ0JEclVxdlNFd3J5bDRGbXpacF9fMGU1N2Y0YjctYjZjNy00NDk1LTgyYzUtODU5MzQ0MmY1ZjJlIiwiY2hhdGdwdF9jb21wdXRlX3Jlc2lkZW5jeSI6Im5vX2NvbnN0cmFpbnQiLCJjaGF0Z3B0X3BsYW5fdHlwZSI6InBybyIsImNoYXRncHRfdXNlcl9pZCI6InVzZXItUDdIa0JnQkRyVXF2U0V3cnlsNEZtelpwIiwidXNlcl9pZCI6InVzZXItUDdIa0JnQkRyVXF2U0V3cnlsNEZtelpwIn0sImh0dHBzOi8vYXBpLm9wZW5haS5jb20vcHJvZmlsZSI6eyJlbWFpbCI6ImVkZW53b3JtQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlfSwiaWF0IjoxNzc0MzQ5NDMzLCJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsImp0aSI6ImU5MmM5NWFmLTcxNDEtNDAyNy04Y2FiLWQwODcxMzBjMzYxMCIsIm5iZiI6MTc3NDM0OTQzMywicHdkX2F1dGhfdGltZSI6MTc3MzY1ODE3NjUwMCwic2NwIjpbIm9wZW5pZCIsInByb2ZpbGUiLCJlbWFpbCIsIm9mZmxpbmVfYWNjZXNzIl0sInNlc3Npb25faWQiOiJhdXRoc2Vzc184REhLV1FTc0d3TGQ0aEVrTW1nclo0OVIiLCJzbCI6dHJ1ZSwic3ViIjoiZ29vZ2xlLW9hdXRoMnwxMTIxODE2NDU2MTk0MzIyNjQyNDkifQ.4Mg_jvTY968XKgeG_ZwFlncQ0IsEF5FekcR0VvVxm_GgB-jcyUMqz04ps2VDXewEBkXky91Bp6PIr1I1V2U3rByjPNGr4ueDdGvbZc6TvtHisMDf-hy6s34ooFCOIan_kWtXKIZh7GYlh7YjX_3sVT5STAQ8BWvoFgCkHVr84ZfnOIL47o4DJiJYz2ajhvlreh-OirrrRk5mwv3meqU-aBDwgez__R7hkWIOcizAJxlM0fohzKFtR98WDstFwudFydM9uSJf4gikoQNP5FST4RDxl0HZFjbX48qzNprhtcnqgk3mxye21mr037mk0SBrNQPs6rIyXZwZnG8jdsl_PmDUQfqBK5q4WqE3S0CjnNeXf-0VVc-nlCbnEG2atguGZ_d4Lse6F09dKy8gnqHmiv6VXTaZIEGSMuFv4vmES2_v9suB5GEM96MdZ81ReGX_PqTMR61yqoLVUkUw6aUiey1aF848NA015CFRaSbCSsYg33x-XB6Y2elLZmgCTFyC-PfJ4xGWNpBK0D4e8BpWblxPPQwI8siGz4gIxGtwUyFmRVHmABQmZftQQ_2HZMf7RH0wT2LpCNM_iZ9PisDQ7IFg2793VsTXdEhl0EP6laKhQLWuIrqz7ma5jNOEqOLM9W0MJgf2DDKIGmUkHSph7RhUpO9kAEQZY-qqLVmiyCo",
+      "refresh": "rt_EeGWxZd3gF2ndujmuWsrX0aZEi6GZnYzs-BtbeeCzqo.e0_bVw2eohkoRuV-bzL9mkqDGGhYjPkeJ9-dt3mHxPs",
+      "expires": 1775213433000,
+      "accountId": "0e57f4b7-b6c7-4495-82c5-8593442f5f2e"
     }
   },
   "lastGood": {
@@ -35,7 +43,7 @@
     },
     "kimi-coding:default": {
       "errorCount": 0,
-      "lastUsed": 1774535750100
+      "lastUsed": 1774876245187
     }
   }
 }
