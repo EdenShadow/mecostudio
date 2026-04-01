@@ -8,6 +8,7 @@ MECO_START_AFTER_INSTALL="${MECO_START_AFTER_INSTALL:-1}"
 MECO_RESET_RUNTIME_STATE="${MECO_RESET_RUNTIME_STATE:-1}"
 MECO_RESET_RUNTIME_STATE_ON_UPDATE="${MECO_RESET_RUNTIME_STATE_ON_UPDATE:-0}"
 MECO_UPGRADE_OPENCLAW="${MECO_UPGRADE_OPENCLAW:-0}"
+MECO_MIN_OPENCLAW_VERSION="${MECO_MIN_OPENCLAW_VERSION:-}"
 MECO_NPM_INSTALL_MODE="${MECO_NPM_INSTALL_MODE:-auto}" # auto|ci|install
 MECO_SKIP_NPM_INSTALL_IF_UNCHANGED="${MECO_SKIP_NPM_INSTALL_IF_UNCHANGED:-1}"
 MECO_HEALTHCHECK_RETRIES="${MECO_HEALTHCHECK_RETRIES:-20}"
@@ -243,19 +244,114 @@ ensure_python_and_pip() {
   fi
 }
 
+normalize_version_token() {
+  local raw="${1:-}"
+  node - "$raw" <<'NODE'
+const raw = String(process.argv[2] || '');
+const m = raw.match(/\d+(?:\.\d+)+/);
+process.stdout.write(m ? m[0] : '');
+NODE
+}
+
+resolve_required_openclaw_version() {
+  local fallback_version="2026.3.31"
+  local explicit lower normalized from_file version_file
+
+  explicit="$(printf '%s' "${MECO_MIN_OPENCLAW_VERSION:-}" | tr -d '\r')"
+  lower="$(printf '%s' "$explicit" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$lower" == "0" || "$lower" == "off" || "$lower" == "none" ]]; then
+    printf '%s\n' ''
+    return 0
+  fi
+  if [[ -n "$explicit" ]]; then
+    normalized="$(normalize_version_token "$explicit")"
+    if [[ -n "$normalized" ]]; then
+      printf '%s\n' "$normalized"
+      return 0
+    fi
+  fi
+
+  version_file="$MECO_INSTALL_DIR/OPENCLAW_MIN_VERSION"
+  if [[ -f "$version_file" ]]; then
+    from_file="$(head -n 1 "$version_file" 2>/dev/null | tr -d '\r' || true)"
+    normalized="$(normalize_version_token "$from_file")"
+    if [[ -n "$normalized" ]]; then
+      printf '%s\n' "$normalized"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$fallback_version"
+}
+
+is_version_less_than() {
+  local lhs="$1"
+  local rhs="$2"
+  node - "$lhs" "$rhs" <<'NODE'
+const leftRaw = String(process.argv[2] || '').trim();
+const rightRaw = String(process.argv[3] || '').trim();
+const toParts = (v) => v.split('.').map((p) => Number(String(p || '0').replace(/[^\d]/g, '')) || 0);
+const a = toParts(leftRaw);
+const b = toParts(rightRaw);
+const len = Math.max(a.length, b.length);
+let result = 0;
+for (let i = 0; i < len; i += 1) {
+  const av = a[i] || 0;
+  const bv = b[i] || 0;
+  if (av < bv) { result = -1; break; }
+  if (av > bv) { result = 1; break; }
+}
+process.exit(result < 0 ? 0 : 1);
+NODE
+}
+
+detect_installed_openclaw_version() {
+  local raw version
+  raw="$(openclaw --version 2>/dev/null | head -n 1 || true)"
+  version="$(normalize_version_token "$raw")"
+  printf '%s\n' "$version"
+}
+
 ensure_openclaw() {
+  local required_version installed_version should_upgrade reason final_version
+  should_upgrade=0
+  reason=""
+  required_version="$(resolve_required_openclaw_version)"
+
   if command -v openclaw >/dev/null 2>&1; then
+    installed_version="$(detect_installed_openclaw_version)"
     if [[ "$MECO_UPGRADE_OPENCLAW" == "1" ]]; then
-      log "Updating OpenClaw to latest..."
+      should_upgrade=1
+      reason="MECO_UPGRADE_OPENCLAW=1"
+    elif [[ -n "$required_version" ]]; then
+      if [[ -z "$installed_version" ]]; then
+        should_upgrade=1
+        reason="installed version unknown, require >= $required_version"
+      elif is_version_less_than "$installed_version" "$required_version"; then
+        should_upgrade=1
+        reason="installed=$installed_version < required=$required_version"
+      fi
+    fi
+
+    if (( should_upgrade == 1 )); then
+      log "Updating OpenClaw to latest ($reason)..."
       npm install -g openclaw@latest >/dev/null
     else
-      log "OpenClaw already installed, skip upgrade (set MECO_UPGRADE_OPENCLAW=1 to upgrade)"
+      if [[ -n "$required_version" && -n "$installed_version" ]]; then
+        log "OpenClaw already installed ($installed_version), meets required minimum ($required_version), skip upgrade"
+      else
+        log "OpenClaw already installed, skip upgrade (set MECO_UPGRADE_OPENCLAW=1 to force)"
+      fi
     fi
   else
     log "OpenClaw not found, installing..."
     npm install -g openclaw@latest >/dev/null
   fi
   command -v openclaw >/dev/null 2>&1 || die "openclaw install failed"
+  final_version="$(detect_installed_openclaw_version)"
+  if [[ -n "$final_version" ]]; then
+    log "OpenClaw version in use: $final_version"
+  fi
 }
 
 ensure_kimi_cli() {
@@ -1853,13 +1949,13 @@ main() {
   ensure_git
   ensure_node_and_npm
   ensure_python_and_pip
+  prepare_repo
   ensure_openclaw
   local effective_kimi_key="${MECO_KIMI_CODING_API_KEY:-}"
   local effective_model_key="${MECO_OPENCLAW_MODEL_API_KEY:-$MECO_KIMI_CODING_API_KEY}"
   configure_openclaw_kimi_auth "$effective_model_key"
   configure_openclaw_defaults "$MECO_OPENCLAW_MODEL" "$effective_model_key"
   ensure_kimi_cli
-  prepare_repo
   run_permissions_preflight
   install_dependencies
   ensure_cloudflared

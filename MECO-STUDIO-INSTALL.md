@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 ## 安装脚本默认行为
 
 - 安装 git（未安装自动安装）
-- 安装/升级 OpenClaw（未安装自动安装）
+- 安装 OpenClaw（未安装自动安装）；已安装时仅在版本低于最低要求时自动升级到 `openclaw@latest`
 - 安装 Python3 + pip（未安装自动安装）
 - 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
 - 安装 Whisper（`python3 -m pip install --user --upgrade openai-whisper`）
@@ -162,6 +162,7 @@ MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
 MECO_RUN_PERMISSION_PREFLIGHT=1 \
 MECO_UPGRADE_OPENCLAW=0 \
+MECO_MIN_OPENCLAW_VERSION="2026.3.31" \
 MECO_OPENCLAW_MODEL="kimi-coding/k2p5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
 MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
@@ -196,11 +197,17 @@ HOT_TOPICS_ROOT="$HOME/Documents/知识库/热门话题" \
 curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.sh | bash
 ```
 
+说明：
+- `MECO_MIN_OPENCLAW_VERSION` 可选；用于指定本次安装/更新要求的 OpenClaw 最低版本。
+- 未显式传入时，安装脚本会读取仓库根目录 `OPENCLAW_MIN_VERSION`。
+- 仅当本机 OpenClaw 版本低于最低要求时才会自动升级；高于或等于则保持不动。
+
 Windows PowerShell（等价变量）：
 
 ```powershell
 $env:MECO_INSTALL_DIR = "$env:USERPROFILE\\meco-studio"
 $env:MECO_OPENCLAW_MODEL = "kimi-coding/k2p5"
+$env:MECO_MIN_OPENCLAW_VERSION = "2026.3.31" # optional
 $env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
 $env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
 $env:MECO_DOUBAO_O2O_APP_ID = "<your-doubao-o2o-appid>"
@@ -296,6 +303,7 @@ defaults:
   install_dir: "~/meco-studio"
   service_url: "http://127.0.0.1:3456"
   openclaw_root: "~/.openclaw"
+  openclaw_min_version_file: "OPENCLAW_MIN_VERSION"
   hot_topics_root: "~/Documents/知识库/热门话题"
 api_keys:
   required:
@@ -309,7 +317,7 @@ api_keys:
   optional:
     - "OpenAI API Key"
 post_install_auto:
-  - "install/update openclaw"
+  - "install openclaw when missing; upgrade only when installed version is lower than required minimum"
   - "install python3/pip if missing"
   - "git pull latest code to install dir"
   - "run permission preflight (folder read/write + network + openclaw status)"

@@ -21,6 +21,7 @@ $MecoStartAfterInstall = Get-EnvOrDefault -Name 'MECO_START_AFTER_INSTALL' -Defa
 $MecoResetRuntimeState = Get-EnvOrDefault -Name 'MECO_RESET_RUNTIME_STATE' -Default '1'
 $MecoResetRuntimeStateOnUpdate = Get-EnvOrDefault -Name 'MECO_RESET_RUNTIME_STATE_ON_UPDATE' -Default '0'
 $MecoUpgradeOpenclaw = Get-EnvOrDefault -Name 'MECO_UPGRADE_OPENCLAW' -Default '0'
+$MecoMinOpenclawVersion = Get-EnvOrDefault -Name 'MECO_MIN_OPENCLAW_VERSION' -Default ''
 $MecoNpmInstallMode = Get-EnvOrDefault -Name 'MECO_NPM_INSTALL_MODE' -Default 'auto' # auto|ci|install
 $MecoHealthcheckRetries = [int](Get-EnvOrDefault -Name 'MECO_HEALTHCHECK_RETRIES' -Default '20')
 $MecoHealthcheckIntervalSec = [int](Get-EnvOrDefault -Name 'MECO_HEALTHCHECK_INTERVAL_SEC' -Default '1')
@@ -229,14 +230,134 @@ function Ensure-PythonAndPip {
   $script:PythonLauncher = $launcher
 }
 
+function Normalize-VersionToken {
+  param([string]$Raw)
+
+  if ([string]::IsNullOrWhiteSpace($Raw)) { return '' }
+  $m = [regex]::Match([string]$Raw, '\d+(?:\.\d+)+')
+  if ($m.Success) { return $m.Value.Trim() }
+  return ''
+}
+
+function Resolve-RequiredOpenclawVersion {
+  $explicit = [string]$MecoMinOpenclawVersion
+  $lower = $explicit.Trim().ToLowerInvariant()
+  if ($lower -eq '0' -or $lower -eq 'off' -or $lower -eq 'none') {
+    return ''
+  }
+  if (-not [string]::IsNullOrWhiteSpace($explicit)) {
+    $n = Normalize-VersionToken -Raw $explicit
+    if (-not [string]::IsNullOrWhiteSpace($n)) {
+      return $n
+    }
+  }
+
+  $versionFile = Join-Path $MecoInstallDir 'OPENCLAW_MIN_VERSION'
+  if (Test-Path $versionFile) {
+    try {
+      $raw = [string](Get-Content -Raw -Path $versionFile)
+      $line = ($raw -split "`r?`n")[0]
+      $n = Normalize-VersionToken -Raw $line
+      if (-not [string]::IsNullOrWhiteSpace($n)) {
+        return $n
+      }
+    }
+    catch {}
+  }
+
+  return '2026.3.31'
+}
+
+function Get-InstalledOpenclawVersion {
+  if (-not (Test-Cmd 'openclaw')) { return '' }
+  try {
+    $raw = (& openclaw --version 2>$null | Out-String)
+    return (Normalize-VersionToken -Raw $raw)
+  }
+  catch {
+    return ''
+  }
+}
+
+function Compare-VersionTokens {
+  param(
+    [string]$Left,
+    [string]$Right
+  )
+
+  $leftNorm = Normalize-VersionToken -Raw $Left
+  $rightNorm = Normalize-VersionToken -Raw $Right
+  if ([string]::IsNullOrWhiteSpace($leftNorm) -and [string]::IsNullOrWhiteSpace($rightNorm)) { return 0 }
+  if ([string]::IsNullOrWhiteSpace($leftNorm)) { return -1 }
+  if ([string]::IsNullOrWhiteSpace($rightNorm)) { return 1 }
+
+  $leftParts = @($leftNorm -split '\.' | ForEach-Object {
+      $n = 0
+      [void][int]::TryParse($_, [ref]$n)
+      $n
+    })
+  $rightParts = @($rightNorm -split '\.' | ForEach-Object {
+      $n = 0
+      [void][int]::TryParse($_, [ref]$n)
+      $n
+    })
+
+  $len = [Math]::Max($leftParts.Count, $rightParts.Count)
+  for ($i = 0; $i -lt $len; $i++) {
+    $a = if ($i -lt $leftParts.Count) { [int]$leftParts[$i] } else { 0 }
+    $b = if ($i -lt $rightParts.Count) { [int]$rightParts[$i] } else { 0 }
+    if ($a -lt $b) { return -1 }
+    if ($a -gt $b) { return 1 }
+  }
+
+  return 0
+}
+
+function Test-VersionLessThan {
+  param(
+    [string]$Left,
+    [string]$Right
+  )
+  return ((Compare-VersionTokens -Left $Left -Right $Right) -lt 0)
+}
+
 function Ensure-Openclaw {
+  $requiredVersion = Resolve-RequiredOpenclawVersion
+
   if (Test-Cmd 'openclaw') {
+    $installedVersion = Get-InstalledOpenclawVersion
+    $shouldUpgrade = $false
+    $reason = ''
+
     if ($MecoUpgradeOpenclaw -eq '1') {
-      Write-Log 'Updating OpenClaw to latest...'
+      $shouldUpgrade = $true
+      $reason = 'MECO_UPGRADE_OPENCLAW=1'
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($requiredVersion)) {
+      if ([string]::IsNullOrWhiteSpace($installedVersion)) {
+        $shouldUpgrade = $true
+        $reason = "installed version unknown, require >= $requiredVersion"
+      }
+      elseif (Test-VersionLessThan -Left $installedVersion -Right $requiredVersion) {
+        $shouldUpgrade = $true
+        $reason = "installed=$installedVersion < required=$requiredVersion"
+      }
+    }
+
+    if ($shouldUpgrade) {
+      Write-Log "Updating OpenClaw to latest ($reason)..."
       Invoke-Checked -FilePath 'npm' -Arguments @('install', '-g', 'openclaw@latest')
     }
+    elseif (-not [string]::IsNullOrWhiteSpace($requiredVersion) -and -not [string]::IsNullOrWhiteSpace($installedVersion)) {
+      Write-Log "OpenClaw already installed ($installedVersion), meets required minimum ($requiredVersion), skip upgrade"
+    }
     else {
-      Write-Log 'OpenClaw already installed, skip upgrade (set MECO_UPGRADE_OPENCLAW=1 to upgrade)'
+      Write-Log 'OpenClaw already installed, skip upgrade (set MECO_UPGRADE_OPENCLAW=1 to force)'
+    }
+
+    $finalVersion = Get-InstalledOpenclawVersion
+    if (-not [string]::IsNullOrWhiteSpace($finalVersion)) {
+      Write-Log "OpenClaw version in use: $finalVersion"
     }
     return
   }
@@ -246,6 +367,10 @@ function Ensure-Openclaw {
 
   if (-not (Test-Cmd 'openclaw')) {
     Throw-Fail 'openclaw install failed or command not available in PATH.'
+  }
+  $finalVersion = Get-InstalledOpenclawVersion
+  if (-not [string]::IsNullOrWhiteSpace($finalVersion)) {
+    Write-Log "OpenClaw version in use: $finalVersion"
   }
 }
 
@@ -1473,6 +1598,7 @@ function Main {
   Ensure-Git
   Ensure-NodeAndNpm
   Ensure-PythonAndPip
+  Prepare-Repo
   Ensure-Openclaw
 
   $effectiveModelKey = $MecoOpenclawModelApiKey
@@ -1482,7 +1608,6 @@ function Main {
 
   Configure-OpenclawKimiAuth -OpenclawModelApiKey $effectiveModelKey
   Configure-OpenclawDefaults -Model $MecoOpenclawModel -ProviderKey $effectiveModelKey
-  Prepare-Repo
   Ensure-KimiCli
   Install-NpmDependencies
   Ensure-Cloudflared

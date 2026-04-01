@@ -52,7 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 ## 📌 安装后自动完成
 
 - 安装 git（未安装自动安装）
-- 安装/升级 OpenClaw（未安装自动安装）
+- 安装 OpenClaw（未安装自动安装）；已安装时仅在版本低于最低要求时自动升级到 `openclaw@latest`
 - 安装 Python3 + pip（未安装自动安装）
 - 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
 - 安装 Whisper（`openai-whisper`，用于 hot-topics 音频分析）
@@ -170,6 +170,7 @@ MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
 MECO_RUN_PERMISSION_PREFLIGHT=1 \
 MECO_UPGRADE_OPENCLAW=0 \
+MECO_MIN_OPENCLAW_VERSION="2026.3.31" \
 MECO_OPENCLAW_MODEL="kimi-coding/k2p5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
 MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
@@ -209,6 +210,7 @@ Windows PowerShell（等价变量）：
 ```powershell
 $env:MECO_INSTALL_DIR = "$env:USERPROFILE\\meco-studio"
 $env:MECO_OPENCLAW_MODEL = "kimi-coding/k2p5"
+$env:MECO_MIN_OPENCLAW_VERSION = "2026.3.31" # optional
 $env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
 $env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
 $env:MECO_DOUBAO_O2O_APP_ID = "<your-doubao-o2o-appid>"
@@ -265,6 +267,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 说明：
 
 - `MECO_OPENCLAW_MODEL`：安装时写入 OpenClaw 默认模型（推荐 `kimi-coding/k2p5`）
+- `MECO_MIN_OPENCLAW_VERSION`：可选，设置 OpenClaw 最低要求版本；仅当当前版本低于该值时才自动升级（默认读取仓库 `OPENCLAW_MIN_VERSION`，无该文件时回退 `2026.3.31`）
 - `MECO_OPENCLAW_MODEL_API_KEY`：兼容保留，未设置时自动回退到 `MECO_KIMI_CODING_API_KEY`
 - `MECO_KIMI_CODING_API_KEY`：用于 Kimi CLI 激活，并通过 `kimi-code-api-key` 自动配置 OpenClaw 认证
 - `MECO_MINIMAX_API_KEY` / `MECO_TIKHUB_API_KEY` / `MECO_MEOWLOAD_API_KEY`：开箱即用所需关键能力
@@ -292,6 +295,7 @@ upgrade_command: "curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecost
 install_command_windows: "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/install-meco-studio.ps1 | iex\""
 default_install_dir: "~/meco-studio"
 default_openclaw_root: "~/.openclaw"
+default_openclaw_min_version_file: "OPENCLAW_MIN_VERSION"
 default_hot_topics_root: "~/Documents/知识库/热门话题"
 service_url: "http://127.0.0.1:3456"
 required_api_keys:
@@ -305,7 +309,7 @@ required_api_keys:
 optional_api_keys:
   - "OpenAI API Key"
 post_install_actions:
-  - "openclaw install/upgrade if needed"
+  - "install openclaw when missing; upgrade only when installed version is lower than required minimum"
   - "python3/pip install if needed"
   - "git pull latest code to install dir"
   - "run permission preflight (folder read/write + network + openclaw status)"
