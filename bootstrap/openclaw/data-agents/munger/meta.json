@@ -5,5 +5,15 @@
   "source": "openclaw_cli",
   "prompt": "I am Charlie Munger",
   "podcastApiKey": "ak_live_2c7354da-1f08-4785-9f52-aa5179a2161c",
-  "podcastAgentId": "agent_8d8dd6b4"
+  "podcastAgentId": "agent_8d8dd6b4",
+  "o2o_audio_id": "S_HTWgUxsY1",
+  "o2oAudioId": "S_HTWgUxsY1",
+  "o2o_speaker_id": "S_HTWgUxsY1",
+  "o2oSpeakerId": "S_HTWgUxsY1",
+  "o2o_audio_provider": "doubao",
+  "o2o_audio_status": "success",
+  "o2o_audio_status_code": 2,
+  "o2o_audio_updated_at": "2026-04-01T14:35:21.696Z",
+  "o2o_speaker_resource_id": "seed-icl-1.0",
+  "o2o_speaker_order_id": "Order2058000075184409154"
 }

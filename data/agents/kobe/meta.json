@@ -5,5 +5,15 @@
   "source": "openclaw_cli",
   "prompt": "I am Kobe Bryant",
   "podcastApiKey": "ak_live_763c0c38-b11a-4666-b476-167abd2e9c84",
-  "podcastAgentId": "agent_af42b288"
+  "podcastAgentId": "agent_af42b288",
+  "o2o_audio_id": "S_rXYS2ysY1",
+  "o2oAudioId": "S_rXYS2ysY1",
+  "o2o_speaker_id": "S_rXYS2ysY1",
+  "o2oSpeakerId": "S_rXYS2ysY1",
+  "o2o_audio_provider": "doubao",
+  "o2o_audio_status": "success",
+  "o2o_audio_status_code": 2,
+  "o2o_audio_updated_at": "2026-04-01T14:35:52.788Z",
+  "o2o_speaker_resource_id": "seed-icl-1.0",
+  "o2o_speaker_order_id": "Order2058000075047876994"
 }

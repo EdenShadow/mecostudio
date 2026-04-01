@@ -5,5 +5,15 @@
   "source": "openclaw_cli",
   "prompt": "I am Steve Jobs",
   "podcastApiKey": "ak_live_43b8fd2e-c5bc-43ca-a73f-c0504a95f760",
-  "podcastAgentId": "agent_45cb7233"
+  "podcastAgentId": "agent_45cb7233",
+  "o2o_speaker_id": "S_Fq8eGasY1",
+  "o2oSpeakerId": "S_Fq8eGasY1",
+  "o2o_audio_updated_at": "2026-04-01T14:19:14.250Z",
+  "o2o_audio_id": "S_Fq8eGasY1",
+  "o2oAudioId": "S_Fq8eGasY1",
+  "o2o_audio_provider": "doubao",
+  "o2o_audio_status": "success",
+  "o2o_audio_status_code": 2,
+  "o2o_speaker_resource_id": "seed-icl-2.0",
+  "o2o_speaker_order_id": "Order2058000075137421890"
 }
