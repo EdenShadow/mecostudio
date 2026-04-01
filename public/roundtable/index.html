@@ -93,10 +93,33 @@
       display: flex;
       gap: 8px;
       overflow-x: auto;
-      scrollbar-width: none;
+      overflow-y: hidden;
       -webkit-overflow-scrolling: touch;
+      padding-bottom: 2px;
+      scrollbar-width: none;
     }
-    .queue-scroll::-webkit-scrollbar { display: none; }
+    .queue-scroll::-webkit-scrollbar {
+      height: 0;
+    }
+    .queue-scroll.queue-scroll--overflow {
+      scrollbar-width: thin;
+      scrollbar-color: #3d444d #161b22;
+    }
+    .queue-scroll.queue-scroll--overflow::-webkit-scrollbar {
+      height: 8px;
+    }
+    .queue-scroll.queue-scroll--overflow::-webkit-scrollbar-track {
+      background: #161b22;
+      border-radius: 999px;
+    }
+    .queue-scroll.queue-scroll--overflow::-webkit-scrollbar-thumb {
+      background: #3d444d;
+      border-radius: 999px;
+      border: 1px solid #161b22;
+    }
+    .queue-scroll.queue-scroll--overflow::-webkit-scrollbar-thumb:hover {
+      background: #57606a;
+    }
     .queue-item {
       display: flex;
       flex-direction: row;
@@ -3598,12 +3621,24 @@
       tip._timer = setTimeout(function() { tip.style.display = 'none'; }, 4500);
     }
 
+    function refreshQueueScrollOverflowState() {
+      var queueScroll = document.getElementById('queue-scroll');
+      if (!queueScroll) return;
+      var hasOverflow = (queueScroll.scrollWidth - queueScroll.clientWidth) > 2;
+      if (hasOverflow) {
+        queueScroll.classList.add('queue-scroll--overflow');
+      } else {
+        queueScroll.classList.remove('queue-scroll--overflow');
+      }
+    }
+
     // 更新麦序话题列表
     function updateQueueBar(topics) {
       var queueBar = document.getElementById('queue-bar');
       var queueScroll = document.getElementById('queue-scroll');
       if (!topics || topics.length === 0) {
         queueBar.style.display = 'none';
+        queueScroll.classList.remove('queue-scroll--overflow');
         return;
       }
       queueScroll.innerHTML = '';
@@ -3643,6 +3678,11 @@
         queueScroll.appendChild(item);
       });
       queueBar.style.display = hasWaiting ? 'block' : 'none';
+      if (!hasWaiting) {
+        queueScroll.classList.remove('queue-scroll--overflow');
+        return;
+      }
+      requestAnimationFrame(refreshQueueScrollOverflowState);
       // 恢复已知的角标状态
       topics.forEach(function(topic) {
         var state = queueBadgeStates[topic.queue_id];
@@ -3651,6 +3691,10 @@
         }
       });
     }
+
+    window.addEventListener('resize', function() {
+      requestAnimationFrame(refreshQueueScrollOverflowState);
+    });
 
     // 更新麦序话题角标
     function updateQueueItemBadge(queueId, status, savedPath, crawlError) {

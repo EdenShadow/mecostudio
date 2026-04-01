@@ -33,7 +33,8 @@
   "lastGood": {
     "kimi-openai": "kimi-openai:default",
     "minimax": "minimax:default",
-    "kimi-coding": "kimi-coding:default"
+    "kimi-coding": "kimi-coding:default",
+    "kimi": "kimi:default"
   },
   "usageStats": {
     "kimi-openai:default": {
@@ -48,7 +49,11 @@
     },
     "kimi-coding:default": {
       "errorCount": 0,
-      "lastUsed": 1774935082435
+      "lastUsed": 1775019043598
+    },
+    "kimi:default": {
+      "errorCount": 0,
+      "lastUsed": 1775015402922
     }
   }
 }

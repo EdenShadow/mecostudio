@@ -447,18 +447,19 @@
         </div>
 
         <div class="space-y-2">
-            <div class="text-[11px] text-gray-500">O2O Audio ID</div>
-            <input id="o2o-audio-id-input" type="text" class="w-full h-10 px-3 rounded-xl bg-white/5 border border-white/10 text-gray-200 text-xs focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-colors" placeholder="Train or paste an O2O audio ID" />
+            <div class="text-[11px] text-gray-500">Generated O2O Audio ID</div>
+            <div id="o2o-audio-id-display" class="w-full min-h-10 px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-gray-200 text-xs break-all select-all cursor-text" style="-webkit-user-select:text;user-select:text;">Not generated yet</div>
+        </div>
+
+        <div class="space-y-2">
+            <div class="text-[11px] text-gray-500">Speaker ID (optional; empty means use already bound speaker)</div>
+            <input id="o2o-speaker-id-input" type="text" class="w-full h-10 px-3 rounded-xl bg-white/5 border border-white/10 text-gray-200 text-xs" placeholder="Optional: paste S_xxxxx">
         </div>
 
         <div class="flex items-center gap-2">
-            <button id="o2o-pick-btn" type="button" class="px-3 h-9 rounded-lg bg-white/5 border border-white/10 text-xs text-gray-300 hover:text-white hover:bg-white/10 transition-colors">Upload sample</button>
+            <button id="o2o-pick-btn" type="button" class="px-3 h-9 rounded-lg bg-white/5 border border-white/10 text-xs text-gray-300 hover:text-white hover:bg-white/10 transition-colors">Upload audio</button>
             <div id="o2o-file-name" class="text-[11px] text-gray-500 truncate">No file selected</div>
-        </div>
-
-        <div class="flex items-center gap-2">
-            <button id="o2o-train-btn" type="button" onclick="trainDoubaoO2oVoice()" class="px-3 h-9 rounded-lg bg-primary text-black text-xs font-semibold hover:bg-primaryHover transition-colors">Train and bind</button>
-            <button id="o2o-save-btn" type="button" onclick="saveO2oAudioId()" class="px-3 h-9 rounded-lg bg-white/5 border border-white/10 text-xs text-gray-200 hover:bg-white/10 transition-colors">Save ID</button>
+            <button id="o2o-train-btn" type="button" onclick="trainDoubaoO2oVoice()" class="px-3 h-9 rounded-lg bg-primary text-black text-xs font-semibold hover:bg-primaryHover transition-colors">Start generating voice</button>
         </div>
     </div>
 </div>
@@ -579,6 +580,7 @@
     window.knowledgeRuleExperienceUploadingLineNumber = null;
     window.knowledgeRuleBusy = false;
     window.currentO2oAudioId = '';
+    window.currentO2oSpeakerId = '';
     window.currentO2oFile = null;
     window.o2oTrainingInFlight = false;
     const MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.agentOrder.v1';
@@ -658,11 +660,18 @@
 
     function setO2oAudioId(value) {
         const normalized = String(value || '').trim();
-        const input = document.getElementById('o2o-audio-id-input');
-        if (input) input.value = normalized;
+        const display = document.getElementById('o2o-audio-id-display');
+        if (display) display.textContent = normalized || 'Not generated yet';
         window.currentO2oAudioId = normalized;
         if (normalized) setO2oStatus('Configured', 'ok');
         else setO2oStatus('Not configured', 'idle');
+    }
+
+    function setO2oSpeakerId(value) {
+        const normalized = String(value || '').trim();
+        const input = document.getElementById('o2o-speaker-id-input');
+        if (input) input.value = normalized;
+        window.currentO2oSpeakerId = normalized;
     }
 
     function initO2oUi() {
@@ -670,9 +679,7 @@
         const fileInput = document.getElementById('o2o-audio-file-input');
         const fileNameEl = document.getElementById('o2o-file-name');
         const trainBtn = document.getElementById('o2o-train-btn');
-        const saveBtn = document.getElementById('o2o-save-btn');
-        const idInput = document.getElementById('o2o-audio-id-input');
-        if (!pickBtn || !fileInput || !fileNameEl || !trainBtn || !saveBtn || !idInput) return;
+        if (!pickBtn || !fileInput || !fileNameEl || !trainBtn) return;
         if (pickBtn.dataset.bound === '1') return;
         pickBtn.dataset.bound = '1';
 
@@ -687,19 +694,6 @@
             window.currentO2oFile = file;
             fileNameEl.textContent = file ? file.name : 'No file selected';
         });
-
-        idInput.addEventListener('input', () => {
-            const current = String(idInput.value || '').trim();
-            if (!current) {
-                setO2oStatus('Not configured', 'idle');
-                return;
-            }
-            if (current === window.currentO2oAudioId) {
-                setO2oStatus('Configured', 'ok');
-            } else {
-                setO2oStatus('Unsaved change', 'warn');
-            }
-        });
     }
 
     async function refreshO2oAudioId(agentId) {
@@ -709,6 +703,7 @@
             if (!res.ok) return;
             const data = await res.json();
             setO2oAudioId(data?.o2o_audio_id || '');
+            setO2oSpeakerId(data?.o2o_speaker_id || '');
             if (data?.o2o_audio_status) {
                 const statusLower = String(data.o2o_audio_status).toLowerCase();
                 if (statusLower === 'success' || statusLower === 'active') setO2oStatus(`Ready (${data.o2o_audio_status})`, 'ok');
@@ -717,51 +712,6 @@
             }
         } catch (e) {
             console.warn('[O2O] refresh failed', e);
-        }
-    }
-
-    async function saveO2oAudioId(options = {}) {
-        const silent = !!options.silent;
-        const agentId = window.currentAgentId;
-        if (!agentId) return false;
-
-        const input = document.getElementById('o2o-audio-id-input');
-        if (!input) return true;
-
-        const nextId = String(input.value || '').trim();
-        if (nextId === window.currentO2oAudioId) return true;
-
-        const saveBtn = document.getElementById('o2o-save-btn');
-        if (saveBtn) {
-            saveBtn.disabled = true;
-            saveBtn.textContent = 'Saving...';
-        }
-
-        try {
-            const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/o2o-audio`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ o2o_audio_id: nextId })
-            });
-            if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                throw new Error(errData.error || `HTTP ${res.status}`);
-            }
-            setO2oAudioId(nextId);
-            if (!silent) {
-                setO2oStatus(nextId ? 'Saved' : 'Cleared', nextId ? 'ok' : 'idle');
-            }
-            return true;
-        } catch (e) {
-            console.error('[O2O] save failed', e);
-            setO2oStatus('Save failed', 'error');
-            if (!silent) alert(`Failed to save O2O audio ID: ${e.message}`);
-            return false;
-        } finally {
-            if (saveBtn) {
-                saveBtn.disabled = false;
-                saveBtn.textContent = 'Save ID';
-            }
         }
     }
 
@@ -783,31 +733,50 @@
         window.o2oTrainingInFlight = true;
         if (trainBtn) {
             trainBtn.disabled = true;
-            trainBtn.textContent = 'Training...';
+            trainBtn.textContent = 'Generating...';
         }
-        setO2oStatus('Submitting training...', 'warn');
+        setO2oStatus('Generating voice...', 'warn');
 
         try {
-            if (panel) overlay = showUploadLoading(panel, 'Training Doubao O2O voice...');
+            if (panel) overlay = showUploadLoading(panel, 'Generating Doubao O2O voice...');
             const formData = new FormData();
             formData.append('audio', file);
+            const speakerInput = document.getElementById('o2o-speaker-id-input');
+            const speakerId = String(speakerInput?.value || '').trim();
+            if (speakerId) formData.append('speaker_id', speakerId);
+            if (speakerId) {
+                try {
+                    await fetch(`/api/agents/${encodeURIComponent(agentId)}/o2o-audio`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            o2o_audio_id: window.currentO2oAudioId || '',
+                            o2o_speaker_id: speakerId
+                        })
+                    });
+                } catch (_) {}
+            }
             const res = await fetch(`/api/agents/${encodeURIComponent(agentId)}/o2o-audio/train`, {
                 method: 'POST',
                 body: formData
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
+                const speakerIdFromError = String(data?.o2o_speaker_id || '').trim();
+                if (speakerIdFromError) setO2oSpeakerId(speakerIdFromError);
                 throw new Error(data.error || `HTTP ${res.status}`);
             }
 
             const audioId = String(data.o2o_audio_id || '').trim();
             if (audioId) setO2oAudioId(audioId);
+            const speakerIdFromServer = String(data.o2o_speaker_id || '').trim();
+            if (speakerIdFromServer) setO2oSpeakerId(speakerIdFromServer);
 
             const statusLabel = String(data.speakerStatusLabel || '').trim();
             if (statusLabel.toLowerCase() === 'failure') {
-                setO2oStatus(`Training failed (${statusLabel})`, 'error');
+                setO2oStatus(`Generate failed (${statusLabel})`, 'error');
             } else if (data.ready) {
-                setO2oStatus(`Ready (${statusLabel || 'active'})`, 'ok');
+                setO2oStatus(`Generated (${statusLabel || 'active'})`, 'ok');
             } else {
                 setO2oStatus(`Submitted (${statusLabel || 'training'})`, 'warn');
             }
@@ -818,13 +787,13 @@
             window.currentO2oFile = null;
         } catch (e) {
             console.error('[O2O] train failed', e);
-            setO2oStatus('Training failed', 'error');
-            alert(`Doubao O2O training failed: ${e.message}`);
+            setO2oStatus('Generate failed', 'error');
+            alert(`Doubao O2O generate failed: ${e.message}`);
         } finally {
             if (overlay) hideUploadLoading();
             if (trainBtn) {
                 trainBtn.disabled = false;
-                trainBtn.textContent = 'Train and bind';
+                trainBtn.textContent = 'Start generating voice';
             }
             window.o2oTrainingInFlight = false;
         }
@@ -1493,6 +1462,7 @@
                 }
 
                 setO2oAudioId(agent.o2oAudioId || agent.o2o_audio_id || '');
+                setO2oSpeakerId(agent.o2oSpeakerId || agent.o2o_speaker_id || '');
                 await refreshO2oAudioId(agentId);
 
                 // 2. Load Workspace (Use ID)
@@ -1548,8 +1518,7 @@
                     saveBtn.parentNode.replaceChild(newSaveBtn, saveBtn);
                     newSaveBtn.addEventListener('click', async () => {
                         const soulSaved = await saveSoulMd();
-                        const o2oSaved = await saveO2oAudioId({ silent: true });
-                        const allSaved = !!(soulSaved && o2oSaved);
+                        const allSaved = !!soulSaved;
                         newSaveBtn.innerHTML = allSaved
                             ? '<span class="material-icons-round text-sm">check</span> Saved!'
                             : '<span class="material-icons-round text-sm">error</span> Partial Save';
