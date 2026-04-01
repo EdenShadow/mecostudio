@@ -7303,9 +7303,11 @@ app.get('/api/agents/:agentId/o2o-audio', (req, res) => {
   try {
     const { meta } = readAgentMeta(agentId);
     const o2oAudioId = String(meta.o2o_audio_id || meta.o2oAudioId || '').trim();
+    const o2oSpeakerId = String(meta.o2o_speaker_id || meta.o2oSpeakerId || '').trim();
     return res.json({
       success: true,
       o2o_audio_id: o2oAudioId,
+      o2o_speaker_id: o2oSpeakerId,
       o2o_audio_status: meta.o2o_audio_status || '',
       o2o_audio_status_code: Number.isFinite(Number(meta.o2o_audio_status_code)) ? Number(meta.o2o_audio_status_code) : null,
       o2o_audio_updated_at: meta.o2o_audio_updated_at || ''
@@ -7321,12 +7323,15 @@ app.put('/api/agents/:agentId/o2o-audio', (req, res) => {
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
   const o2oAudioId = String(req.body?.o2o_audio_id || req.body?.o2oAudioId || '').trim();
+  const o2oSpeakerId = String(req.body?.o2o_speaker_id || req.body?.o2oSpeakerId || '').trim();
 
   try {
     const nowIso = new Date().toISOString();
     const { meta } = writeAgentMeta(agentId, {
       o2o_audio_id: o2oAudioId,
       o2oAudioId: o2oAudioId,
+      o2o_speaker_id: o2oSpeakerId,
+      o2oSpeakerId: o2oSpeakerId,
       o2o_audio_updated_at: nowIso
     });
     if (AGENTS[agentId]) {
@@ -7335,6 +7340,7 @@ app.put('/api/agents/:agentId/o2o-audio', (req, res) => {
     return res.json({
       success: true,
       o2o_audio_id: o2oAudioId,
+      o2o_speaker_id: o2oSpeakerId,
       updatedAt: meta.o2o_audio_updated_at || nowIso
     });
   } catch (e) {
@@ -7351,14 +7357,55 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
   const runtimeSettings = appSettings.getSettings();
   const doubaoAppId = String(req.body?.appid || runtimeSettings?.doubaoO2oAppId || '').trim();
   const doubaoToken = String(req.body?.token || runtimeSettings?.doubaoO2oToken || '').trim();
-  const doubaoResourceId = String(req.body?.resource_id || '').trim();
+  const doubaoAppKey = String(req.body?.app_key || runtimeSettings?.doubaoO2oAppKey || '').trim();
+  const doubaoResourceId = String(req.body?.resource_id || runtimeSettings?.doubaoO2oResourceId || '').trim();
+  const doubaoOpenApiAccessKeyId = String(
+    req.body?.access_key_id
+      || runtimeSettings?.doubaoO2oAccessKeyId
+      || process.env.MECO_DOUBAO_O2O_ACCESS_KEY_ID
+      || process.env.DOUBAO_O2O_ACCESS_KEY_ID
+      || ''
+  ).trim();
+  const doubaoOpenApiSecretAccessKey = String(
+    req.body?.secret_access_key
+      || runtimeSettings?.doubaoO2oSecretAccessKey
+      || process.env.MECO_DOUBAO_O2O_SECRET_ACCESS_KEY
+      || process.env.DOUBAO_O2O_SECRET_ACCESS_KEY
+      || ''
+  ).trim();
+  const existingMetaSpeakerId = (() => {
+    try {
+      const { meta } = readAgentMeta(agentId);
+      const explicit = String(meta?.o2o_speaker_id || meta?.o2oSpeakerId || '').trim();
+      if (explicit) return explicit;
+      const fromAudioId = String(meta?.o2o_audio_id || meta?.o2oAudioId || '').trim();
+      if (/^S_/i.test(fromAudioId)) return fromAudioId;
+      return '';
+    } catch (_) {
+      return '';
+    }
+  })();
+  const requestedSpeakerId = String(req.body?.speaker_id || '').trim();
+  const alwaysNewSpeaker = String(req.body?.always_new_speaker || '1').trim() !== '0';
+  const autoOrderSpeaker = String(req.body?.auto_order_speaker || '1').trim() !== '0';
+  const freshSpeakerId = doubaoO2oService.buildFreshSpeakerId(agentId);
+  let doubaoSpeakerId = String(
+    requestedSpeakerId
+      || (alwaysNewSpeaker ? freshSpeakerId : (existingMetaSpeakerId || freshSpeakerId))
+  ).trim();
   if (!doubaoAppId || !doubaoToken) {
     return res.status(400).json({
       error: 'Doubao O2O AppID/Token 未配置，请先在 API Keys 中填写'
     });
   }
+  if (!doubaoSpeakerId) {
+    return res.status(400).json({
+      error: '缺少 Doubao O2O Speaker ID（S_开头）。请先在编辑页填写或从历史绑定读取。'
+    });
+  }
 
   const tempFilePath = req.file.path;
+  let orderedSpeaker = null;
   try {
     const localDir = resolveLocalAgentDir(agentId, true);
     if (!localDir) {
@@ -7370,17 +7417,42 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
     const samplePath = path.join(localDir, `o2o-voice-sample${sampleExt}`);
     fs.copyFileSync(tempFilePath, samplePath);
 
+    if (alwaysNewSpeaker && autoOrderSpeaker && !requestedSpeakerId) {
+      if (doubaoOpenApiAccessKeyId && doubaoOpenApiSecretAccessKey) {
+        orderedSpeaker = await doubaoO2oService.createSpeakerByOrder({
+          appId: doubaoAppId,
+          accessKeyId: doubaoOpenApiAccessKeyId,
+          secretAccessKey: doubaoOpenApiSecretAccessKey,
+          resourceId: String(req.body?.order_resource_id || '').trim(),
+          code: String(req.body?.order_code || '').trim(),
+          projectName: String(req.body?.order_project_name || '').trim(),
+          times: Number(req.body?.order_times || 1),
+          quantity: 1,
+          autoUseCoupon: String(req.body?.order_auto_use_coupon || '1').trim() !== '0',
+          pollMaxAttempts: Number(req.body?.order_poll_max_attempts || 10),
+          pollIntervalMs: Number(req.body?.order_poll_interval_ms || 2000)
+        });
+        if (orderedSpeaker?.speakerId) {
+          doubaoSpeakerId = String(orderedSpeaker.speakerId).trim();
+        }
+      } else {
+        console.warn(`[DoubaoO2O] skip auto order speaker for ${agentId}: missing access key credentials`);
+      }
+    }
+
     const audioBytes = fs.readFileSync(samplePath).toString('base64');
     const audioFormat = doubaoO2oService.normalizeAudioFormat(req.body?.audio_format || inferAudioFormatFromUpload(req.file));
+    const submitResourceId = String(doubaoResourceId || '').trim();
 
     const submit = await doubaoO2oService.submitO2oClone({
       agentId,
       audioBytes,
       audioFormat,
-      speakerId: req.body?.speaker_id || '',
+      speakerId: doubaoSpeakerId,
       appId: doubaoAppId,
       token: doubaoToken,
-      resourceId: doubaoResourceId
+      appKey: doubaoAppKey,
+      resourceId: submitResourceId
     });
 
     let statusInfo = null;
@@ -7389,7 +7461,8 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
         speakerId: submit.speakerId,
         appId: doubaoAppId,
         token: doubaoToken,
-        resourceId: doubaoResourceId,
+        appKey: doubaoAppKey,
+        resourceId: submitResourceId,
         maxAttempts: 8,
         intervalMs: 2500
       });
@@ -7401,14 +7474,25 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
     const speakerStatusLabel = String(statusInfo?.speakerStatusLabel || 'submitted');
     const nowIso = new Date().toISOString();
 
-    writeAgentMeta(agentId, {
+    const effectiveSpeakerId = String(submit.speakerId || doubaoSpeakerId || '').trim();
+    const metaPatch = {
       o2o_audio_id: submit.speakerId,
       o2oAudioId: submit.speakerId,
+      o2o_speaker_id: effectiveSpeakerId,
+      o2oSpeakerId: effectiveSpeakerId,
       o2o_audio_provider: 'doubao',
       o2o_audio_status: speakerStatusLabel,
       o2o_audio_status_code: Number.isFinite(speakerStatus) ? speakerStatus : null,
       o2o_audio_updated_at: nowIso
-    });
+    };
+    const speakerResourceId = String(
+      orderedSpeaker?.resourceId || submit?.resourceIdUsed || submitResourceId || ''
+    ).trim();
+    const speakerOrderId = String(orderedSpeaker?.orderId || '').trim();
+    if (speakerResourceId) metaPatch.o2o_speaker_resource_id = speakerResourceId;
+    if (speakerOrderId) metaPatch.o2o_speaker_order_id = speakerOrderId;
+
+    writeAgentMeta(agentId, metaPatch);
 
     if (AGENTS[agentId]) {
       AGENTS[agentId].o2oAudioId = submit.speakerId;
@@ -7417,15 +7501,23 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
     return res.json({
       success: true,
       o2o_audio_id: submit.speakerId,
+      o2o_speaker_id: effectiveSpeakerId,
       speakerStatus: Number.isFinite(speakerStatus) ? speakerStatus : null,
       speakerStatusLabel,
+      orderId: String(orderedSpeaker?.orderId || '').trim() || null,
+      speakerResourceId: speakerResourceId || null,
       ready: !!statusInfo?.ready,
       done: !!statusInfo?.done,
       attempts: Number.isFinite(Number(statusInfo?.attempts)) ? Number(statusInfo.attempts) : 0
     });
   } catch (e) {
-    console.error(`[DoubaoO2O] train failed for ${agentId}: ${e.message}`);
-    return res.status(500).json({ error: e.message || 'doubao o2o train failed' });
+    const message = e.message || 'doubao o2o train failed';
+    console.error(`[DoubaoO2O] train failed for ${agentId}: ${message}`);
+    const isAuthOrConfigError = /HTTP\s*(401|403)|invalid auth token|未配置|missing appId|missing token/i.test(message);
+    return res.status(isAuthOrConfigError ? 400 : 500).json({
+      error: message,
+      o2o_speaker_id: doubaoSpeakerId || ''
+    });
   } finally {
     if (tempFilePath) {
       try {

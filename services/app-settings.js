@@ -18,6 +18,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   minimaxWsUrl: 'wss://api.minimaxi.com/ws/v1/t2a_v2',
   doubaoO2oAppId: '',
   doubaoO2oToken: '',
+  doubaoO2oAppKey: '',
+  doubaoO2oResourceId: 'seed-icl-2.0',
+  doubaoO2oAccessKeyId: '',
+  doubaoO2oSecretAccessKey: '',
   tikhubApiKey: '',
   meowloadApiKey: '',
   kimiApiKey: '',
@@ -56,6 +60,10 @@ const ENV_MAP = Object.freeze({
   minimaxWsUrl: 'MECO_MINIMAX_WS_URL',
   doubaoO2oAppId: 'MECO_DOUBAO_O2O_APP_ID',
   doubaoO2oToken: 'MECO_DOUBAO_O2O_TOKEN',
+  doubaoO2oAppKey: 'MECO_DOUBAO_O2O_APP_KEY',
+  doubaoO2oResourceId: 'MECO_DOUBAO_O2O_RESOURCE_ID',
+  doubaoO2oAccessKeyId: 'MECO_DOUBAO_O2O_ACCESS_KEY_ID',
+  doubaoO2oSecretAccessKey: 'MECO_DOUBAO_O2O_SECRET_ACCESS_KEY',
   tikhubApiKey: 'TIKHUB_API_KEY',
   meowloadApiKey: 'MECO_MEOWLOAD_API_KEY',
   kimiApiKey: 'KIMI_API_KEY',
@@ -221,6 +229,10 @@ function loadSettings() {
   if (!toSafeString(merged.openclawModelApiKey) && toSafeString(merged.kimiApiKey)) {
     merged.openclawModelApiKey = toSafeString(merged.kimiApiKey);
   }
+  // Legacy default from earlier demo docs; auto-upgrade to O2O clone resource.
+  if (toSafeString(merged.doubaoO2oResourceId) === 'volc.service_type.10029') {
+    merged.doubaoO2oResourceId = 'seed-icl-2.0';
+  }
   merged.rustdeskSchemeAuthority = normalizeRustDeskSchemeAuthority(merged.rustdeskSchemeAuthority);
 
   const envApplied = applyEnvOverrides(merged);
@@ -279,6 +291,9 @@ function getMaskedSettings() {
     openclawModelApiKey: maskSecret(current.openclawModelApiKey),
     minimaxApiKey: maskSecret(current.minimaxApiKey),
     doubaoO2oToken: maskSecret(current.doubaoO2oToken),
+    doubaoO2oAppKey: maskSecret(current.doubaoO2oAppKey),
+    doubaoO2oAccessKeyId: maskSecret(current.doubaoO2oAccessKeyId),
+    doubaoO2oSecretAccessKey: maskSecret(current.doubaoO2oSecretAccessKey),
     tikhubApiKey: maskSecret(current.tikhubApiKey),
     meowloadApiKey: maskSecret(current.meowloadApiKey),
     kimiApiKey: maskSecret(current.kimiApiKey),

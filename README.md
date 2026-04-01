@@ -138,6 +138,7 @@ OpenClaw 的 `HTTP URL / WS URL / Gateway Token` 现在会由 Meco Studio 自动
 - `MeowLoad API Key`（哼哼猫 / media-downloader）
 - `MiniMax API Key`（TTS 必需）
 - `Doubao O2O AppID / Token`（豆包语音克隆）
+- `Doubao O2O Access Key ID / Secret Access Key`（可选；用于自动创建音色槽位并训练）
 - `Aliyun OSS Endpoint`（默认：`https://oss-cn-hongkong.aliyuncs.com/`）
 - `Aliyun OSS Bucket`（固定默认：`cfplusvideo`）
 - `Aliyun OSS AccessKey ID`（仓库不内置默认值，需手动填写）
@@ -175,6 +176,10 @@ MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
 MECO_MINIMAX_API_KEY="xxxx" \
 MECO_DOUBAO_O2O_APP_ID="5022xxxxxx" \
 MECO_DOUBAO_O2O_TOKEN="xxxx" \
+MECO_DOUBAO_O2O_APP_KEY="<optional-doubao-o2o-appkey>" \
+MECO_DOUBAO_O2O_RESOURCE_ID="${MECO_DOUBAO_O2O_RESOURCE_ID:-seed-icl-2.0}" \
+MECO_DOUBAO_O2O_ACCESS_KEY_ID="<your-doubao-o2o-access-key-id>" \
+MECO_DOUBAO_O2O_SECRET_ACCESS_KEY="<your-doubao-o2o-secret-access-key>" \
 MECO_TIKHUB_API_KEY="xxxx" \
 MECO_MEOWLOAD_API_KEY="xxxx" \
 MECO_OSS_ENDPOINT="https://oss-cn-hongkong.aliyuncs.com/" \
@@ -208,6 +213,10 @@ $env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
 $env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
 $env:MECO_DOUBAO_O2O_APP_ID = "<your-doubao-o2o-appid>"
 $env:MECO_DOUBAO_O2O_TOKEN = "<your-doubao-o2o-token>"
+$env:MECO_DOUBAO_O2O_APP_KEY = "<your-doubao-o2o-appkey-optional>"
+$env:MECO_DOUBAO_O2O_RESOURCE_ID = "seed-icl-2.0" # optional
+$env:MECO_DOUBAO_O2O_ACCESS_KEY_ID = "<your-doubao-o2o-access-key-id>" # optional
+$env:MECO_DOUBAO_O2O_SECRET_ACCESS_KEY = "<your-doubao-o2o-secret-access-key>" # optional
 $env:MECO_TIKHUB_API_KEY = "<your-tikhub-key>"
 $env:MECO_MEOWLOAD_API_KEY = "<your-meowload-key>"
 $env:MECO_OSS_ENDPOINT = "https://oss-cn-hongkong.aliyuncs.com/"
@@ -239,6 +248,10 @@ MECO_KIMI_CODING_API_KEY="<your-kimi-coding-key>" \
 MECO_MINIMAX_API_KEY="<your-minimax-key>" \
 MECO_DOUBAO_O2O_APP_ID="<your-doubao-o2o-appid>" \
 MECO_DOUBAO_O2O_TOKEN="<your-doubao-o2o-token>" \
+MECO_DOUBAO_O2O_APP_KEY="<your-doubao-o2o-appkey-optional>" \
+MECO_DOUBAO_O2O_RESOURCE_ID="seed-icl-2.0" \
+MECO_DOUBAO_O2O_ACCESS_KEY_ID="<your-doubao-o2o-access-key-id>" \
+MECO_DOUBAO_O2O_SECRET_ACCESS_KEY="<your-doubao-o2o-secret-access-key>" \
 MECO_TIKHUB_API_KEY="<your-tikhub-key>" \
 MECO_MEOWLOAD_API_KEY="<your-meowload-key>" \
 MECO_OSS_ENDPOINT="https://oss-cn-hongkong.aliyuncs.com/" \
@@ -255,6 +268,9 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 - `MECO_OPENCLAW_MODEL_API_KEY`：兼容保留，未设置时自动回退到 `MECO_KIMI_CODING_API_KEY`
 - `MECO_KIMI_CODING_API_KEY`：用于 Kimi CLI 激活，并通过 `kimi-code-api-key` 自动配置 OpenClaw 认证
 - `MECO_MINIMAX_API_KEY` / `MECO_TIKHUB_API_KEY` / `MECO_MEOWLOAD_API_KEY`：开箱即用所需关键能力
+- `MECO_DOUBAO_O2O_APP_ID` / `MECO_DOUBAO_O2O_TOKEN`：Doubao O2O 训练与绑定能力
+- `MECO_DOUBAO_O2O_APP_KEY` / `MECO_DOUBAO_O2O_RESOURCE_ID`：可选高级参数（推荐 `seed-icl-2.0`）
+- `MECO_DOUBAO_O2O_ACCESS_KEY_ID` / `MECO_DOUBAO_O2O_SECRET_ACCESS_KEY`：可选；用于自动下单并拉取新 `S_...` 音色槽位
 - `MECO_OSS_ENDPOINT` / `MECO_OSS_BUCKET` / `MECO_OSS_ACCESS_KEY_ID` / `MECO_OSS_ACCESS_KEY_SECRET`：阿里云 OSS 上传下载能力（仓库不内置任何真实密钥）
 - `MECO_OPENAI_API_KEY`：可选，Whisper API 模式可用
 

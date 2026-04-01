@@ -2317,6 +2317,30 @@
         const MECO_UPDATE_NOTIFIED_TASK_ID_KEY = 'meco.update.notifiedTaskId';
         const MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.agentOrder.v1';
         const MECO_CHANNEL_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.channelOrder.v1';
+        const MECO_API_SETTINGS_CACHE_KEY = 'meco.apiSettings.cache.v1';
+        const MECO_API_SETTINGS_CACHE_FIELDS = Object.freeze([
+            'openclawModel',
+            'openclawModelApiKey',
+            'minimaxApiKey',
+            'minimaxWsUrl',
+            'doubaoO2oAppId',
+            'doubaoO2oToken',
+            'doubaoO2oAppKey',
+            'doubaoO2oResourceId',
+            'doubaoO2oAccessKeyId',
+            'doubaoO2oSecretAccessKey',
+            'tikhubApiKey',
+            'meowloadApiKey',
+            'kimiApiKey',
+            'openaiApiKey',
+            'ossEndpoint',
+            'ossBucket',
+            'ossAccessKeyId',
+            'ossAccessKeySecret',
+            'cloudflarePublicHost',
+            'cloudflarePathPrefix',
+            'cloudflareTunnelToken'
+        ]);
         const MECO_SIDEBAR_AUTO_COLLAPSE_WIDTH = 1040;
         const MECO_HEADER_COMPACT_WIDTH = 1080;
         let mecoSidebarManualCollapsed = false;
@@ -5440,36 +5464,101 @@
             if (modal) modal.classList.add('hidden');
         }
 
+        function normalizeApiSettingValue(value) {
+            if (value === null || value === undefined) return '';
+            return String(value);
+        }
+
+        function readApiSettingsCache() {
+            try {
+                const raw = localStorage.getItem(MECO_API_SETTINGS_CACHE_KEY);
+                if (!raw) return {};
+                const parsed = JSON.parse(raw);
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+                const next = {};
+                for (const key of MECO_API_SETTINGS_CACHE_FIELDS) {
+                    if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
+                    next[key] = normalizeApiSettingValue(parsed[key]);
+                }
+                return next;
+            } catch (_) {
+                return {};
+            }
+        }
+
+        function saveApiSettingsCache(settings = {}) {
+            try {
+                const current = readApiSettingsCache();
+                const next = { ...current };
+                for (const key of MECO_API_SETTINGS_CACHE_FIELDS) {
+                    if (!Object.prototype.hasOwnProperty.call(settings, key)) continue;
+                    next[key] = normalizeApiSettingValue(settings[key]);
+                }
+                localStorage.setItem(MECO_API_SETTINGS_CACHE_KEY, JSON.stringify(next));
+            } catch (_) {}
+        }
+
+        function mergeApiSettingsWithCache(fetched = {}, cached = {}) {
+            const next = { ...fetched };
+            for (const key of MECO_API_SETTINGS_CACHE_FIELDS) {
+                const fetchedValue = normalizeApiSettingValue(next[key]);
+                const cachedValue = normalizeApiSettingValue(cached[key]);
+                if (!fetchedValue && cachedValue) {
+                    next[key] = cachedValue;
+                }
+            }
+            return next;
+        }
+
+        function applyApiSettingsToInputs(settings = {}) {
+            const setValue = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.value = value || '';
+            };
+
+            setValue('cfg-openclaw-model', settings.openclawModel);
+            setValue('cfg-openclaw-model-key', settings.openclawModelApiKey);
+            setValue('cfg-minimax-key', settings.minimaxApiKey);
+            setValue('cfg-minimax-ws-url', settings.minimaxWsUrl);
+            setValue('cfg-doubao-o2o-appid', settings.doubaoO2oAppId);
+            setValue('cfg-doubao-o2o-token', settings.doubaoO2oToken);
+            setValue('cfg-doubao-o2o-appkey', settings.doubaoO2oAppKey);
+            setValue('cfg-doubao-o2o-resource-id', settings.doubaoO2oResourceId);
+            setValue('cfg-doubao-o2o-access-key-id', settings.doubaoO2oAccessKeyId);
+            setValue('cfg-doubao-o2o-secret-access-key', settings.doubaoO2oSecretAccessKey);
+            setValue('cfg-tikhub-key', settings.tikhubApiKey);
+            setValue('cfg-meowload-key', settings.meowloadApiKey);
+            setValue('cfg-kimi-key', settings.kimiApiKey);
+            setValue('cfg-openai-key', settings.openaiApiKey);
+            setValue('cfg-oss-endpoint', settings.ossEndpoint);
+            setValue('cfg-oss-bucket', settings.ossBucket);
+            setValue('cfg-oss-key-id', settings.ossAccessKeyId);
+            setValue('cfg-oss-key-secret', settings.ossAccessKeySecret);
+            setValue('cfg-cloudflare-public-host', settings.cloudflarePublicHost);
+            setValue('cfg-cloudflare-path-prefix', settings.cloudflarePathPrefix);
+            setValue('cfg-cloudflare-tunnel-token', settings.cloudflareTunnelToken);
+        }
+
         async function loadApiSettings() {
+            const cachedSettings = readApiSettingsCache();
+            if (cachedSettings && Object.keys(cachedSettings).length > 0) {
+                appRuntimeSettings = { ...cachedSettings };
+                applyApiSettingsToInputs(appRuntimeSettings);
+            }
             try {
                 const res = await fetch('/api/settings');
                 const data = await res.json();
-                appRuntimeSettings = data.settings || {};
-
-                const setValue = (id, value) => {
-                    const el = document.getElementById(id);
-                    if (el) el.value = value || '';
-                };
-
-                setValue('cfg-openclaw-model', appRuntimeSettings.openclawModel);
-                setValue('cfg-openclaw-model-key', appRuntimeSettings.openclawModelApiKey);
-                setValue('cfg-minimax-key', appRuntimeSettings.minimaxApiKey);
-                setValue('cfg-minimax-ws-url', appRuntimeSettings.minimaxWsUrl);
-                setValue('cfg-doubao-o2o-appid', appRuntimeSettings.doubaoO2oAppId);
-                setValue('cfg-doubao-o2o-token', appRuntimeSettings.doubaoO2oToken);
-                setValue('cfg-tikhub-key', appRuntimeSettings.tikhubApiKey);
-                setValue('cfg-meowload-key', appRuntimeSettings.meowloadApiKey);
-                setValue('cfg-kimi-key', appRuntimeSettings.kimiApiKey);
-                setValue('cfg-openai-key', appRuntimeSettings.openaiApiKey);
-                setValue('cfg-oss-endpoint', appRuntimeSettings.ossEndpoint);
-                setValue('cfg-oss-bucket', appRuntimeSettings.ossBucket);
-                setValue('cfg-oss-key-id', appRuntimeSettings.ossAccessKeyId);
-                setValue('cfg-oss-key-secret', appRuntimeSettings.ossAccessKeySecret);
-                setValue('cfg-cloudflare-public-host', appRuntimeSettings.cloudflarePublicHost);
-                setValue('cfg-cloudflare-path-prefix', appRuntimeSettings.cloudflarePathPrefix);
-                setValue('cfg-cloudflare-tunnel-token', appRuntimeSettings.cloudflareTunnelToken);
+                const fetched = data && data.settings && typeof data.settings === 'object'
+                    ? data.settings
+                    : {};
+                appRuntimeSettings = mergeApiSettingsWithCache(fetched, cachedSettings);
+                applyApiSettingsToInputs(appRuntimeSettings);
+                saveApiSettingsCache(appRuntimeSettings);
             } catch (e) {
                 console.error('Load settings failed', e);
+                if (cachedSettings && Object.keys(cachedSettings).length > 0) {
+                    return;
+                }
                 alert('加载设置失败: ' + e.message);
             }
         }
@@ -5488,6 +5577,10 @@
                 minimaxWsUrl: document.getElementById('cfg-minimax-ws-url')?.value || '',
                 doubaoO2oAppId: document.getElementById('cfg-doubao-o2o-appid')?.value || '',
                 doubaoO2oToken: document.getElementById('cfg-doubao-o2o-token')?.value || '',
+                doubaoO2oAppKey: document.getElementById('cfg-doubao-o2o-appkey')?.value || '',
+                doubaoO2oResourceId: document.getElementById('cfg-doubao-o2o-resource-id')?.value || '',
+                doubaoO2oAccessKeyId: document.getElementById('cfg-doubao-o2o-access-key-id')?.value || '',
+                doubaoO2oSecretAccessKey: document.getElementById('cfg-doubao-o2o-secret-access-key')?.value || '',
                 tikhubApiKey: document.getElementById('cfg-tikhub-key')?.value || '',
                 meowloadApiKey: document.getElementById('cfg-meowload-key')?.value || '',
                 kimiApiKey: document.getElementById('cfg-kimi-key')?.value || '',
@@ -5512,6 +5605,11 @@
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'save failed');
+                appRuntimeSettings = mergeApiSettingsWithCache(
+                    (data && data.settings && typeof data.settings === 'object') ? data.settings : settings,
+                    appRuntimeSettings || {}
+                );
+                saveApiSettingsCache(appRuntimeSettings);
 
                 const logs = (data.integration && Array.isArray(data.integration.logs))
                     ? data.integration.logs.join('\n')
@@ -11644,6 +11742,22 @@
             <div>
                 <label class="block text-xs text-gray-400 mb-1">Doubao O2O Token</label>
                 <input id="cfg-doubao-o2o-token" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="Doubao token">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Doubao O2O AppKey (optional)</label>
+                <input id="cfg-doubao-o2o-appkey" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="X-Api-App-Key">
+            </div>
+            <div>
+                <label class="block text-xs text-gray-400 mb-1">Doubao O2O Resource ID (optional)</label>
+                <input id="cfg-doubao-o2o-resource-id" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="seed-icl-2.0">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Doubao O2O Access Key ID (auto speaker optional)</label>
+                <input id="cfg-doubao-o2o-access-key-id" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="AKLT...">
+            </div>
+            <div class="md:col-span-2">
+                <label class="block text-xs text-gray-400 mb-1">Doubao O2O Secret Access Key (auto speaker optional)</label>
+                <input id="cfg-doubao-o2o-secret-access-key" type="text" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="SecretAccessKey">
             </div>
             <div class="md:col-span-2">
                 <label class="block text-xs text-gray-400 mb-1">TikHub API Key (hot-topics)</label>

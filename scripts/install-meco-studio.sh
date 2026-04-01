@@ -20,6 +20,10 @@ MECO_MINIMAX_API_KEY="${MECO_MINIMAX_API_KEY:-}"
 MECO_MINIMAX_WS_URL="${MECO_MINIMAX_WS_URL:-wss://api.minimaxi.com/ws/v1/t2a_v2}"
 MECO_DOUBAO_O2O_APP_ID="${MECO_DOUBAO_O2O_APP_ID:-}"
 MECO_DOUBAO_O2O_TOKEN="${MECO_DOUBAO_O2O_TOKEN:-}"
+MECO_DOUBAO_O2O_APP_KEY="${MECO_DOUBAO_O2O_APP_KEY:-}"
+MECO_DOUBAO_O2O_RESOURCE_ID="${MECO_DOUBAO_O2O_RESOURCE_ID:-seed-icl-2.0}"
+MECO_DOUBAO_O2O_ACCESS_KEY_ID="${MECO_DOUBAO_O2O_ACCESS_KEY_ID:-}"
+MECO_DOUBAO_O2O_SECRET_ACCESS_KEY="${MECO_DOUBAO_O2O_SECRET_ACCESS_KEY:-}"
 MECO_TIKHUB_API_KEY="${MECO_TIKHUB_API_KEY:-}"
 MECO_MEOWLOAD_API_KEY="${MECO_MEOWLOAD_API_KEY:-}"
 MECO_OPENAI_API_KEY="${MECO_OPENAI_API_KEY:-}"
@@ -980,21 +984,25 @@ configure_meco_runtime_settings() {
       minimaxWsUrl: String(process.argv[5] || "").trim(),
       doubaoO2oAppId: String(process.argv[6] || "").trim(),
       doubaoO2oToken: String(process.argv[7] || "").trim(),
-      tikhubApiKey: String(process.argv[8] || "").trim(),
-      meowloadApiKey: String(process.argv[9] || "").trim(),
-      kimiApiKey: String(process.argv[10] || "").trim(),
-      hotTopicsKbPath: String(process.argv[11] || "").trim(),
-      openaiApiKey: String(process.argv[12] || "").trim(),
-      ossEndpoint: String(process.argv[13] || "").trim(),
-      ossBucket: String(process.argv[14] || "").trim(),
-      ossAccessKeyId: String(process.argv[15] || "").trim(),
-      ossAccessKeySecret: String(process.argv[16] || "").trim(),
-      cloudflarePublicHost: String(process.argv[17] || "").trim(),
-      cloudflarePathPrefix: String(process.argv[18] || "").trim(),
-      cloudflareTunnelToken: String(process.argv[19] || "").trim(),
-      rustdeskWebBaseUrl: String(process.argv[20] || "").trim(),
-      rustdeskSchemeAuthority: String(process.argv[21] || "").trim() || "connect",
-      rustdeskPreferredRendezvous: String(process.argv[22] || "").trim()
+      doubaoO2oAppKey: String(process.argv[8] || "").trim(),
+      doubaoO2oResourceId: String(process.argv[9] || "").trim(),
+      doubaoO2oAccessKeyId: String(process.argv[10] || "").trim(),
+      doubaoO2oSecretAccessKey: String(process.argv[11] || "").trim(),
+      tikhubApiKey: String(process.argv[12] || "").trim(),
+      meowloadApiKey: String(process.argv[13] || "").trim(),
+      kimiApiKey: String(process.argv[14] || "").trim(),
+      hotTopicsKbPath: String(process.argv[15] || "").trim(),
+      openaiApiKey: String(process.argv[16] || "").trim(),
+      ossEndpoint: String(process.argv[17] || "").trim(),
+      ossBucket: String(process.argv[18] || "").trim(),
+      ossAccessKeyId: String(process.argv[19] || "").trim(),
+      ossAccessKeySecret: String(process.argv[20] || "").trim(),
+      cloudflarePublicHost: String(process.argv[21] || "").trim(),
+      cloudflarePathPrefix: String(process.argv[22] || "").trim(),
+      cloudflareTunnelToken: String(process.argv[23] || "").trim(),
+      rustdeskWebBaseUrl: String(process.argv[24] || "").trim(),
+      rustdeskSchemeAuthority: String(process.argv[25] || "").trim() || "connect",
+      rustdeskPreferredRendezvous: String(process.argv[26] || "").trim()
     };
 
     let current = {};
@@ -1021,6 +1029,10 @@ configure_meco_runtime_settings() {
     "$MECO_MINIMAX_WS_URL" \
     "$MECO_DOUBAO_O2O_APP_ID" \
     "$MECO_DOUBAO_O2O_TOKEN" \
+    "$MECO_DOUBAO_O2O_APP_KEY" \
+    "$MECO_DOUBAO_O2O_RESOURCE_ID" \
+    "$MECO_DOUBAO_O2O_ACCESS_KEY_ID" \
+    "$MECO_DOUBAO_O2O_SECRET_ACCESS_KEY" \
     "$MECO_TIKHUB_API_KEY" \
     "$MECO_MEOWLOAD_API_KEY" \
     "$kimi_api_key" \
