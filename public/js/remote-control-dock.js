@@ -56,7 +56,8 @@
     dockTabDragSourceId: '',
     dockTabDragTargetId: '',
     dockTabDragInsertAfter: false,
-    suppressDockClickUntil: 0
+    suppressDockClickUntil: 0,
+    allowEmbedRemoteRouteAutoOpen: false
   };
 
   const els = {};
@@ -2674,7 +2675,7 @@
   }
 
   async function tryAutoOpenRemoteRoute() {
-    if (window.self !== window.top) return;
+    if (window.self !== window.top && !state.allowEmbedRemoteRouteAutoOpen) return;
     const routePath = normalizeRoutePath(state.pendingRemoteRoute || '');
     const mode = toSafeString(state.pendingRemoteMode || '').toLowerCase();
     if (!routePath || routePath === '/') return;
@@ -3230,7 +3231,10 @@
   }
 
   async function init() {
-    if (isEmbeddedMecoWindow() && !isLikelyMobileH5()) {
+    const embeddedDesktop = isEmbeddedMecoWindow() && !isLikelyMobileH5();
+    const pendingRouteFromUrl = getRemoteRouteFromUrl();
+    state.allowEmbedRemoteRouteAutoOpen = !!(embeddedDesktop && normalizeRoutePath(pendingRouteFromUrl || '') !== '/');
+    if (embeddedDesktop && !state.allowEmbedRemoteRouteAutoOpen) {
       hideRemoteDockUiForEmbed();
       return;
     }
@@ -3242,12 +3246,15 @@
     state.localProfile = readLocalProfileCache();
     applyLocalProfileToForm({ keepUserInput: false });
     setBindTab('import');
-    state.pendingRemoteRoute = getRemoteRouteFromUrl();
+    state.pendingRemoteRoute = pendingRouteFromUrl;
     state.pendingRemoteMode = getRemoteModeFromUrl();
     bindEvents();
     ensureViewerRect();
     applyViewerRect();
     renderViewerTabs();
+    if (embeddedDesktop) {
+      hideRemoteDockUiForEmbed();
+    }
 
     try {
       await loadBootstrap();
