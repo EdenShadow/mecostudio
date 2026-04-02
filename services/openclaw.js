@@ -1323,9 +1323,10 @@ const resetConversation = async (agentId) => {
     throw lastError || new Error('reset conversation failed');
 };
 
-const approvePermission = async (approvalId, mode = 'allow-once') => {
+const approvePermission = async (approvalId, mode = 'allow-once', options = {}) => {
     const normalizedId = String(approvalId || '').trim();
     const normalizedMode = String(mode || 'allow-once').trim().toLowerCase();
+    const normalizedAgentId = String(options && options.agentId ? options.agentId : '').trim();
     if (!/^[a-zA-Z0-9_-]{4,128}$/.test(normalizedId)) {
         throw new Error('invalid approval id');
     }
@@ -1403,17 +1404,219 @@ const approvePermission = async (approvalId, mode = 'allow-once') => {
         return null;
     };
 
+    const runtime = appSettings.getSettings();
+    const configuredGatewayWsUrl = runtime && runtime.openclawWsUrl ? String(runtime.openclawWsUrl).trim() : '';
+    const fallbackGatewayWsUrl = String(process.env.OPENCLAW_GATEWAY_WS_URL || '').trim() || 'ws://127.0.0.1:18789';
+    const gatewayWsUrl = configuredGatewayWsUrl || fallbackGatewayWsUrl;
+    const gatewayToken = runtime && runtime.openclawGatewayToken ? String(runtime.openclawGatewayToken).trim() : '';
+    const approvalsConfigPath = path.join(HOME_DIR, '.openclaw', 'exec-approvals.json');
+
+    const ensureAgentApprovalPolicy = async (agentId) => {
+        const normalized = String(agentId || '').trim();
+        if (!normalized) return;
+        try {
+            const exists = await fs.pathExists(approvalsConfigPath);
+            const current = exists ? await fs.readJson(approvalsConfigPath) : {};
+            const next = current && typeof current === 'object' ? { ...current } : {};
+            if (!next.defaults || typeof next.defaults !== 'object') next.defaults = {};
+            if (!next.agents || typeof next.agents !== 'object') next.agents = {};
+            if (!next.agents[normalized] || typeof next.agents[normalized] !== 'object') {
+                next.agents[normalized] = {};
+            }
+            if (!next.defaults.security) next.defaults.security = 'allowlist';
+            if (!next.defaults.ask) next.defaults.ask = 'on-miss';
+            if (!next.defaults.askFallback) next.defaults.askFallback = 'allowlist';
+            if (!next.defaults.autoAllowSkills) next.defaults.autoAllowSkills = false;
+            if (!next.agents[normalized].security) next.agents[normalized].security = 'allowlist';
+            if (!next.agents[normalized].ask) next.agents[normalized].ask = 'on-miss';
+            if (!next.agents[normalized].askFallback) next.agents[normalized].askFallback = 'allowlist';
+            if (!Array.isArray(next.agents[normalized].allowlist)) next.agents[normalized].allowlist = [];
+            await fs.writeJson(approvalsConfigPath, next, { spaces: 2 });
+        } catch (err) {
+            try { console.warn('[openclaw] ensureAgentApprovalPolicy failed:', err && err.message ? err.message : err); } catch (_) {}
+        }
+    };
+
+    const ensureAgentAllowlistPatterns = async (agentId) => {
+        const normalized = String(agentId || '').trim();
+        if (!normalized) return;
+        await ensureAgentApprovalPolicy(normalized);
+        const runAllowlistAdd = (pattern, gatewayFirst = true) => {
+            const buildArgs = (useGateway) => {
+                const args = ['approvals', 'allowlist', 'add', '--agent', normalized, pattern, '--json'];
+                if (useGateway) {
+                    args.push('--gateway');
+                    if (gatewayWsUrl) args.push('--url', gatewayWsUrl);
+                    if (gatewayToken) args.push('--token', gatewayToken);
+                }
+                return args;
+            };
+            const invoke = (args) => new Promise((resolve, reject) => {
+                execFile(
+                    OPENCLAW_CMD,
+                    args,
+                    {
+                        timeout: 12000,
+                        maxBuffer: 1024 * 1024,
+                        env: buildOpenClawEnv()
+                    },
+                    (error, stdout, stderr) => {
+                        const output = sanitizeCliNoise(`${String(stdout || '')}\n${String(stderr || '')}`);
+                        if (error) {
+                            reject(new Error(output || error.message || 'allowlist add failed'));
+                            return;
+                        }
+                        resolve(output);
+                    }
+                );
+            });
+            if (!gatewayFirst) {
+                return invoke(buildArgs(false));
+            }
+            return invoke(buildArgs(true)).catch((err) => {
+                const msg = String(err && err.message ? err.message : err || '');
+                const fatal = /unknown option|command not found|usage:/i.test(msg);
+                if (fatal) throw err;
+                return invoke(buildArgs(false));
+            });
+        };
+        const patterns = [
+            '/bin/*',
+            '/bin/ls',
+            '/bin/pwd',
+            '/bin/sh',
+            '/bin/zsh',
+            '/bin/bash',
+            '/usr/bin/*',
+            '/usr/sbin/*',
+            '/usr/local/bin/*',
+            '/opt/homebrew/bin/*',
+            '/usr/bin/nice',
+            '/usr/bin/nohup',
+            '/usr/bin/whoami',
+            '/usr/bin/find',
+            '/bin/echo',
+            '/usr/bin/env',
+            '/bin/cat',
+            '/usr/bin/head',
+            '/usr/bin/tail'
+        ];
+        for (const pattern of patterns) {
+            try {
+                await runAllowlistAdd(pattern, true);
+            } catch (_) {}
+        }
+    };
+
+    const isSessionLockLikeError = (message) => {
+        const text = String(message || '').toLowerCase();
+        return text.includes('session file locked')
+            || text.includes('.jsonl.lock')
+            || text.includes('failovererror')
+            || text.includes('timeout 10000ms');
+    };
+
+    const callLocalAgentApprove = () => {
+        if (!normalizedAgentId) {
+            throw new Error('agentId is required for local approve');
+        }
+        const approvalCommand = `/approve ${normalizedId} ${normalizedMode}`;
+        const args = ['agent', '--agent', normalizedAgentId, '--message', approvalCommand, '--local'];
+        return new Promise((resolve, reject) => {
+            execFile(
+                OPENCLAW_CMD,
+                args,
+                {
+                    timeout: 30000,
+                    maxBuffer: 1024 * 1024 * 2,
+                    env: buildOpenClawEnv()
+                },
+                (error, stdout, stderr) => {
+                    const combined = `${String(stdout || '')}\n${String(stderr || '')}`;
+                    const cleaned = sanitizeCliNoise(combined);
+                    const lowered = cleaned.toLowerCase();
+
+                    if (error) {
+                        reject(new Error(cleaned || error.message || 'local approve failed'));
+                        return;
+                    }
+                    if (/unknown or expired approval id|invalid approval|approval id.*invalid|approval id.*not found/i.test(cleaned)) {
+                        reject(new Error(cleaned));
+                        return;
+                    }
+                    if (/批准\s*id.*无效|这个批准\s*id.*无效|授权.*无效|已过期|不存在|未找到/i.test(cleaned)) {
+                        reject(new Error(cleaned));
+                        return;
+                    }
+                    if (/正确的\s*id\s*是|please use:\s*\/approve|请使用[：:]\s*\/approve/i.test(cleaned)) {
+                        reject(new Error(cleaned));
+                        return;
+                    }
+                    if (/session file locked|\.jsonl\.lock|failovererror/i.test(lowered)) {
+                        reject(new Error(cleaned || 'session file locked'));
+                        return;
+                    }
+                    // If local approve itself asks for another approval, treat as unresolved.
+                    if (/\/approve\s+[a-z0-9_-]{4,128}\s+allow-once/i.test(cleaned) && !/已授权|approve[d]?|allowed|resolved/i.test(lowered)) {
+                        reject(new Error(cleaned || 'approval not resolved'));
+                        return;
+                    }
+                    resolve({
+                        approvalId: normalizedId,
+                        mode: normalizedMode,
+                        agentId: normalizedAgentId || null,
+                        via: 'local_agent',
+                        output: cleaned
+                    });
+                }
+            );
+        });
+    };
+
+    const inspectResponseError = (obj, depth = 0) => {
+        if (!obj || typeof obj !== 'object' || depth > 3) return '';
+        if (obj.success === false) {
+            return String(obj.error || obj.message || 'approval failed');
+        }
+        if (obj.ok === false) {
+            return String(obj.error || obj.message || 'approval failed');
+        }
+        if (typeof obj.status === 'string' && obj.status.trim().toLowerCase() === 'error') {
+            return String(obj.error || obj.message || 'approval failed');
+        }
+        if (typeof obj.error === 'string' && obj.error.trim()) {
+            return String(obj.error).trim();
+        }
+        if (typeof obj.message === 'string' && /unknown or expired approval id|approval failed|denied|not allowed/i.test(obj.message)) {
+            return String(obj.message).trim();
+        }
+        for (const key of ['result', 'data', 'response', 'payload']) {
+            if (obj[key] && typeof obj[key] === 'object') {
+                const nestedError = inspectResponseError(obj[key], depth + 1);
+                if (nestedError) return nestedError;
+            }
+        }
+        return '';
+    };
+
     const callGatewayResolve = (method) => {
         const params = JSON.stringify({
             id: normalizedId,
             decision: normalizedMode
         });
+        const args = ['gateway', 'call', method, '--json', '--params', params, '--timeout', '30000'];
+        if (gatewayWsUrl) {
+            args.push('--url', gatewayWsUrl);
+        }
+        if (gatewayToken) {
+            args.push('--token', gatewayToken);
+        }
         return new Promise((resolve, reject) => {
             execFile(
                 OPENCLAW_CMD,
-                ['gateway', 'call', method, '--json', '--params', params],
+                args,
                 {
-                    timeout: 30000,
+                    timeout: 35000,
                     maxBuffer: 1024 * 1024 * 2,
                     env: buildOpenClawEnv()
                 },
@@ -1433,9 +1636,18 @@ const approvePermission = async (approvalId, mode = 'allow-once') => {
                     }
 
                     const parsed = extractFirstJsonObject(cleaned);
+                    if (!parsed) {
+                        reject(new Error(cleaned || `${method} returned empty response`));
+                        return;
+                    }
+                    const responseError = inspectResponseError(parsed);
+                    if (responseError) {
+                        reject(new Error(responseError));
+                        return;
+                    }
                     resolve({
                         method,
-                        response: parsed || null,
+                        response: parsed,
                         output: cleaned
                     });
                 }
@@ -1444,12 +1656,40 @@ const approvePermission = async (approvalId, mode = 'allow-once') => {
     };
 
     const errors = [];
+    // Prefer local approval (same chat path, supports short approval slug).
+    if (normalizedAgentId) {
+        const maxLocalAttempts = 4;
+        for (let attempt = 1; attempt <= maxLocalAttempts; attempt++) {
+            try {
+                const localResult = await callLocalAgentApprove();
+                if (normalizedMode === 'allow-always' && normalizedAgentId) {
+                    try {
+                        await ensureAgentAllowlistPatterns(normalizedAgentId);
+                    } catch (_) {}
+                }
+                return localResult;
+            } catch (e) {
+                const msg = e && e.message ? String(e.message) : String(e);
+                errors.push(msg);
+                const shouldRetry = attempt < maxLocalAttempts && isSessionLockLikeError(msg);
+                if (!shouldRetry) break;
+                await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+        }
+    }
+
     for (const method of ['exec.approval.resolve', 'plugin.approval.resolve']) {
         try {
             const result = await callGatewayResolve(method);
+            if (normalizedMode === 'allow-always' && normalizedAgentId) {
+                try {
+                    await ensureAgentAllowlistPatterns(normalizedAgentId);
+                } catch (_) {}
+            }
             return {
                 approvalId: normalizedId,
                 mode: normalizedMode,
+                agentId: normalizedAgentId || null,
                 via: 'gateway',
                 method,
                 result

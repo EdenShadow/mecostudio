@@ -487,6 +487,27 @@ function isSseTerminalPayload(parsed) {
   return false;
 }
 
+const OPENCLAW_EXEC_OUTPUT_GUARD = [
+  '[System Instruction: When you need to report shell/exec command results, prefer direct exec output.',
+  'Use simple single commands and read tool output directly.',
+  'CRITICAL: Never prefix a shell command with ":" (colon).',
+  '":" is a no-op in sh/bash/zsh and will produce empty redirected files.',
+  'CRITICAL: Do NOT use shell redirections/chains/pipes in allowlist mode: >, >>, <, |, ;, &&, ||.',
+  'Those patterns may trigger repeated approvals even after allow-always.',
+  'Run one plain command per exec call, for example:',
+  'ls -la ~/Desktop/',
+  'If you need another command, issue a second separate exec call.',
+  'If output is empty, explicitly state it is empty.]'
+].join(' ');
+
+function appendExecOutputGuardInstruction(text) {
+  const base = typeof text === 'string' ? text.trim() : '';
+  if (!base) return OPENCLAW_EXEC_OUTPUT_GUARD;
+  if (base.includes('When you need to report shell/exec command results')) return base;
+  if (base.includes('Never prefix a shell command with ":"')) return base;
+  return `${base}\n\n${OPENCLAW_EXEC_OUTPUT_GUARD}`;
+}
+
 // 使用 Gateway HTTP SSE 流式方式发送请求到 OpenClaw
 async function sendToOpenClawHTTP(agentId, userMessage, ws) {
   const requestId = `${agentId}-${Date.now()}`;
@@ -3884,6 +3905,7 @@ app.post('/api/openclaw/approve', async (req, res) => {
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     const approvalId = String(body.approvalId || body.requestId || '').trim();
     const mode = String(body.mode || '').trim().toLowerCase() || 'allow-once';
+    const agentId = String(body.agentId || '').trim();
     if (!approvalId) {
       return res.status(400).json({ success: false, error: 'approvalId is required' });
     }
@@ -3897,11 +3919,14 @@ app.post('/api/openclaw/approve', async (req, res) => {
       return res.status(500).json({ success: false, error: 'approve handler unavailable' });
     }
 
-    const result = await openclaw.approvePermission(approvalId, mode);
+    const result = await openclaw.approvePermission(approvalId, mode, {
+      agentId: agentId || undefined
+    });
     return res.json({
       success: true,
       approvalId,
       mode,
+      agentId: agentId || null,
       result
     });
   } catch (e) {
@@ -16162,9 +16187,10 @@ wss.on('connection', (ws, req) => {
               const mentionNoHandoffInstruction = (routeByMention && requiredHandoffTargetNames.length === 0)
                   ? `\n\n[System Instruction: You were directly @mentioned by the user. Reply with your own answer only. Do NOT ask another member to continue, do NOT ask any other member a question, do NOT call out other members by name, and DO NOT include any {next: "..."} directive.]`
                   : '';
-              const agentInputText = (routeByNext || routeByMention)
+              const routedInputText = (routeByNext || routeByMention)
                   ? `${finalText}\n\n[System Instruction: You are explicitly designated by ${routeByNext ? '{next}' : '@ mention'}. Read the caller's full context carefully before replying. You may decide whether to reply (recommended to reply). If you reply, answer the caller's point directly first.]${requiredHandoffInstruction}${mentionNoHandoffInstruction}`
                   : finalText;
+                  const agentInputText = appendExecOutputGuardInstruction(routedInputText);
                   const multimodalMessages = hasMultimodalAttachments
                       ? buildOpenClawMultimodalMessages(agentInputText, binaryUploads, savedFiles, systemPaths)
                       : null;
@@ -16232,7 +16258,9 @@ wss.on('connection', (ws, req) => {
               for (const targetId of forwardedTargets) {
                   if (ws.readyState !== WebSocket.OPEN) break;
                   const targetName = getAgentDisplayName(targetId) || targetId;
-                  const relayInput = `${agentName} 给你转达了一条消息，请直接回应ta：\n${forwardedContent}\n\n[System Instruction: This is a terminal handoff triggered by {next}. The {next} directive has been removed before forwarding. In this reply, DO NOT add any {next: "..."} directive.]`;
+                  const relayInput = appendExecOutputGuardInstruction(
+                      `${agentName} 给你转达了一条消息，请直接回应ta：\n${forwardedContent}\n\n[System Instruction: This is a terminal handoff triggered by {next}. The {next} directive has been removed before forwarding. In this reply, DO NOT add any {next: "..."} directive.]`
+                  );
                   await runChannelAgentTurn({
                       targetAgentId: targetId,
                       targetAgentName: targetName,
@@ -16403,6 +16431,7 @@ wss.on('connection', (ws, req) => {
                   if (collaborationMemory) {
                       finalText = `${collaborationMemory}\n\n${finalText}`;
                   }
+                  finalText = appendExecOutputGuardInstruction(finalText);
                   const multimodalMessages = hasMultimodalAttachments
                       ? buildOpenClawMultimodalMessages(finalText, binaryUploads, savedFiles, systemPaths)
                       : null;

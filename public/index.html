@@ -2406,6 +2406,11 @@
         const atChannelSentInputHistory = new Map();
         const atSkillToggleState = new Map();
         const atApprovalStatusById = new Map();
+        const atApprovalAutoAttemptAtById = new Map();
+        const atApprovalAutoResumeAtByKey = new Map();
+        const atApprovalAlwaysSignaturesByAgent = new Map();
+        const atApprovalAlwaysAgents = new Set();
+        const atApprovalResumeContextById = new Map();
         let atSkillToggleSeq = 0;
         let atSkillFetchSeq = 0;
         let atAttachmentUploadDepth = 0;
@@ -2420,6 +2425,10 @@
         const MECO_UPDATE_NOTIFIED_TASK_ID_KEY = 'meco.update.notifiedTaskId';
         const MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.agentOrder.v1';
         const MECO_CHANNEL_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.channelOrder.v1';
+        const MECO_AT_APPROVAL_ALWAYS_SIGNATURES_KEY = 'meco.at.approvalAlwaysSignatures.v1';
+        const MECO_AT_APPROVAL_ALWAYS_SIGNATURES_MAX_PER_AGENT = 36;
+        const MECO_AT_APPROVAL_ALWAYS_AGENTS_KEY = 'meco.at.approvalAlwaysAgents.v1';
+        const AT_APPROVAL_RESUME_CONTEXT_TTL_MS = 30 * 60 * 1000;
         const MECO_API_SETTINGS_CACHE_KEY = 'meco.apiSettings.cache.v1';
         const MECO_API_SETTINGS_CACHE_FIELDS = Object.freeze([
             'openclawModel',
@@ -3364,6 +3373,219 @@
                 hydrateSentInputHistoryMap(atAgentSentInputHistory, parsed.agents);
                 hydrateSentInputHistoryMap(atChannelSentInputHistory, parsed.channels);
             } catch (_) {}
+        }
+
+        function normalizeApprovalRuleAgentId(rawAgentId) {
+            return typeof rawAgentId === 'string' ? rawAgentId.trim() : '';
+        }
+
+        function normalizeApprovalPromptSignature(rawText) {
+            const source = typeof rawText === 'string' ? rawText : '';
+            if (!source.trim()) return '';
+            const normalized = source
+                .replace(/\/approve\s+[a-zA-Z0-9_-]{4,128}\s+(allow-once|allow-always)\b/gi, '/approve __id__ $1')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .toLowerCase();
+            if (!normalized) return '';
+            return normalized.slice(0, 800);
+        }
+
+        function persistApprovalAlwaysSignatureStore() {
+            try {
+                const agents = {};
+                atApprovalAlwaysSignaturesByAgent.forEach((list, rawAgentId) => {
+                    const agentId = normalizeApprovalRuleAgentId(rawAgentId);
+                    if (!agentId || !Array.isArray(list) || list.length === 0) return;
+                    const clean = list
+                        .map((item) => typeof item === 'string' ? item.trim() : '')
+                        .filter(Boolean)
+                        .slice(-MECO_AT_APPROVAL_ALWAYS_SIGNATURES_MAX_PER_AGENT);
+                    if (clean.length === 0) return;
+                    agents[agentId] = clean;
+                });
+                localStorage.setItem(MECO_AT_APPROVAL_ALWAYS_SIGNATURES_KEY, JSON.stringify({
+                    agents,
+                    updatedAt: Date.now()
+                }));
+            } catch (_) {}
+        }
+
+        function loadApprovalAlwaysSignatureStore() {
+            atApprovalAlwaysSignaturesByAgent.clear();
+            try {
+                const raw = localStorage.getItem(MECO_AT_APPROVAL_ALWAYS_SIGNATURES_KEY);
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                if (!parsed || typeof parsed !== 'object' || !parsed.agents || typeof parsed.agents !== 'object') {
+                    return;
+                }
+                Object.keys(parsed.agents).forEach((rawAgentId) => {
+                    const agentId = normalizeApprovalRuleAgentId(rawAgentId);
+                    if (!agentId) return;
+                    const clean = (Array.isArray(parsed.agents[rawAgentId]) ? parsed.agents[rawAgentId] : [])
+                        .map((item) => typeof item === 'string' ? item.trim() : '')
+                        .filter(Boolean)
+                        .slice(-MECO_AT_APPROVAL_ALWAYS_SIGNATURES_MAX_PER_AGENT);
+                    if (clean.length > 0) {
+                        atApprovalAlwaysSignaturesByAgent.set(agentId, clean);
+                    }
+                });
+            } catch (_) {
+                atApprovalAlwaysSignaturesByAgent.clear();
+            }
+        }
+
+        function hasApprovalAlwaysSignatureRule(rawAgentId, rawSignature) {
+            const agentId = normalizeApprovalRuleAgentId(rawAgentId);
+            const signature = typeof rawSignature === 'string' ? rawSignature.trim() : '';
+            if (!agentId || !signature) return false;
+            const list = atApprovalAlwaysSignaturesByAgent.get(agentId);
+            return Array.isArray(list) ? list.includes(signature) : false;
+        }
+
+        function persistApprovalAlwaysAgentsStore() {
+            try {
+                const agents = Array.from(atApprovalAlwaysAgents)
+                    .map((item) => normalizeApprovalRuleAgentId(item))
+                    .filter(Boolean)
+                    .slice(-120);
+                localStorage.setItem(MECO_AT_APPROVAL_ALWAYS_AGENTS_KEY, JSON.stringify({
+                    agents,
+                    updatedAt: Date.now()
+                }));
+            } catch (_) {}
+        }
+
+        function loadApprovalAlwaysAgentsStore() {
+            atApprovalAlwaysAgents.clear();
+            try {
+                const raw = localStorage.getItem(MECO_AT_APPROVAL_ALWAYS_AGENTS_KEY);
+                if (!raw) return;
+                const parsed = JSON.parse(raw);
+                const list = parsed && Array.isArray(parsed.agents) ? parsed.agents : [];
+                list.forEach((item) => {
+                    const id = normalizeApprovalRuleAgentId(item);
+                    if (id) atApprovalAlwaysAgents.add(id);
+                });
+            } catch (_) {
+                atApprovalAlwaysAgents.clear();
+            }
+        }
+
+        function rememberApprovalAlwaysAgent(rawAgentId) {
+            const agentId = normalizeApprovalRuleAgentId(rawAgentId);
+            if (!agentId) return;
+            if (!atApprovalAlwaysAgents.has(agentId)) {
+                atApprovalAlwaysAgents.add(agentId);
+                persistApprovalAlwaysAgentsStore();
+            }
+        }
+
+        function hasApprovalAlwaysAgentRule(rawAgentId) {
+            const agentId = normalizeApprovalRuleAgentId(rawAgentId);
+            if (!agentId) return false;
+            return atApprovalAlwaysAgents.has(agentId);
+        }
+
+        function rememberApprovalAlwaysSignatureRule(rawAgentId, rawSignature) {
+            const agentId = normalizeApprovalRuleAgentId(rawAgentId);
+            const signature = typeof rawSignature === 'string' ? rawSignature.trim() : '';
+            if (!agentId || !signature) return;
+            const prev = Array.isArray(atApprovalAlwaysSignaturesByAgent.get(agentId))
+                ? atApprovalAlwaysSignaturesByAgent.get(agentId).slice()
+                : [];
+            const next = prev.filter((item) => item !== signature);
+            next.push(signature);
+            if (next.length > MECO_AT_APPROVAL_ALWAYS_SIGNATURES_MAX_PER_AGENT) {
+                next.splice(0, next.length - MECO_AT_APPROVAL_ALWAYS_SIGNATURES_MAX_PER_AGENT);
+            }
+            atApprovalAlwaysSignaturesByAgent.set(agentId, next);
+            persistApprovalAlwaysSignatureStore();
+        }
+
+        function pruneApprovalResumeContextStore() {
+            const now = Date.now();
+            atApprovalResumeContextById.forEach((ctx, rawId) => {
+                const id = typeof rawId === 'string' ? rawId.trim() : '';
+                const ts = Number(ctx && ctx.updatedAt) || 0;
+                if (!id || !ts || (now - ts) > AT_APPROVAL_RESUME_CONTEXT_TTL_MS) {
+                    atApprovalResumeContextById.delete(rawId);
+                }
+            });
+        }
+
+        function rememberApprovalResumeContext(approvalId, agentId, payload, userText = '') {
+            const normalizedApprovalId = String(approvalId || '').trim();
+            const normalizedAgentId = normalizeApprovalRuleAgentId(agentId);
+            const normalizedPayload = sanitizePendingMessagePayload(payload);
+            if (!normalizedApprovalId || !normalizedAgentId || !normalizedPayload) return;
+            pruneApprovalResumeContextStore();
+            atApprovalResumeContextById.set(normalizedApprovalId, {
+                agentId: normalizedAgentId,
+                payload: normalizedPayload,
+                userText: typeof userText === 'string' ? userText.trim() : '',
+                updatedAt: Date.now()
+            });
+        }
+
+        function consumeApprovalResumeContext(approvalId) {
+            const normalizedApprovalId = String(approvalId || '').trim();
+            if (!normalizedApprovalId) return null;
+            pruneApprovalResumeContextStore();
+            const ctx = atApprovalResumeContextById.get(normalizedApprovalId);
+            if (!ctx || typeof ctx !== 'object') return null;
+            return {
+                approvalId: normalizedApprovalId,
+                agentId: normalizeApprovalRuleAgentId(ctx.agentId),
+                payload: sanitizePendingMessagePayload(ctx.payload),
+                userText: typeof ctx.userText === 'string' ? ctx.userText.trim() : ''
+            };
+        }
+
+        function inferApprovalResumePayloadFromMessage(agentId, messageDiv) {
+            const normalizedAgentId = normalizeApprovalRuleAgentId(agentId);
+            if (!normalizedAgentId || !messageDiv) return null;
+            const state = getAgentChatState(normalizedAgentId);
+            if (!state || !Array.isArray(state.messages) || state.messages.length === 0) return null;
+
+            const indexRaw = Number(messageDiv.dataset.msgIndex);
+            const messageIndex = Number.isInteger(indexRaw) ? indexRaw : null;
+            const searchStart = Number.isInteger(messageIndex)
+                ? Math.min(messageIndex - 1, state.messages.length - 1)
+                : (state.messages.length - 1);
+            for (let i = searchStart; i >= 0; i -= 1) {
+                const msg = state.messages[i];
+                if (!msg || msg.role !== 'user') continue;
+                const content = typeof msg.content === 'string' ? msg.content : '';
+                const files = Array.isArray(msg.files) ? msg.files : [];
+                if (files.length > 0) continue;
+                const payload = sanitizePendingMessagePayload({
+                    type: 'message',
+                    content,
+                    files: [],
+                    systemPaths: []
+                });
+                if (payload && (payload.content || '').trim()) {
+                    return {
+                        payload,
+                        userText: payload.content.trim()
+                    };
+                }
+            }
+            const fallbackText = getLastUserMessageTextFromState(state);
+            if (fallbackText) {
+                return {
+                    payload: {
+                        type: 'message',
+                        content: fallbackText,
+                        files: [],
+                        systemPaths: []
+                    },
+                    userText: fallbackText
+                };
+            }
+            return null;
         }
 
         function ensureSentInputHistoryState(mapRef, rawKey) {
@@ -8690,6 +8912,34 @@
             }));
         }
 
+        function applyManualApprovalCommands(rawAgentId, rawText) {
+            const agentId = normalizeApprovalRuleAgentId(rawAgentId);
+            const text = typeof rawText === 'string' ? rawText : '';
+            if (!agentId || !text) return;
+            const commands = parseOpenClawApproveCommands(text);
+            if (!commands.length) return;
+
+            let hasAlways = false;
+            commands.forEach((item) => {
+                const approvalId = String(item && item.approvalId ? item.approvalId : '').trim();
+                if (!approvalId) return;
+                const modes = Array.isArray(item && item.modes) ? item.modes : [];
+                const mode = modes.includes('allow-always')
+                    ? 'allow-always'
+                    : (modes.includes('allow-once') ? 'allow-once' : '');
+                if (!mode) return;
+                if (mode === 'allow-always') hasAlways = true;
+                atApprovalStatusById.set(approvalId, {
+                    state: 'approved',
+                    mode
+                });
+            });
+
+            if (hasAlways) {
+                rememberApprovalAlwaysAgent(agentId);
+            }
+        }
+
         function notifyAgentToolsInline(message, isError = false) {
             const text = String(message || '').trim();
             if (!text) return;
@@ -8724,6 +8974,19 @@
                 const fallback = String(currentAgentToolId || '').trim();
                 return fallback;
             };
+            const approvalAgentIdHint = inferApproveAgentId();
+            const approvalPromptSignature = normalizeApprovalPromptSignature(rawText);
+            const inferredResumePayload = inferApprovalResumePayloadFromMessage(approvalAgentIdHint, messageDiv);
+            const isRecentAssistantApprovalMessage = (() => {
+                const normalizedAgentId = normalizeApprovalRuleAgentId(approvalAgentIdHint);
+                if (!normalizedAgentId) return false;
+                const state = getAgentChatState(normalizedAgentId);
+                if (!state || !Array.isArray(state.messages) || state.messages.length <= 0) return false;
+                const idx = Number(messageDiv.dataset.msgIndex);
+                if (!Number.isInteger(idx) || idx < 0 || idx >= state.messages.length) return false;
+                const tailWindow = 8;
+                return idx >= Math.max(0, state.messages.length - tailWindow);
+            })();
 
             const enqueueAgentPayloadIfNeeded = (agentId, payload) => {
                 const state = getAgentChatState(agentId);
@@ -8750,8 +9013,9 @@
                 return true;
             };
 
-            const resumeAgentTaskAfterApprove = () => {
-                const agentId = inferApproveAgentId();
+            const resumeAgentTaskAfterApprove = (approvalId, options = {}) => {
+                const explicitAgentId = normalizeApprovalRuleAgentId(options && options.agentId);
+                const agentId = explicitAgentId || inferApproveAgentId();
                 if (!agentId) return false;
                 const state = getAgentChatState(agentId);
                 if (!state) return false;
@@ -8759,33 +9023,53 @@
                     // 当前会话仍在跑，不需要重放
                     return true;
                 }
+                const normalizedApprovalId = String(approvalId || '').trim();
+                const resumeGuardKey = normalizedApprovalId ? `${agentId}:${normalizedApprovalId}` : '';
+                if (resumeGuardKey) {
+                    const lastTs = Number(atApprovalAutoResumeAtByKey.get(resumeGuardKey) || 0);
+                    if (lastTs > 0 && (Date.now() - lastTs) < 60 * 1000) {
+                        return false;
+                    }
+                }
 
                 const queuedPayload = Array.isArray(state.pendingQueue)
                     ? state.pendingQueue.map(sanitizePendingMessagePayload).find(Boolean)
                     : null;
                 if (queuedPayload) {
-                    return enqueueAgentPayloadIfNeeded(agentId, queuedPayload);
+                    const resumed = enqueueAgentPayloadIfNeeded(agentId, queuedPayload);
+                    if (resumed && resumeGuardKey) atApprovalAutoResumeAtByKey.set(resumeGuardKey, Date.now());
+                    return resumed;
                 }
 
                 const activePayload = sanitizePendingMessagePayload(state.activePayload);
                 if (activePayload) {
-                    return enqueueAgentPayloadIfNeeded(agentId, activePayload);
+                    const resumed = enqueueAgentPayloadIfNeeded(agentId, activePayload);
+                    if (resumed && resumeGuardKey) atApprovalAutoResumeAtByKey.set(resumeGuardKey, Date.now());
+                    return resumed;
                 }
 
                 const snapshot = getPendingAgentRequestSnapshot(agentId);
                 const snapshotPayload = sanitizePendingMessagePayload(snapshot && snapshot.payload);
                 if (snapshotPayload) {
-                    return enqueueAgentPayloadIfNeeded(agentId, snapshotPayload);
+                    const resumed = enqueueAgentPayloadIfNeeded(agentId, snapshotPayload);
+                    if (resumed && resumeGuardKey) atApprovalAutoResumeAtByKey.set(resumeGuardKey, Date.now());
+                    return resumed;
                 }
 
-                const lastUserText = getLastUserMessageTextFromState(state);
-                if (!lastUserText) return false;
-                return enqueueAgentPayloadIfNeeded(agentId, {
-                    type: 'message',
-                    content: lastUserText,
-                    files: [],
-                    systemPaths: []
-                });
+                const explicitPayload = sanitizePendingMessagePayload(options && options.payload);
+                if (explicitPayload) {
+                    const resumed = enqueueAgentPayloadIfNeeded(agentId, explicitPayload);
+                    if (resumed && resumeGuardKey) atApprovalAutoResumeAtByKey.set(resumeGuardKey, Date.now());
+                    return resumed;
+                }
+
+                const approvalCtx = consumeApprovalResumeContext(normalizedApprovalId);
+                if (approvalCtx && approvalCtx.payload && (!approvalCtx.agentId || approvalCtx.agentId === agentId)) {
+                    const resumed = enqueueAgentPayloadIfNeeded(agentId, approvalCtx.payload);
+                    if (resumed && resumeGuardKey) atApprovalAutoResumeAtByKey.set(resumeGuardKey, Date.now());
+                    return resumed;
+                }
+                return false;
             };
 
             const wrap = document.createElement('div');
@@ -8793,6 +9077,14 @@
             wrap.setAttribute('data-approve-actions', '1');
 
             commands.forEach((item) => {
+                if (approvalAgentIdHint && inferredResumePayload && inferredResumePayload.payload) {
+                    rememberApprovalResumeContext(
+                        item.approvalId,
+                        approvalAgentIdHint,
+                        inferredResumePayload.payload,
+                        inferredResumePayload.userText || ''
+                    );
+                }
                 const row = document.createElement('div');
                 row.className = 'approve-actions-row';
                 row.setAttribute('data-approval-id', item.approvalId);
@@ -8822,10 +9114,13 @@
                     alwaysBtn.disabled = !!busy;
                 };
 
-                const lockApprovedUi = (mode) => {
+                const lockApprovedUi = (mode, options = {}) => {
                     const normalized = String(mode || '').trim().toLowerCase();
                     const isAlways = normalized === 'allow-always';
-                    status.textContent = isAlways ? '已授权（永久）' : '已授权（一次）';
+                    const autoApplied = !!(options && options.autoApplied);
+                    status.textContent = autoApplied
+                        ? '已自动授权（永久规则）'
+                        : (isAlways ? '已授权（永久）' : '已授权（一次）');
                     onceBtn.disabled = true;
                     alwaysBtn.disabled = true;
                     onceBtn.classList.add('hidden');
@@ -8847,16 +9142,21 @@
                     atApprovalStatusById.set(item.approvalId, { state: 'expired' });
                 };
 
-                const runApprove = async (mode) => {
+                const runApprove = async (mode, options = {}) => {
                     try {
+                        const autoApplied = !!(options && options.autoApplied);
+                        const approveAgentId = inferApproveAgentId();
                         setBusy(true);
-                        status.textContent = mode === 'allow-always' ? '授权中（永久）...' : '授权中（一次）...';
+                        status.textContent = autoApplied
+                            ? '自动授权中...'
+                            : (mode === 'allow-always' ? '授权中（永久）...' : '授权中（一次）...');
                         const res = await fetch('/api/openclaw/approve', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 approvalId: item.approvalId,
-                                mode
+                                mode,
+                                agentId: approveAgentId || undefined
                             })
                         });
                         let data = null;
@@ -8866,23 +9166,44 @@
                         if (!res.ok || !data || data.success === false) {
                             throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
                         }
-                        lockApprovedUi(mode);
-                        notifyAgentToolsInline(`授权成功: ${item.approvalId} (${mode})`, false);
-                        const resumed = resumeAgentTaskAfterApprove();
-                        if (resumed) {
-                            notifyAgentToolsInline('已自动继续执行当前任务', false);
-                        } else {
-                            notifyAgentToolsInline('已授权。若未继续，请再发送一次你的请求。', false);
+                        lockApprovedUi(mode, { autoApplied });
+                        if (mode === 'allow-always' && approveAgentId && approvalPromptSignature) {
+                            rememberApprovalAlwaysAgent(approveAgentId);
+                            rememberApprovalAlwaysSignatureRule(approveAgentId, approvalPromptSignature);
+                        }
+                        if (!autoApplied) {
+                            notifyAgentToolsInline(`授权成功: ${item.approvalId} (${mode})`, false);
+                        }
+                        const resumed = resumeAgentTaskAfterApprove(item.approvalId, {
+                            agentId: approveAgentId,
+                            payload: inferredResumePayload ? inferredResumePayload.payload : null
+                        });
+                        if (!autoApplied) {
+                            if (resumed) {
+                                notifyAgentToolsInline('已自动继续执行当前任务', false);
+                            } else {
+                                notifyAgentToolsInline('已授权，正在自动恢复任务…', false);
+                                setTimeout(() => {
+                                    resumeAgentTaskAfterApprove(item.approvalId, {
+                                        agentId: approveAgentId,
+                                        payload: inferredResumePayload ? inferredResumePayload.payload : null
+                                    });
+                                }, 420);
+                            }
                         }
                     } catch (e) {
                         const msg = e && e.message ? String(e.message) : 'approve failed';
                         const isExpiredApproval = /unknown or expired approval id/i.test(msg);
                         if (isExpiredApproval) {
                             lockExpiredUi();
-                            notifyAgentToolsInline('该授权单已过期或已处理，请重新发送一次需要授权的请求。', true);
+                            if (!(options && options.autoApplied)) {
+                                notifyAgentToolsInline('该授权单已过期或已处理，请重新发送一次需要授权的请求。', true);
+                            }
                         } else {
                             status.textContent = '授权失败';
-                            notifyAgentToolsInline(`授权失败: ${msg}`, true);
+                            if (!(options && options.autoApplied)) {
+                                notifyAgentToolsInline(`授权失败: ${msg}`, true);
+                            }
                             setBusy(false);
                         }
                     }
@@ -8896,6 +9217,27 @@
                 } else {
                     onceBtn.addEventListener('click', () => runApprove('allow-once'));
                     alwaysBtn.addEventListener('click', () => runApprove('allow-always'));
+                    const hasAlwaysAgentRule = !!(
+                        approvalAgentIdHint && hasApprovalAlwaysAgentRule(approvalAgentIdHint)
+                    );
+                    const hasAlwaysSignatureRule = !!(
+                        approvalAgentIdHint
+                        && approvalPromptSignature
+                        && hasApprovalAlwaysSignatureRule(approvalAgentIdHint, approvalPromptSignature)
+                    );
+                    const shouldAutoApprove = !!(
+                        isRecentAssistantApprovalMessage
+                        && approvalAgentIdHint
+                        && (hasAlwaysAgentRule || hasAlwaysSignatureRule)
+                    );
+                    if (shouldAutoApprove) {
+                        const lastAutoAttemptAt = Number(atApprovalAutoAttemptAtById.get(item.approvalId) || 0);
+                        if (!lastAutoAttemptAt || (Date.now() - lastAutoAttemptAt) > 2 * 60 * 1000) {
+                            atApprovalAutoAttemptAtById.set(item.approvalId, Date.now());
+                            const autoMode = hasAlwaysAgentRule ? 'allow-always' : 'allow-once';
+                            setTimeout(() => runApprove(autoMode, { autoApplied: true }), 40);
+                        }
+                    }
                 }
 
                 btns.appendChild(onceBtn);
@@ -8935,13 +9277,13 @@
 
             const codeTokens = [];
             const codeToken = (html) => {
-                const token = `@@MD_INLINE_CODE_${codeTokens.length}@@`;
+                const token = `%%MDCODE${codeTokens.length}%%`;
                 codeTokens.push(html);
                 return token;
             };
             const linkTokens = [];
             const linkToken = (html) => {
-                const token = `@@MD_INLINE_LINK_${linkTokens.length}@@`;
+                const token = `%%MDLINK${linkTokens.length}%%`;
                 linkTokens.push(html);
                 return token;
             };
@@ -8966,11 +9308,11 @@
             html = html.replace(/(^|[^_])_([^_\n][\s\S]*?)_(?!_)/g, '$1<em>$2</em>');
             html = html.replace(/~~([^~][\s\S]*?)~~/g, '<del>$1</del>');
 
-            html = html.replace(/@@MD_INLINE_LINK_(\d+)@@/g, (_, idx) => {
+            html = html.replace(/%%MDLINK(\d+)%%/g, (_, idx) => {
                 const i = Number(idx);
                 return Number.isInteger(i) && i >= 0 && i < linkTokens.length ? linkTokens[i] : '';
             });
-            html = html.replace(/@@MD_INLINE_CODE_(\d+)@@/g, (_, idx) => {
+            html = html.replace(/%%MDCODE(\d+)%%/g, (_, idx) => {
                 const i = Number(idx);
                 return Number.isInteger(i) && i >= 0 && i < codeTokens.length ? codeTokens[i] : '';
             });
@@ -8983,7 +9325,7 @@
 
             const blockTokens = [];
             const blockToken = (html) => {
-                const token = `@@MD_BLOCK_${blockTokens.length}@@`;
+                const token = `%%MDBLOCK${blockTokens.length}%%`;
                 blockTokens.push(html);
                 return token;
             };
@@ -9017,7 +9359,7 @@
                     continue;
                 }
 
-                const tokenMatch = /^@@MD_BLOCK_(\d+)@@$/.exec(trimmed);
+                const tokenMatch = /^%%MDBLOCK(\d+)%%$/.exec(trimmed);
                 if (tokenMatch) {
                     closeLists();
                     const idx = Number(tokenMatch[1]);
@@ -11133,6 +11475,10 @@
                 ? `[Attached ${payload.systemPaths.length} local path(s)]`
                 : (payload.files.length > 0 ? `[Uploaded ${payload.files.length} file(s)]` : '');
 
+            if (!channelId && text) {
+                applyManualApprovalCommands(agentId, text);
+            }
+
             if (channelId) {
                 payload.channelRuleMode = !!atChannelRuleMode;
                 if (text) {
@@ -11341,6 +11687,8 @@
             loadAgentToolsImmersivePref();
             loadAgentToolsRuntimeStatusPref();
             loadSentInputHistoryStore();
+            loadApprovalAlwaysAgentsStore();
+            loadApprovalAlwaysSignatureStore();
             mecoSidebarWasNarrow = isSidebarNarrowViewport();
             const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
             if (sidebarToggleBtn) {
