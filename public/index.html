@@ -7734,26 +7734,30 @@
                 // Load History
                 if (!state.historyLoaded) {
                     try {
+                        const snapshotAgentStreamMessage = (message) => {
+                            if (!message || message.role !== 'assistant') return null;
+                            return {
+                                role: 'assistant',
+                                content: typeof message.content === 'string' ? message.content : '',
+                                reasoning: typeof message.reasoning === 'string' ? message.reasoning : '',
+                                executionEvents: normalizeExecutionEvents(message.executionEvents),
+                                files: normalizeMessageFiles(message.files),
+                                displayContent: typeof message.displayContent === 'string' ? message.displayContent : '',
+                                displayReasoning: typeof message.displayReasoning === 'string' ? message.displayReasoning : '',
+                                preludeText: typeof message.preludeText === 'string' ? message.preludeText : '',
+                                streamStartedAt: Number(message.streamStartedAt) || Date.now(),
+                                provisional: !!message.provisional,
+                                senderName: typeof message.senderName === 'string' ? message.senderName : '',
+                                agentId: typeof message.agentId === 'string' ? message.agentId : ''
+                            };
+                        };
                         const inFlightBeforeHistory = !!state.inFlight;
                         const loadingBeforeHistory = !!state.loading;
-                        const streamingBeforeHistory = getAgentStreamingMessage(state);
-                        const streamingSnapshot = streamingBeforeHistory
-                            ? {
-                                role: 'assistant',
-                                content: typeof streamingBeforeHistory.content === 'string' ? streamingBeforeHistory.content : '',
-                                reasoning: typeof streamingBeforeHistory.reasoning === 'string' ? streamingBeforeHistory.reasoning : '',
-                                executionEvents: normalizeExecutionEvents(streamingBeforeHistory.executionEvents),
-                                files: normalizeMessageFiles(streamingBeforeHistory.files),
-                                displayContent: typeof streamingBeforeHistory.displayContent === 'string' ? streamingBeforeHistory.displayContent : '',
-                                displayReasoning: typeof streamingBeforeHistory.displayReasoning === 'string' ? streamingBeforeHistory.displayReasoning : '',
-                                preludeText: typeof streamingBeforeHistory.preludeText === 'string' ? streamingBeforeHistory.preludeText : '',
-                                streamStartedAt: Number(streamingBeforeHistory.streamStartedAt) || Date.now(),
-                                provisional: !!streamingBeforeHistory.provisional,
-                                senderName: typeof streamingBeforeHistory.senderName === 'string' ? streamingBeforeHistory.senderName : '',
-                                agentId: typeof streamingBeforeHistory.agentId === 'string' ? streamingBeforeHistory.agentId : ''
-                            }
-                            : null;
+                        const streamingSnapshotBeforeHistory = snapshotAgentStreamMessage(getAgentStreamingMessage(state));
                         const historyData = await fetchAgentHistoryPage(agentId, 1);
+                        const inFlightAfterHistoryFetch = !!state.inFlight;
+                        const loadingAfterHistoryFetch = !!state.loading;
+                        const streamingSnapshotAfterHistory = snapshotAgentStreamMessage(getAgentStreamingMessage(state));
                         if (historyData.history && Array.isArray(historyData.history)) {
                             const normalizedHistory = historyData.history
                                 .filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
@@ -7768,7 +7772,21 @@
                                 }));
                             if (normalizedHistory.length > 0) {
                                 state.messages = normalizedHistory.slice(-AT_HISTORY_PAGE_SIZE);
-                                if ((inFlightBeforeHistory || loadingBeforeHistory) && streamingSnapshot) {
+                                state.streamMessageIndex = null;
+                            }
+                            const shouldRestoreStreaming = !!(
+                                inFlightBeforeHistory
+                                || loadingBeforeHistory
+                                || inFlightAfterHistoryFetch
+                                || loadingAfterHistoryFetch
+                            );
+                            const streamingSnapshot = streamingSnapshotAfterHistory || streamingSnapshotBeforeHistory;
+                            if (shouldRestoreStreaming && streamingSnapshot) {
+                                const existingStreamIdx = Number.isInteger(state.streamMessageIndex) ? state.streamMessageIndex : null;
+                                const existingStreamMsg = Number.isInteger(existingStreamIdx) ? state.messages[existingStreamIdx] : null;
+                                if (existingStreamMsg && existingStreamMsg.role === 'assistant') {
+                                    Object.assign(existingStreamMsg, streamingSnapshot);
+                                } else {
                                     state.messages.push(streamingSnapshot);
                                     state.streamMessageIndex = state.messages.length - 1;
                                 }
