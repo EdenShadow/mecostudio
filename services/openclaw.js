@@ -1,4 +1,4 @@
-const { exec, spawn } = require('child_process');
+const { exec, spawn, execFile } = require('child_process');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
@@ -668,6 +668,7 @@ const sendMessage = async (agentId, message) => {
                 } else {
                     // Filter out OpenClaw CLI startup noise
                     const cleaned = stdout.split('\n').filter(line => {
+                        const lower = String(line || '').toLowerCase();
                         if (line.startsWith('[plugins]')) return false;
                         if (line.startsWith('◇')) return false;
                         if (/^[│├╮╯╰─]/.test(line)) return false;
@@ -675,6 +676,7 @@ const sendMessage = async (agentId, message) => {
                         if (line.includes('duplicate plugin id')) return false;
                         if (line.includes('/openclaw/extensions/')) return false;
                         if (line.includes('later plugin may be overridden')) return false;
+                        if (lower.includes('maximum number of unified exec processes')) return false;
                         if (line.trim() === '│' || line.trim() === '') return true;
                         return true;
                     }).join('\n').trim();
@@ -694,14 +696,92 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     const { spawn } = require('child_process');
     const env = buildOpenClawEnv();
     const args = ['agent', '--agent', agentId, '--message', message, '--local'];
+    const wantsCliProgressEvents = !!(
+        options &&
+        (options.emitCliProgressEvents === true || options.emitCliProgressAsReasoning === true)
+    );
     if (options && typeof options.thinking === 'string' && options.thinking.trim()) {
         args.push('--thinking', options.thinking.trim());
+    }
+    if (options && typeof options.sessionId === 'string' && options.sessionId.trim()) {
+        args.push('--session-id', options.sessionId.trim());
+    }
+    if (wantsCliProgressEvents) {
+        args.push('--verbose', 'on');
     }
     const child = spawn(OPENCLAW_CMD, args, { env });
     let settled = false;
     let aborted = false;
+    let firstChunkObserved = false;
+    const firstChunkTimeoutMs = Math.max(3000, Number(options && options.firstChunkTimeoutMs) || 30000);
+    const firstChunkMaxWaitMs = Math.max(
+        firstChunkTimeoutMs,
+        Number(options && options.firstChunkMaxWaitMs) || 180000
+    );
+    const firstChunkWaitStartedAt = Date.now();
+    let firstChunkTimeout = null;
+    let lastStructuredAssistantText = '';
+    let lastStructuredReasoningText = '';
+    let lastCliProgressSignature = '';
+    const lastCliProgressAtByCode = new Map();
+    let hasMeaningfulOutput = false;
+    const emitChunk = (chunk) => {
+        if (!firstChunkObserved) {
+            firstChunkObserved = true;
+            if (firstChunkTimeout) {
+                clearTimeout(firstChunkTimeout);
+                firstChunkTimeout = null;
+            }
+        }
+        if (typeof chunk === 'string') {
+            const clean = chunk.replace(/\x1b\[[0-9;]*m/g, '');
+            if (clean.trim().length > 0) {
+                hasMeaningfulOutput = true;
+            }
+        } else if (chunk && typeof chunk === 'object') {
+            if ((chunk.type === 'text_stream' || chunk.type === 'reasoning_stream')
+                && typeof chunk.content === 'string'
+                && chunk.content.trim().length > 0) {
+                hasMeaningfulOutput = true;
+            }
+        }
+        onChunk(chunk);
+    };
     
+    const scheduleFirstChunkWatchdog = () => {
+        firstChunkTimeout = setTimeout(() => {
+            if (settled || aborted || firstChunkObserved) return;
+            const waitedMs = Date.now() - firstChunkWaitStartedAt;
+            if (waitedMs < firstChunkMaxWaitMs) {
+                try {
+                    onChunk({
+                        type: 'execution_event',
+                        event: {
+                            code: 'first_chunk_slow',
+                            label: '响应较慢',
+                            detail: `首个分片等待 ${Math.max(1, Math.round(waitedMs / 1000))}s，继续等待中...`,
+                            timestamp: new Date().toISOString(),
+                            source: 'openclaw_cli'
+                        }
+                    });
+                } catch (_) {}
+                scheduleFirstChunkWatchdog();
+                return;
+            }
+            aborted = true;
+            settled = true;
+            try { child.kill('SIGTERM'); } catch (_) {}
+            setTimeout(() => {
+                try {
+                    if (!child.killed) child.kill('SIGKILL');
+                } catch (_) {}
+            }, 1000);
+            onError(new Error(`首个文本分片超时 (${firstChunkMaxWaitMs}ms)`));
+        }, firstChunkTimeoutMs);
+    };
+
     console.log(`[sendMessageStream] Spawned process for ${agentId}`);
+    scheduleFirstChunkWatchdog();
     
     const extractStructuredStreamEvents = (line) => {
         const raw = (line || '').trim();
@@ -732,6 +812,20 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
                 events.push({ type: 'reasoning_stream', content });
             }
         };
+        const pushSnapshotDelta = (kind, fullText) => {
+            if (typeof fullText !== 'string' || fullText.length === 0) return;
+            if (kind === 'reasoning') {
+                const prev = lastStructuredReasoningText;
+                const delta = fullText.startsWith(prev) ? fullText.slice(prev.length) : fullText;
+                lastStructuredReasoningText = fullText;
+                pushReasoning(delta);
+                return;
+            }
+            const prev = lastStructuredAssistantText;
+            const delta = fullText.startsWith(prev) ? fullText.slice(prev.length) : fullText;
+            lastStructuredAssistantText = fullText;
+            pushText(delta);
+        };
         const collectFromObject = (obj) => {
             if (!obj || typeof obj !== 'object') return;
 
@@ -754,10 +848,18 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
 
             // Generic event payloads (ws/sse wrappers)
             if (obj.stream && typeof obj.stream === 'string' && obj.data && typeof obj.data === 'object') {
-                if ((obj.stream.includes('reason') || obj.stream.includes('think')) && typeof obj.data.delta === 'string') {
-                    pushReasoning(obj.data.delta);
-                } else if (obj.stream.includes('assistant') && typeof obj.data.delta === 'string') {
-                    pushText(obj.data.delta);
+                const streamName = obj.stream.toLowerCase();
+                const streamData = obj.data;
+                const deltaText = typeof streamData.delta === 'string' ? streamData.delta : '';
+                const fullText = (typeof streamData.text === 'string' && streamData.text)
+                    ? streamData.text
+                    : (typeof streamData.content === 'string' ? streamData.content : '');
+                if (streamName.includes('reason') || streamName.includes('think')) {
+                    pushReasoning(deltaText);
+                    pushSnapshotDelta('reasoning', fullText);
+                } else if (streamName.includes('assistant') || streamName.includes('text') || streamName.includes('content')) {
+                    pushText(deltaText);
+                    pushSnapshotDelta('text', fullText);
                 }
             }
             if (obj.payload && typeof obj.payload === 'object') {
@@ -791,17 +893,30 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     let buffer = '';
     let pending = ''; // Buffer for incomplete lines
     let stderrPending = ''; // Stderr line buffer
+    let stderrAll = '';
     const isNoisyCliLogLine = (trimmedLine) => {
         const trimmed = String(trimmedLine || '');
         if (!trimmed) return true;
         const lower = trimmed.toLowerCase();
         if (trimmed.startsWith('[plugins]')) return true;
         if (trimmed.includes('Config warnings')) return true;
+        if (trimmed.includes('Config was last written by a newer OpenClaw')) return true;
+        if (trimmed.startsWith('- plugins:')) return true;
         if (trimmed.includes('duplicate plugin id')) return true;
         if (trimmed.includes('/openclaw/extensions/')) return true;
         if (trimmed.includes('later plugin may be overridden')) return true;
         if (trimmed === '│') return true;
         if (trimmed.includes('[agents/auth-profiles]')) return true;
+        if (trimmed.startsWith('Registered plugin command:')) return true;
+        if (trimmed.startsWith('🦞 OpenClaw')) return true;
+        if (trimmed.startsWith('Usage: openclaw')) return true;
+        if (/^error:/i.test(trimmed)) return true;
+        if (/^failovererror:/i.test(trimmed)) return true;
+        if (/session file locked/i.test(trimmed)) return true;
+        if (/\.jsonl\.lock/i.test(trimmed)) return true;
+        if (/sessions\.json\.lock/i.test(trimmed)) return true;
+        if (/^docs:\s*https?:\/\//i.test(trimmed)) return true;
+        if (lower.includes('maximum number of unified exec processes')) return true;
         if (lower.includes('tools.profile') && lower.includes('allowlist contains unknown entries')) return true;
         if (lower.includes('unavailable in the current runtime/provider/model/config')) return true;
         if (lower.includes('stale config entry ignored')) return true;
@@ -809,37 +924,84 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
         if (lower === 'command not found') return true;
         return false;
     };
-    const emitReasoningLogLine = (rawLine) => {
-        const clean = String(rawLine || '').replace(/\x1b\[[0-9;]*m/g, '');
-        const compact = clean
-            .replace(/^[\s│├╮╯╰─]+/, '')
-            .replace(/^◇\s*/, '')
-            .trim();
-        if (!compact) return false;
-        onChunk({ type: 'reasoning_stream', content: `${compact}\n` });
-        return true;
-    };
-    const tryEmitProgressReasoning = (trimmedLine, cleanLine) => {
+    const isLikelyCliLogLine = (trimmedLine) => {
         const trimmed = String(trimmedLine || '').trim();
         if (!trimmed) return false;
-        if (trimmed.startsWith('◇') || /^[│├╮╯╰─]/.test(trimmed)) {
-            return emitReasoningLogLine(cleanLine);
+        if (trimmed.startsWith('[')) return true;
+        if (trimmed.startsWith('Config warnings')) return true;
+        if (trimmed.startsWith('- plugins:')) return true;
+        if (trimmed.startsWith('Registered plugin command:')) return true;
+        if (trimmed.startsWith('web_search:')) return true;
+        if (trimmed.startsWith('🦞 OpenClaw')) return true;
+        if (trimmed.startsWith('Usage: openclaw')) return true;
+        if (/^docs:\s*https?:\/\//i.test(trimmed)) return true;
+        return false;
+    };
+    const mapCliProgressEvent = (trimmedLine) => {
+        const line = String(trimmedLine || '').trim();
+        if (!line) return null;
+        if (/^\[diagnostic\]\s+lane enqueue:/i.test(line)) {
+            return { code: 'cli_queue_wait', label: '排队中', detail: '请求已进入执行队列。' };
+        }
+        if (/^\[diagnostic\]\s+lane dequeue:/i.test(line)) {
+            return { code: 'cli_queue_start', label: '开始执行', detail: '请求已出队，准备开始执行。' };
+        }
+        if (/^\[agent\/embedded\]\s+embedded run start:/i.test(line)) {
+            return { code: 'cli_run_start', label: '执行启动', detail: '已启动本地执行，正在准备上下文。' };
+        }
+        if (/^\[agent\/embedded\]\s+embedded run prompt start:/i.test(line) || /^\[agent\/embedded\]\s+\[context-diag]/i.test(line)) {
+            return { code: 'cli_context', label: '读取上下文', detail: '正在整理历史消息与上下文。' };
+        }
+        if (/^\[agent\/embedded\]\s+embedded run agent start:/i.test(line)) {
+            return { code: 'cli_model_start', label: '模型推理', detail: '模型已开始推理并生成回复。' };
+        }
+        if (/^web_search:.*falling back/i.test(line)) {
+            return { code: 'cli_tool_prepare', label: '工具准备', detail: '正在初始化检索工具。' };
+        }
+        if (/^web_search:/i.test(line)) {
+            return { code: 'cli_tool_prepare', label: '工具准备', detail: '正在准备检索能力。' };
+        }
+        if (/^\[agent\/embedded\]\s+embedded run agent end:/i.test(line)) {
+            return { code: 'cli_model_end', label: '结果整理', detail: '模型推理完成，正在整理结果。' };
+        }
+        if (/^\[agent\/embedded\]\s+embedded run prompt end:/i.test(line)) {
+            return { code: 'cli_finalize', label: '即将返回', detail: '回复已生成，正在收尾。' };
         }
         if (
-            trimmed.startsWith('[agents/') ||
-            trimmed.startsWith('[gateway/') ||
-            trimmed.startsWith('[model/') ||
-            trimmed.startsWith('[openclaw/') ||
-            trimmed.startsWith('[runtime/') ||
-            trimmed.startsWith('[room/') ||
-            trimmed.startsWith('[tool/') ||
-            trimmed.startsWith('[tools/') ||
-            trimmed.startsWith('[tools]') ||
-            trimmed.startsWith('[skills/')
+            /^\[agent\/embedded\]\s+embedded run done:/i.test(line) ||
+            /^\[diagnostic\]\s+run cleared:/i.test(line) ||
+            /^\[diagnostic\]\s+lane task done:/i.test(line)
         ) {
-            return emitReasoningLogLine(cleanLine);
+            return { code: 'cli_done', label: '返回结果', detail: '执行完成，正在返回回复。' };
         }
-        return false;
+        return null;
+    };
+    const emitCliProgressEvent = (eventLike) => {
+        if (!eventLike || typeof eventLike !== 'object') return false;
+        const code = typeof eventLike.code === 'string' ? eventLike.code.trim() : '';
+        const label = typeof eventLike.label === 'string' ? eventLike.label.trim() : '执行中';
+        const detail = typeof eventLike.detail === 'string' ? eventLike.detail.trim() : '';
+        if (!code && !detail) return false;
+        const signature = `${code}|${detail}`;
+        if (signature && signature === lastCliProgressSignature) return true;
+        if (code) {
+            const now = Date.now();
+            const prevTs = Number(lastCliProgressAtByCode.get(code) || 0);
+            if (prevTs > 0 && (now - prevTs) < 1400) return true;
+            lastCliProgressAtByCode.set(code, now);
+        }
+        lastCliProgressSignature = signature;
+        emitChunk({
+            type: 'execution_event',
+            event: {
+                code: code || 'cli_progress',
+                label: label || '执行中',
+                detail,
+                timestamp: new Date().toISOString(),
+                source: 'openclaw_cli'
+            }
+        });
+        return true;
     };
     
     child.stdout.on('data', (data) => {
@@ -858,25 +1020,32 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
 
             if (!trimmed) {
                 // Empty line (just newline). Pass it through to preserve spacing.
-                onChunk('\n');
+                emitChunk('\n');
                 return;
             }
 
             // Parse structured streaming events first (reasoning/content chunks)
             const structuredEvents = extractStructuredStreamEvents(trimmed);
             if (structuredEvents) {
-                structuredEvents.forEach(evt => onChunk(evt));
+                structuredEvents.forEach(evt => emitChunk(evt));
                 return;
             }
 
-            if (isNoisyCliLogLine(trimmed)) return;
+            if (wantsCliProgressEvents) {
+                const progressEvent = mapCliProgressEvent(trimmed);
+                if (progressEvent) {
+                    emitCliProgressEvent(progressEvent);
+                    return;
+                }
+            }
 
-            if (tryEmitProgressReasoning(trimmed, cleanLine)) {
+            if (isNoisyCliLogLine(trimmed)) return;
+            if (wantsCliProgressEvents && isLikelyCliLogLine(trimmed)) {
                 return;
             }
 
             // Valid line
-            onChunk(line + '\n');
+            emitChunk(line + '\n');
         });
 
         // Handle pending (streaming tokens support)
@@ -891,6 +1060,8 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
         } else if (cleanPending.startsWith('[')) {
             if (cleanPending.startsWith('[plugins]')) isLogStart = true;
             else if (cleanPending.startsWith('[agents/')) isLogStart = true;
+            else if (cleanPending.startsWith('[agent/')) isLogStart = true;
+            else if (cleanPending.startsWith('[diagnostic]')) isLogStart = true;
             else if (cleanPending.startsWith('[gateway/')) isLogStart = true;
             else if (cleanPending.startsWith('[model/')) isLogStart = true;
             else if (cleanPending.startsWith('[openclaw/')) isLogStart = true;
@@ -901,13 +1072,19 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
             else if ('[plugins]'.startsWith(cleanPending)) isLogStart = true;
             else if ('[agents/'.startsWith(cleanPending)) isLogStart = true;
             else if (cleanPending.length < 10) isLogStart = true;
+        } else if (
+            cleanPending.startsWith('Registered plugin command:') ||
+            cleanPending.startsWith('web_search:') ||
+            cleanPending.startsWith('🦞 OpenClaw')
+        ) {
+            isLogStart = true;
         }
         if (cleanPending.startsWith('{') || cleanPending.startsWith('data: {') || cleanPending.startsWith('data:{') || cleanPending.startsWith('[')) {
             isStructuredStart = true;
         }
 
         if (pending.length > 0 && !isLogStart && !isStructuredStart) {
-            onChunk(pending);
+            emitChunk(pending);
             pending = ''; // Consumed
         }
         // If it IS a log start or structured start, keep it in pending until newline confirms it
@@ -916,6 +1093,7 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     child.stderr.on('data', (data) => {
         if (settled) return;
         const chunk = data.toString();
+        stderrAll += chunk;
         const full = stderrPending + chunk;
         const lines = full.split('\n');
         stderrPending = lines.pop();
@@ -927,29 +1105,35 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
 
             const structuredEvents = extractStructuredStreamEvents(trimmed);
             if (structuredEvents) {
-                structuredEvents.forEach(evt => onChunk(evt));
+                structuredEvents.forEach(evt => emitChunk(evt));
                 return;
+            }
+
+            if (wantsCliProgressEvents) {
+                const progressEvent = mapCliProgressEvent(trimmed);
+                if (progressEvent) {
+                    emitCliProgressEvent(progressEvent);
+                    return;
+                }
             }
 
             if (isNoisyCliLogLine(trimmed)) return;
-
-            if (tryEmitProgressReasoning(trimmed, cleanLine)) return;
-
-            if (
-                /^(warn|warning|error|retry|timeout|connecting|connected|starting|started|loading|loaded)\b/i.test(trimmed) ||
-                trimmed.startsWith('[')
-            ) {
-                emitReasoningLogLine(cleanLine);
+            if (wantsCliProgressEvents && isLikelyCliLogLine(trimmed)) {
                 return;
             }
-
-            console.error(`[sendMessageStream] stderr: ${trimmed}`);
+            // Some OpenClaw runtimes may write assistant output to stderr.
+            // Only forward lines that don't look like runtime diagnostics/errors.
+            emitChunk(cleanLine + '\n');
         });
     });
     
     child.on('close', (code) => {
         if (aborted || settled) return;
         settled = true;
+        if (firstChunkTimeout) {
+            clearTimeout(firstChunkTimeout);
+            firstChunkTimeout = null;
+        }
         console.log(`[sendMessageStream] Process exited with code ${code}`);
 
         // Flush pending tail
@@ -957,9 +1141,19 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
             const cleanPending = pending.replace(/\x1b\[[0-9;]*m/g, '');
             const structuredEvents = extractStructuredStreamEvents(cleanPending);
             if (structuredEvents) {
-                structuredEvents.forEach(evt => onChunk(evt));
+                structuredEvents.forEach(evt => emitChunk(evt));
             } else {
-                onChunk(cleanPending);
+                const trimmed = cleanPending.trim();
+                if (wantsCliProgressEvents) {
+                    const progressEvent = mapCliProgressEvent(trimmed);
+                    if (progressEvent) {
+                        emitCliProgressEvent(progressEvent);
+                    } else if (!isNoisyCliLogLine(trimmed) && !isLikelyCliLogLine(trimmed)) {
+                        emitChunk(cleanPending);
+                    }
+                } else if (!isNoisyCliLogLine(trimmed)) {
+                    emitChunk(cleanPending);
+                }
             }
             pending = '';
         }
@@ -969,22 +1163,42 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
             if (trimmed) {
                 const structuredEvents = extractStructuredStreamEvents(trimmed);
                 if (structuredEvents) {
-                    structuredEvents.forEach(evt => onChunk(evt));
+                    structuredEvents.forEach(evt => emitChunk(evt));
+                } else if (wantsCliProgressEvents) {
+                    const progressEvent = mapCliProgressEvent(trimmed);
+                    if (progressEvent) {
+                        emitCliProgressEvent(progressEvent);
+                    } else if (!isNoisyCliLogLine(trimmed) && !isLikelyCliLogLine(trimmed)) {
+                        emitChunk(cleanPending);
+                    }
                 } else if (!isNoisyCliLogLine(trimmed)) {
-                    tryEmitProgressReasoning(trimmed, cleanPending);
+                    emitChunk(cleanPending);
                 }
             }
             stderrPending = '';
         }
 
         if (code === 0) {
-            onDone();
+            if (hasMeaningfulOutput) {
+                onDone();
+            } else {
+                onError(new Error('OpenClaw returned empty response'));
+            }
         } else {
             // If we received ANY content, treat it as success even if code is non-zero (common with CLI tools that might have minor warnings)
-            if (buffer.trim().length > 0) {
+            if (hasMeaningfulOutput) {
                 console.warn(`[sendMessageStream] Process exited with ${code} but content was received. Treating as success.`);
                 onDone();
             } else {
+                const errText = String(stderrAll || '').trim();
+                if (/session file locked|\.jsonl\.lock|sessions\.json\.lock|failovererror/i.test(errText)) {
+                    onError(new Error('OpenClaw session file locked，请稍后重试（建议 2-5 秒后重发）'));
+                    return;
+                }
+                if (/config was last written by a newer openclaw/i.test(errText)) {
+                    onError(new Error('OpenClaw 版本过旧，当前配置由更新版本写入。请升级本机 OpenClaw 后重试。'));
+                    return;
+                }
                 onError(new Error(`Process exited with code ${code}`));
             }
         }
@@ -993,6 +1207,10 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
     child.on('error', (err) => {
         if (aborted || settled) return;
         settled = true;
+        if (firstChunkTimeout) {
+            clearTimeout(firstChunkTimeout);
+            firstChunkTimeout = null;
+        }
         console.error(`[sendMessageStream] Spawn error:`, err);
         onError(err);
     });
@@ -1001,6 +1219,10 @@ const sendMessageStream = (agentId, message, onChunk, onDone, onError, options =
         if (settled || aborted) return;
         aborted = true;
         settled = true;
+        if (firstChunkTimeout) {
+            clearTimeout(firstChunkTimeout);
+            firstChunkTimeout = null;
+        }
         try {
             child.kill('SIGTERM');
         } catch (_) {}
@@ -1101,6 +1323,149 @@ const resetConversation = async (agentId) => {
     throw lastError || new Error('reset conversation failed');
 };
 
+const approvePermission = async (approvalId, mode = 'allow-once') => {
+    const normalizedId = String(approvalId || '').trim();
+    const normalizedMode = String(mode || 'allow-once').trim().toLowerCase();
+    if (!/^[a-zA-Z0-9_-]{4,128}$/.test(normalizedId)) {
+        throw new Error('invalid approval id');
+    }
+    if (!['allow-once', 'allow-always', 'deny'].includes(normalizedMode)) {
+        throw new Error('invalid approval mode');
+    }
+
+    const sanitizeCliNoise = (raw) => {
+        let text = String(raw || '');
+        if (!text) return '';
+        // OpenClaw may print config warnings before real output.
+        text = text.replace(/Config warnings:\\n(?:- [^\n]+\\n?)*/gi, '');
+        text = text.replace(/Config warnings:\n(?:- [^\n]+\n?)*/gi, '');
+        const lines = text
+            .split('\n')
+            .map((line) => String(line || '').trim())
+            .filter((line) => {
+                if (!line) return false;
+                const lower = line.toLowerCase();
+                if (line.startsWith('- plugins:')) return false;
+                if (line.includes('plugins.entries.')) return false;
+                if (line.includes('world-writable path')) return false;
+                if (line.startsWith('🦞 OpenClaw')) return false;
+                if (line.startsWith('Usage: openclaw')) return false;
+                if (lower.includes('stale config entry ignored')) return false;
+                if (lower.includes('maximum number of unified exec processes')) return false;
+                return true;
+            });
+        return lines.join('\n').trim();
+    };
+
+    const extractFirstJsonObject = (raw) => {
+        const text = String(raw || '');
+        if (!text) return null;
+        for (let start = 0; start < text.length; start++) {
+            const ch = text[start];
+            if (ch !== '{' && ch !== '[') continue;
+            const openChar = ch;
+            const closeChar = ch === '{' ? '}' : ']';
+            let depth = 0;
+            let inString = false;
+            let escaped = false;
+            for (let i = start; i < text.length; i++) {
+                const c = text[i];
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                        continue;
+                    }
+                    if (c === '\\') {
+                        escaped = true;
+                        continue;
+                    }
+                    if (c === '"') {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (c === '"') {
+                    inString = true;
+                    continue;
+                }
+                if (c === openChar) depth++;
+                if (c === closeChar) depth--;
+                if (depth === 0) {
+                    const candidate = text.slice(start, i + 1);
+                    try {
+                        return JSON.parse(candidate);
+                    } catch (_) {
+                        break;
+                    }
+                }
+            }
+        }
+        return null;
+    };
+
+    const callGatewayResolve = (method) => {
+        const params = JSON.stringify({
+            id: normalizedId,
+            decision: normalizedMode
+        });
+        return new Promise((resolve, reject) => {
+            execFile(
+                OPENCLAW_CMD,
+                ['gateway', 'call', method, '--json', '--params', params],
+                {
+                    timeout: 30000,
+                    maxBuffer: 1024 * 1024 * 2,
+                    env: buildOpenClawEnv()
+                },
+                (error, stdout, stderr) => {
+                    const combined = `${String(stdout || '')}\n${String(stderr || '')}`;
+                    const cleaned = sanitizeCliNoise(combined);
+
+                    const failedMatch = cleaned.match(/Gateway call failed:\s*(.+)$/i);
+                    if (failedMatch) {
+                        reject(new Error(failedMatch[1].trim() || 'Gateway call failed'));
+                        return;
+                    }
+
+                    if (error) {
+                        reject(new Error(cleaned || error.message || `${method} failed`));
+                        return;
+                    }
+
+                    const parsed = extractFirstJsonObject(cleaned);
+                    resolve({
+                        method,
+                        response: parsed || null,
+                        output: cleaned
+                    });
+                }
+            );
+        });
+    };
+
+    const errors = [];
+    for (const method of ['exec.approval.resolve', 'plugin.approval.resolve']) {
+        try {
+            const result = await callGatewayResolve(method);
+            return {
+                approvalId: normalizedId,
+                mode: normalizedMode,
+                via: 'gateway',
+                method,
+                result
+            };
+        } catch (e) {
+            errors.push(e && e.message ? String(e.message) : String(e));
+        }
+    }
+
+    const preferred = errors.find((msg) => /unknown or expired approval id/i.test(msg))
+        || errors.find((msg) => /not found|unknown method|unsupported/i.test(msg))
+        || errors[0]
+        || 'approval failed';
+    throw new Error(preferred);
+};
+
 module.exports = {
     getAgents,
     createAgent,
@@ -1113,6 +1478,7 @@ module.exports = {
     sendMessage,
     sendMessageStream,
     resetConversation,
+    approvePermission,
     writeFileContent,
     readSoulMd
 };

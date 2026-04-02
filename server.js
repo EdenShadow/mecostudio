@@ -23,7 +23,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 const OPENCLAW_HTTP_TIMEOUT_MS = 120000;
-const OPENCLAW_FIRST_CHUNK_TIMEOUT_MS = 12000;
+const OPENCLAW_FIRST_CHUNK_TIMEOUT_MS = 30000;
 const OPENCLAW_FIRST_CHUNK_TIMEOUT_ROUNDTABLE_MS = 45000;
 const OPENCLAW_FIRST_CHUNK_TIMEOUT_MULTIMODAL_MS = 65000;
 const ROOM_SPEAKER_STALL_TIMEOUT_MS = 20000;
@@ -194,6 +194,69 @@ function registerMinimaxRateLimit(source = '') {
 
 function getRuntimeSettings() {
   return appSettings.getSettings();
+}
+
+function isOpenClawCliFallbackEnabled() {
+  const runtime = getRuntimeSettings();
+  if (!runtime || typeof runtime !== 'object') return false;
+  return runtime.openclawCliFallback === true || runtime.openclawCliFallbackEnabled === true;
+}
+
+// OpenClaw session lane:
+// - same sessionKey: serialized
+// - different sessionKey: parallel
+const openclawSessionLaneTails = new Map();
+const openclawSessionLanePending = new Map();
+
+function runInOpenClawSessionLane(sessionKey, task, hooks = {}) {
+  const key = String(sessionKey || '').trim().toLowerCase();
+  if (!key) {
+    return Promise.resolve().then(task);
+  }
+
+  const prevTail = openclawSessionLaneTails.get(key) || Promise.resolve();
+  const queuedAt = Date.now();
+  const currentPending = Number(openclawSessionLanePending.get(key) || 0) + 1;
+  openclawSessionLanePending.set(key, currentPending);
+
+  const current = prevTail
+    .catch(() => undefined)
+    .then(async () => {
+      const startedAt = Date.now();
+      const waitMs = Math.max(0, startedAt - queuedAt);
+      try {
+        if (typeof hooks.onStart === 'function') {
+          hooks.onStart({
+            key,
+            queuedAt,
+            startedAt,
+            waitMs,
+            pendingBeforeStart: Math.max(0, Number(openclawSessionLanePending.get(key) || 1) - 1)
+          });
+        }
+      } catch (_) {}
+      return await task();
+    })
+    .finally(() => {
+      const pending = Math.max(0, Number(openclawSessionLanePending.get(key) || 1) - 1);
+      if (pending <= 0) openclawSessionLanePending.delete(key);
+      else openclawSessionLanePending.set(key, pending);
+      try {
+        if (typeof hooks.onSettle === 'function') hooks.onSettle({ key, pending });
+      } catch (_) {}
+    });
+
+  const tail = current.then(
+    () => undefined,
+    () => undefined
+  );
+  openclawSessionLaneTails.set(key, tail);
+  void tail.finally(() => {
+    if (openclawSessionLaneTails.get(key) === tail) {
+      openclawSessionLaneTails.delete(key);
+    }
+  });
+  return current;
 }
 
 function getMinimaxConfig() {
@@ -368,6 +431,39 @@ function extractSseContentDelta(parsed) {
   return normalizeSseTextValue(fallbackText);
 }
 
+function extractSseReasoningDelta(parsed) {
+  if (!parsed || typeof parsed !== 'object') return '';
+  const choice = parsed?.choices?.[0] || {};
+  const delta = choice?.delta || {};
+  const direct =
+    normalizeSseTextValue(delta.reasoning_content) ||
+    normalizeSseTextValue(delta.reasoning) ||
+    normalizeSseTextValue(delta.reasoning_text) ||
+    normalizeSseTextValue(delta.thinking) ||
+    normalizeSseTextValue(delta.thought) ||
+    normalizeSseTextValue(delta.thought_content);
+  if (direct) return direct;
+
+  const streamName = String(parsed.stream || '').toLowerCase();
+  const streamData = parsed.data && typeof parsed.data === 'object' ? parsed.data : {};
+  if (streamName.includes('think') || streamName.includes('reason')) {
+    return normalizeSseTextValue(streamData.delta)
+      || normalizeSseTextValue(streamData.text)
+      || normalizeSseTextValue(streamData.content);
+  }
+
+  const eventType = String(parsed.event || parsed.type || '').toLowerCase();
+  if (eventType.includes('think') || eventType.includes('reason')) {
+    return normalizeSseTextValue(parsed.delta)
+      || normalizeSseTextValue(parsed.text)
+      || normalizeSseTextValue(parsed.content)
+      || normalizeSseTextValue(streamData.delta)
+      || normalizeSseTextValue(streamData.text);
+  }
+
+  return '';
+}
+
 function isSseTerminalPayload(parsed) {
   if (!parsed || typeof parsed !== 'object') return false;
 
@@ -459,7 +555,8 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
     firstChunkTimeoutId = setTimeout(() => {
       if (!firstChunkReceived) {
         firstChunkTimeout = true;
-        controller.abort();
+        // 首分片较慢仅记录，不提前中断，避免“看桌面/等授权”场景误报。
+        console.warn(`[${agentId}] ⏳ 首分片等待超过 ${firstChunkTimeoutMs}ms，继续等待...`);
       }
     }, firstChunkTimeoutMs);
 
@@ -597,7 +694,7 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
     const errMsg = timedOut
       ? `HTTP SSE 超时 (${OPENCLAW_HTTP_TIMEOUT_MS}ms)`
       : firstChunkTimeout
-        ? `首个文本分片超时 (${firstChunkTimeoutMs}ms)`
+        ? `首个文本分片等待过慢（>${firstChunkTimeoutMs}ms）`
       : e.message;
     if (state.preparingAgent === agentId) {
       state.preparingAgent = null;
@@ -632,6 +729,34 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
   const onReasoning = typeof handlers.onReasoning === 'function' ? handlers.onReasoning : () => {};
   const onDone = typeof handlers.onDone === 'function' ? handlers.onDone : () => {};
   const onError = typeof handlers.onError === 'function' ? handlers.onError : () => {};
+  const onExecution = typeof handlers.onExecution === 'function' ? handlers.onExecution : () => {};
+
+  const laneBypass = !!(options && options.__laneBypass);
+  const laneSessionKey = !laneBypass && typeof options.sessionKey === 'string'
+    ? options.sessionKey.trim()
+    : '';
+  if (laneSessionKey) {
+    return await runInOpenClawSessionLane(
+      laneSessionKey,
+      async () => {
+        return await streamOpenClawHTTP(agentId, userMessage, handlers, {
+          ...(options || {}),
+          __laneBypass: true
+        });
+      },
+      {
+        onStart: ({ waitMs, pendingBeforeStart }) => {
+          if (waitMs < 80) return;
+          onExecution({
+            code: 'session_lane_wait',
+            label: '同会话排队',
+            detail: `等待 ${Math.round(waitMs / 100) / 10}s（前方 ${pendingBeforeStart || 0} 个）`,
+            source: 'openclaw_lane'
+          });
+        }
+      }
+    );
+  }
 
   const controller = options.controller || new AbortController();
   let timedOut = false;
@@ -694,7 +819,12 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
     firstChunkTimeoutId = setTimeout(() => {
       if (!firstChunkReceived) {
         firstChunkTimeout = true;
-        controller.abort();
+        onExecution({
+          code: 'first_chunk_slow',
+          label: '响应较慢',
+          detail: `首个分片等待超过 ${firstChunkTimeoutMs}ms，继续等待中...`,
+          source: 'openclaw_gateway'
+        });
       }
     }, firstChunkTimeoutMs);
 
@@ -719,14 +849,7 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
 
         try {
           const parsed = JSON.parse(payload);
-          const delta = parsed?.choices?.[0]?.delta || {};
-          const reasoning =
-            delta.reasoning_content ||
-            delta.reasoning ||
-            delta.reasoning_text ||
-            delta.thinking ||
-            delta.thought ||
-            '';
+          const reasoning = extractSseReasoningDelta(parsed);
           const content = extractSseContentDelta(parsed);
 
           if (typeof reasoning === 'string' && reasoning.length > 0) {
@@ -768,6 +891,12 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
       firstChunkTimeoutId = null;
     }
     clearTimeout(timeoutId);
+    onExecution({
+      code: 'stream_done',
+      label: '执行完成',
+      detail: 'Gateway 流式已完成',
+      source: 'openclaw_gateway'
+    });
     onDone({ fullResponse, fullReasoning });
   } catch (e) {
     if (firstChunkTimeoutId) {
@@ -784,8 +913,14 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
     const errMsg = timedOut
       ? `HTTP SSE 超时 (${OPENCLAW_HTTP_TIMEOUT_MS}ms)`
       : firstChunkTimeout
-        ? `首个文本分片超时 (${firstChunkTimeoutMs}ms)`
+        ? `首个文本分片等待过慢（>${firstChunkTimeoutMs}ms）`
         : e.message;
+    onExecution({
+      code: 'stream_error',
+      label: '执行失败',
+      detail: String(errMsg || 'unknown error'),
+      source: 'openclaw_gateway'
+    });
     onError(new Error(errMsg));
   }
 }
@@ -3741,6 +3876,39 @@ app.post('/api/settings', async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/openclaw/approve', async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const approvalId = String(body.approvalId || body.requestId || '').trim();
+    const mode = String(body.mode || '').trim().toLowerCase() || 'allow-once';
+    if (!approvalId) {
+      return res.status(400).json({ success: false, error: 'approvalId is required' });
+    }
+    if (!/^[a-zA-Z0-9_-]{4,128}$/.test(approvalId)) {
+      return res.status(400).json({ success: false, error: 'invalid approvalId' });
+    }
+    if (!['allow-once', 'allow-always', 'deny'].includes(mode)) {
+      return res.status(400).json({ success: false, error: 'invalid mode' });
+    }
+    if (!openclaw || typeof openclaw.approvePermission !== 'function') {
+      return res.status(500).json({ success: false, error: 'approve handler unavailable' });
+    }
+
+    const result = await openclaw.approvePermission(approvalId, mode);
+    return res.json({
+      success: true,
+      approvalId,
+      mode,
+      result
+    });
+  } catch (e) {
+    return res.status(500).json({
+      success: false,
+      error: e && e.message ? String(e.message) : 'approve failed'
+    });
   }
 });
 
@@ -7295,6 +7463,31 @@ function inferAudioFormatFromUpload(file = null) {
   return 'wav';
 }
 
+function buildPodcastO2oUpdatePayload(meta = {}, fallbackAudioId = '', fallbackSpeakerId = '') {
+  const o2oAudioId = String(
+    meta?.o2o_audio_id
+      || meta?.o2oAudioId
+      || fallbackAudioId
+      || ''
+  ).trim();
+  const o2oSpeakerId = String(
+    meta?.o2o_speaker_id
+      || meta?.o2oSpeakerId
+      || fallbackSpeakerId
+      || ''
+  ).trim();
+
+  const updateBody = {};
+  if (o2oAudioId) updateBody.o2o_audio_id = o2oAudioId;
+  if (o2oSpeakerId) updateBody.o2o_speaker_id = o2oSpeakerId;
+
+  return {
+    updateBody,
+    o2oAudioId,
+    o2oSpeakerId
+  };
+}
+
 app.get('/api/agents/:agentId/o2o-audio', (req, res) => {
   const { agentId } = req.params;
   const agent = getAgentById(agentId);
@@ -7317,7 +7510,7 @@ app.get('/api/agents/:agentId/o2o-audio', (req, res) => {
   }
 });
 
-app.put('/api/agents/:agentId/o2o-audio', (req, res) => {
+app.put('/api/agents/:agentId/o2o-audio', async (req, res) => {
   const { agentId } = req.params;
   const agent = getAgentById(agentId);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -7337,11 +7530,25 @@ app.put('/api/agents/:agentId/o2o-audio', (req, res) => {
     if (AGENTS[agentId]) {
       AGENTS[agentId].o2oAudioId = o2oAudioId;
     }
+
+    let podcastSynced = false;
+    let podcastSyncError = '';
+    const o2oUpdate = buildPodcastO2oUpdatePayload(meta, o2oAudioId, o2oSpeakerId);
+    if (Object.keys(o2oUpdate.updateBody).length > 0) {
+      const syncResult = await syncPodcastAgentInfo(agentId, o2oUpdate.updateBody);
+      podcastSynced = !!syncResult?.success;
+      if (!podcastSynced && !syncResult?.skipped) {
+        podcastSyncError = String(syncResult?.reason || '').trim();
+      }
+    }
+
     return res.json({
       success: true,
       o2o_audio_id: o2oAudioId,
       o2o_speaker_id: o2oSpeakerId,
-      updatedAt: meta.o2o_audio_updated_at || nowIso
+      updatedAt: meta.o2o_audio_updated_at || nowIso,
+      podcastSynced,
+      podcastSyncError
     });
   } catch (e) {
     return res.status(500).json({ error: e.message || 'failed to save o2o audio id' });
@@ -7498,6 +7705,17 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
       AGENTS[agentId].o2oAudioId = submit.speakerId;
     }
 
+    let podcastSynced = false;
+    let podcastSyncError = '';
+    const o2oUpdate = buildPodcastO2oUpdatePayload(metaPatch, submit.speakerId, effectiveSpeakerId);
+    if (Object.keys(o2oUpdate.updateBody).length > 0) {
+      const syncResult = await syncPodcastAgentInfo(agentId, o2oUpdate.updateBody);
+      podcastSynced = !!syncResult?.success;
+      if (!podcastSynced && !syncResult?.skipped) {
+        podcastSyncError = String(syncResult?.reason || '').trim();
+      }
+    }
+
     return res.json({
       success: true,
       o2o_audio_id: submit.speakerId,
@@ -7508,7 +7726,9 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
       speakerResourceId: speakerResourceId || null,
       ready: !!statusInfo?.ready,
       done: !!statusInfo?.done,
-      attempts: Number.isFinite(Number(statusInfo?.attempts)) ? Number(statusInfo.attempts) : 0
+      attempts: Number.isFinite(Number(statusInfo?.attempts)) ? Number(statusInfo.attempts) : 0,
+      podcastSynced,
+      podcastSyncError
     });
   } catch (e) {
     const message = e.message || 'doubao o2o train failed';
@@ -7524,6 +7744,88 @@ app.post('/api/agents/:agentId/o2o-audio/train', upload.single('audio'), async (
         if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath);
       } catch (_) {}
     }
+  }
+});
+
+app.post('/api/agents/o2o-audio/backfill', async (req, res) => {
+  try {
+    const agentIds = fs.existsSync(DATA_AGENTS_DIR)
+      ? fs.readdirSync(DATA_AGENTS_DIR).filter((entry) => {
+          try {
+            return fs.statSync(path.join(DATA_AGENTS_DIR, entry)).isDirectory();
+          } catch (_) {
+            return false;
+          }
+        })
+      : [];
+
+    const results = [];
+    for (const rawId of agentIds) {
+      const agentId = String(rawId || '').trim();
+      if (!agentId) continue;
+
+      try {
+        const { meta } = readAgentMeta(agentId);
+        const o2oUpdate = buildPodcastO2oUpdatePayload(meta);
+        if (!meta?.podcastApiKey) {
+          results.push({
+            agentId,
+            status: 'skipped',
+            reason: 'missing_podcast_api_key',
+            o2o_audio_id: o2oUpdate.o2oAudioId || ''
+          });
+          continue;
+        }
+        if (!o2oUpdate.o2oAudioId) {
+          results.push({
+            agentId,
+            status: 'skipped',
+            reason: 'missing_o2o_audio_id',
+            o2o_audio_id: ''
+          });
+          continue;
+        }
+
+        const syncResult = await syncPodcastAgentInfo(agentId, o2oUpdate.updateBody);
+        if (syncResult?.success) {
+          results.push({
+            agentId,
+            status: 'synced',
+            o2o_audio_id: o2oUpdate.o2oAudioId,
+            o2o_speaker_id: o2oUpdate.o2oSpeakerId || ''
+          });
+        } else {
+          results.push({
+            agentId,
+            status: syncResult?.skipped ? 'skipped' : 'failed',
+            reason: String(syncResult?.reason || 'sync_failed').trim(),
+            o2o_audio_id: o2oUpdate.o2oAudioId,
+            o2o_speaker_id: o2oUpdate.o2oSpeakerId || ''
+          });
+        }
+      } catch (e) {
+        results.push({
+          agentId,
+          status: 'failed',
+          reason: e.message || String(e)
+        });
+      }
+    }
+
+    const synced = results.filter((item) => item.status === 'synced').length;
+    const skipped = results.filter((item) => item.status === 'skipped').length;
+    const failed = results.filter((item) => item.status === 'failed').length;
+
+    return res.json({
+      success: true,
+      total: results.length,
+      synced,
+      skipped,
+      failed,
+      results
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e.message || 'o2o backfill failed' });
   }
 });
 
@@ -9293,20 +9595,40 @@ async function syncTopicToPodcast(room, topicData, raisedAgentId) {
  * @param {object} updateFields - 要更新的字段
  */
 async function syncPodcastAgentInfo(agentId, updateFields) {
+    const normalizedAgentId = String(agentId || '').trim();
+    if (!normalizedAgentId) {
+        return { success: false, skipped: true, reason: 'invalid_agent_id' };
+    }
+    const cleanFields = {};
+    if (updateFields && typeof updateFields === 'object') {
+        Object.entries(updateFields).forEach(([key, value]) => {
+            if (!key) return;
+            if (value === undefined || value === null) return;
+            if (typeof value === 'string' && !value.trim()) return;
+            cleanFields[key] = value;
+        });
+    }
+    if (Object.keys(cleanFields).length === 0) {
+        return { success: false, skipped: true, reason: 'empty_update_fields' };
+    }
+
     try {
-        const metaPath = path.join(DATA_AGENTS_DIR, agentId, 'meta.json');
-        if (!fs.existsSync(metaPath)) return;
-        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-        if (!meta.podcastApiKey) return;
+        const { meta } = readAgentMeta(normalizedAgentId);
+        if (!meta?.podcastApiKey) {
+            return { success: false, skipped: true, reason: 'missing_podcast_api_key' };
+        }
 
         const axios = require('axios');
-        await axios.put(`${PODCAST_API_BASE}/agent/me`, updateFields, {
+        await axios.put(`${PODCAST_API_BASE}/agent/me`, cleanFields, {
             headers: { 'X-API-Key': meta.podcastApiKey, 'Content-Type': 'application/json' },
             timeout: 10000
         });
-        console.log(`[PodcastSync] ${agentId} 已同步: ${Object.keys(updateFields).join(', ')}`);
+        console.log(`[PodcastSync] ${normalizedAgentId} 已同步: ${Object.keys(cleanFields).join(', ')}`);
+        return { success: true, skipped: false, reason: '' };
     } catch (e) {
-        console.warn(`[PodcastSync] ${agentId} 同步失败: ${e.message}`);
+        const reason = e?.message || String(e);
+        console.warn(`[PodcastSync] ${normalizedAgentId} 同步失败: ${reason}`);
+        return { success: false, skipped: false, reason };
     }
 }
 
@@ -15106,6 +15428,7 @@ app.get('/api/agents/:id/history', async (req, res) => {
 });
 
 const agentToolsSocketsByAgent = new Map();
+const agentToolsRuntimeByAgent = new Map();
 
 function trackAgentToolsSocket(agentId, ws) {
     if (!agentId || !ws) return;
@@ -15113,6 +15436,39 @@ function trackAgentToolsSocket(agentId, ws) {
         agentToolsSocketsByAgent.set(agentId, new Set());
     }
     agentToolsSocketsByAgent.get(agentId).add(ws);
+}
+
+function getAgentToolsRuntime(agentId) {
+    const id = typeof agentId === 'string' ? agentId.trim() : '';
+    if (!id) return null;
+    const runtime = agentToolsRuntimeByAgent.get(id);
+    return runtime && typeof runtime === 'object' ? runtime : null;
+}
+
+function clearAgentToolsRuntime(agentId, requestId = null) {
+    const id = typeof agentId === 'string' ? agentId.trim() : '';
+    if (!id) return;
+    const runtime = agentToolsRuntimeByAgent.get(id);
+    if (!runtime) return;
+    if (requestId && runtime.requestId && runtime.requestId !== requestId) return;
+    agentToolsRuntimeByAgent.delete(id);
+}
+
+function broadcastAgentToolsMessage(agentId, payload) {
+    const id = typeof agentId === 'string' ? agentId.trim() : '';
+    if (!id || !payload || typeof payload !== 'object') return 0;
+    const set = agentToolsSocketsByAgent.get(id);
+    if (!set || set.size === 0) return 0;
+    let sent = 0;
+    const body = JSON.stringify(payload);
+    for (const sock of set) {
+        if (!sock || sock.readyState !== WebSocket.OPEN) continue;
+        try {
+            sock.send(body);
+            sent += 1;
+        } catch (_) {}
+    }
+    return sent;
 }
 
 function untrackAgentToolsSocket(agentId, ws) {
@@ -15139,6 +15495,7 @@ function abortAgentToolsStreams(agentId) {
             ws._agentToolsBusyMarked = false;
         }
     }
+    clearAgentToolsRuntime(agentId);
 }
 
 function broadcastAgentToolsReset(agentId, payload = {}) {
@@ -15493,6 +15850,7 @@ wss.on('connection', (ws, req) => {
               let fullResponse = '';
               let fullReasoning = '';
               let hasStartedStreaming = false;
+              let hasModelStreaming = false;
               const executionEvents = [];
               const emitExecutionEvent = (payload) => {
                   const normalized = normalizeExecutionEventItem({
@@ -15539,6 +15897,7 @@ wss.on('connection', (ws, req) => {
                       if (ws.readyState !== WebSocket.OPEN) return;
                       const emitText = (content) => {
                           if (typeof content !== 'string' || !content) return;
+                          hasModelStreaming = true;
                           const isNew = !hasStartedStreaming;
                           hasStartedStreaming = true;
                           fullResponse += content;
@@ -15553,6 +15912,7 @@ wss.on('connection', (ws, req) => {
                       };
                       const emitReasoning = (content) => {
                           if (typeof content !== 'string' || !content) return;
+                          hasModelStreaming = true;
                           const isNew = !hasStartedStreaming;
                           hasStartedStreaming = true;
                           fullReasoning += content;
@@ -15571,6 +15931,10 @@ wss.on('connection', (ws, req) => {
                           return;
                       }
                       if (!chunk || typeof chunk !== 'object') return;
+                      if (chunk.type === 'execution_event' && chunk.event) {
+                          emitExecutionEvent(chunk.event);
+                          return;
+                      }
                       if (chunk.type === 'reasoning_stream' && typeof chunk.content === 'string') {
                           emitReasoning(chunk.content);
                           return;
@@ -15674,6 +16038,7 @@ wss.on('connection', (ws, req) => {
                       resolveAgent();
                   };
 
+                  const channelSessionKey = `agent:${safeAgentId}:channel:${activeChannel.id}`;
                   if (multimodalMessages) {
                       emitExecutionEvent({
                           code: 'gateway_http',
@@ -15688,6 +16053,7 @@ wss.on('connection', (ws, req) => {
                           {
                               onText: (content) => onChunk({ type: 'text_stream', content }),
                               onReasoning: (content) => onChunk({ type: 'reasoning_stream', content }),
+                              onExecution: (event) => emitExecutionEvent(event),
                               onDone: () => onDone(),
                               onError: (error) => onError(error)
                           },
@@ -15698,25 +16064,79 @@ wss.on('connection', (ws, req) => {
                               messages: multimodalMessages,
                               model: `openclaw:${safeAgentId}`,
                               gatewayAgentId: safeAgentId,
-                              sessionKey: `agent:${safeAgentId}:main`,
+                              sessionKey: channelSessionKey,
                               reasoningEnabled: true
                           }
                       );
                       return;
                   }
 
+                  const startChannelCliStream = () => {
+                      emitExecutionEvent({
+                          code: 'cli_local',
+                          label: '执行通道',
+                          detail: 'OpenClaw CLI 本地流式（thinking=high）'
+                      });
+                      ws._agentChannelStreamHandle = openclaw.sendMessageStream(
+                          safeAgentId,
+                          inputText,
+                          onChunk,
+                          onDone,
+                          onError,
+                          {
+                              thinking: 'high',
+                              emitCliProgressEvents: true,
+                              sessionId: channelSessionKey
+                          }
+                      );
+                  };
+                  const canFallbackToChannelCli = () => {
+                      if (hasModelStreaming) return false;
+                      if (typeof fullResponse === 'string' && fullResponse.length > 0) return false;
+                      if (typeof fullReasoning === 'string' && fullReasoning.length > 0) return false;
+                      return true;
+                  };
                   emitExecutionEvent({
-                      code: 'cli_local',
+                      code: 'gateway_http',
                       label: '执行通道',
-                      detail: 'OpenClaw CLI 本地流式（thinking=high）'
+                      detail: 'Gateway Agent SSE（reasoning enabled）'
                   });
-                  ws._agentChannelStreamHandle = openclaw.sendMessageStream(
+                  const controller = new AbortController();
+                  ws._agentChannelStreamHandle = { abort: () => controller.abort() };
+                  streamOpenClawHTTP(
                       safeAgentId,
                       inputText,
-                      onChunk,
-                      onDone,
-                      onError,
-                      { thinking: 'high' }
+                      {
+                          onText: (content) => onChunk({ type: 'text_stream', content }),
+                          onReasoning: (content) => onChunk({ type: 'reasoning_stream', content }),
+                          onExecution: (event) => emitExecutionEvent(event),
+                          onDone: () => onDone(),
+                          onError: (error) => {
+                              if (isOpenClawCliFallbackEnabled() && canFallbackToChannelCli()) {
+                                  emitExecutionEvent({
+                                      code: 'gateway_error',
+                                      label: 'Gateway 失败',
+                                      detail: error && error.message ? String(error.message) : 'unknown error'
+                                  });
+                                  emitExecutionEvent({
+                                      code: 'gateway_cli_fallback',
+                                      label: '自动回退',
+                                      detail: '已回退到 OpenClaw CLI 本地流式'
+                                  });
+                                  startChannelCliStream();
+                                  return;
+                              }
+                              onError(error);
+                          }
+                      },
+                      {
+                          controller,
+                          silentAbort: true,
+                          model: `openclaw:${safeAgentId}`,
+                          gatewayAgentId: safeAgentId,
+                          sessionKey: channelSessionKey,
+                          reasoningEnabled: true
+                      }
                   );
               });
 
@@ -15876,6 +16296,21 @@ wss.on('connection', (ws, req) => {
       trackAgentToolsSocket(agentId, ws);
       
       console.log(`[AgentTools] Connected to ${agentId}`);
+      const inflightRuntime = getAgentToolsRuntime(agentId);
+      if (inflightRuntime && inflightRuntime.active) {
+          ws._agentToolsActiveRequestId = inflightRuntime.requestId || null;
+          try {
+              ws.send(JSON.stringify({
+                  type: 'agent_inflight_snapshot',
+                  agentId,
+                  requestId: inflightRuntime.requestId || '',
+                  startedAt: inflightRuntime.startedAt || Date.now(),
+                  response: typeof inflightRuntime.fullResponse === 'string' ? inflightRuntime.fullResponse : '',
+                  reasoning: typeof inflightRuntime.fullReasoning === 'string' ? inflightRuntime.fullReasoning : '',
+                  executionEvents: Array.isArray(inflightRuntime.executionEvents) ? inflightRuntime.executionEvents : []
+              }));
+          } catch (_) {}
+      }
       
       ws.on('message', async (message) => {
           try {
@@ -15883,6 +16318,35 @@ wss.on('connection', (ws, req) => {
               if (data.type === 'message') {
                   const userText = typeof data.content === 'string' ? data.content : '';
                   console.log(`[AgentTools] ${agentId} received: ${userText}`);
+                  const existingRuntime = getAgentToolsRuntime(agentId);
+                  if (existingRuntime && existingRuntime.active) {
+                      ws._agentToolsActiveRequestId = existingRuntime.requestId || null;
+                      try {
+                          ws.send(JSON.stringify({
+                              type: 'agent_inflight_snapshot',
+                              agentId,
+                              requestId: existingRuntime.requestId || '',
+                              startedAt: existingRuntime.startedAt || Date.now(),
+                              response: typeof existingRuntime.fullResponse === 'string' ? existingRuntime.fullResponse : '',
+                              reasoning: typeof existingRuntime.fullReasoning === 'string' ? existingRuntime.fullReasoning : '',
+                              executionEvents: Array.isArray(existingRuntime.executionEvents) ? existingRuntime.executionEvents : []
+                          }));
+                          ws.send(JSON.stringify({
+                              type: 'execution_event',
+                              event: {
+                                  code: 'busy_inflight',
+                                  label: '继续处理中',
+                                  detail: '上一轮正在执行，本次输入未重复提交',
+                                  source: 'agent-tools',
+                                  agentId,
+                                  senderName: getAgentDisplayName(agentId) || agentId,
+                                  timestamp: new Date().toISOString()
+                              },
+                              isNew: false
+                          }));
+                      } catch (_) {}
+                      return;
+                  }
                   
                   // Handle files if present
                   let finalText = userText;
@@ -15959,6 +16423,7 @@ wss.on('connection', (ws, req) => {
                   let fullResponse = '';
                   let fullReasoning = '';
                   let hasStartedStreaming = false;
+                  let hasModelStreaming = false;
                   const thinkingLevel = (typeof data.thinkingLevel === 'string' && data.thinkingLevel.trim()) ? data.thinkingLevel.trim() : 'high';
                   const primaryExecutionEvents = [];
                   const emitPrimaryExecutionEvent = (payload) => {
@@ -15973,14 +16438,15 @@ wss.on('connection', (ws, req) => {
                       if (primaryExecutionEvents.length > 120) {
                           primaryExecutionEvents.splice(0, primaryExecutionEvents.length - 120);
                       }
-                      if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                      runtime.executionEvents = primaryExecutionEvents.slice(-120);
+                      if (!isRuntimeActive()) return;
                       const isNew = !hasStartedStreaming;
                       hasStartedStreaming = true;
-                      ws.send(JSON.stringify({
+                      broadcastAgentToolsMessage(agentId, {
                           type: 'execution_event',
                           event: normalized,
                           isNew
-                      }));
+                      });
                   };
 
                   // 新请求进来时，中断之前仍在流式中的请求，避免串流互相覆盖
@@ -15999,6 +16465,21 @@ wss.on('connection', (ws, req) => {
                   }
                   const requestId = `${agentId}-${Date.now()}`;
                   ws._agentToolsActiveRequestId = requestId;
+                  const runtime = {
+                      agentId,
+                      requestId,
+                      active: true,
+                      startedAt: Date.now(),
+                      fullResponse: '',
+                      fullReasoning: '',
+                      executionEvents: [],
+                      streamHandle: null
+                  };
+                  agentToolsRuntimeByAgent.set(agentId, runtime);
+                  const isRuntimeActive = () => {
+                      const current = getAgentToolsRuntime(agentId);
+                      return !!current && current === runtime && current.active === true;
+                  };
                   markAgentRuntimeBusyStart(agentId);
                   ws._agentToolsBusyMarked = true;
 
@@ -16006,6 +16487,18 @@ wss.on('connection', (ws, req) => {
                   if (thinkingLevel && thinkingLevel !== 'off') {
                       streamOptions.thinking = thinkingLevel;
                   }
+                  streamOptions.emitCliProgressEvents = true;
+                  const isSessionLockError = (errorLike) => {
+                      const text = typeof errorLike === 'string'
+                          ? errorLike
+                          : (errorLike && errorLike.message ? String(errorLike.message) : '');
+                      if (!text) return false;
+                      return /session file locked|\.jsonl\.lock|sessions\.json\.lock|failovererror/i.test(text);
+                  };
+                  let primaryCliRestartFn = null;
+                  let primarySessionLockRetryCount = 0;
+                  const PRIMARY_SESSION_LOCK_RETRY_MAX = 2;
+                  const PRIMARY_SESSION_LOCK_RETRY_DELAY_MS = 1600;
 
                   if (userRequestedHandoffTargets.length > 0) {
                       emitPrimaryExecutionEvent({
@@ -16065,6 +16558,7 @@ wss.on('connection', (ws, req) => {
                       let relayResponse = '';
                       let relayReasoning = '';
                       let relayStarted = false;
+                      let relayModelStreaming = false;
                       const relayExecutionEvents = [];
                       const emitRelayExecution = (payload) => {
                           const normalized = normalizeExecutionEventItem({
@@ -16078,16 +16572,16 @@ wss.on('connection', (ws, req) => {
                           if (relayExecutionEvents.length > 120) {
                               relayExecutionEvents.splice(0, relayExecutionEvents.length - 120);
                           }
-                          if (ws.readyState !== WebSocket.OPEN || ws._agentToolsActiveRequestId !== requestId) return;
+                          if (!isRuntimeActive()) return;
                           const isNew = !relayStarted;
                           relayStarted = true;
-                          ws.send(JSON.stringify({
+                          broadcastAgentToolsMessage(agentId, {
                               type: 'execution_event',
                               event: normalized,
                               senderName: targetName,
                               senderAgentId: targetId,
                               isNew
-                          }));
+                          });
                       };
                       let relayBusyMarked = false;
                       const markRelayBusyStart = () => {
@@ -16112,50 +16606,78 @@ wss.on('connection', (ws, req) => {
                           label: startLabel,
                           detail: startDetail
                       });
-                      emitRelayExecution({
-                          code: 'cli_local',
-                          label: '执行通道',
-                          detail: 'OpenClaw CLI 本地流式（thinking=high）'
-                      });
+                      const relaySessionKey = `agent:${targetId}:main`;
+                      const startRelayCliStream = () => {
+                          emitRelayExecution({
+                              code: 'cli_local',
+                              label: '执行通道',
+                              detail: 'OpenClaw CLI 本地流式（thinking=high）'
+                          });
+                          ws._agentToolsStreamHandle = openclaw.sendMessageStream(
+                              targetId,
+                              relayInput,
+                              onRelayChunk,
+                              onRelayDone,
+                              onRelayError,
+                              {
+                                  thinking: 'high',
+                                  emitCliProgressEvents: true,
+                                  sessionId: relaySessionKey
+                              }
+                          );
+                          runtime.streamHandle = ws._agentToolsStreamHandle;
+                      };
+                      const canFallbackToRelayCli = () => {
+                          if (relayModelStreaming) return false;
+                          if (typeof relayResponse === 'string' && relayResponse.length > 0) return false;
+                          if (typeof relayReasoning === 'string' && relayReasoning.length > 0) return false;
+                          return true;
+                      };
 
                       const relayResult = await new Promise((resolveRelay) => {
                           const emitRelayText = (content) => {
                               if (typeof content !== 'string' || !content) return;
+                              relayModelStreaming = true;
                               const isNew = !relayStarted;
                               relayStarted = true;
                               relayResponse += content;
-                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
-                                  ws.send(JSON.stringify({
+                              if (isRuntimeActive()) {
+                                  broadcastAgentToolsMessage(agentId, {
                                       type: 'relay_text_stream',
                                       relayAgentId: targetId,
                                       relayAgentName: targetName,
                                       content,
                                       isNew
-                                  }));
+                                  });
                               }
                           };
                           const emitRelayReasoning = (content) => {
                               if (typeof content !== 'string' || !content) return;
+                              relayModelStreaming = true;
                               const isNew = !relayStarted;
                               relayStarted = true;
                               relayReasoning += content;
-                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
-                                  ws.send(JSON.stringify({
+                              if (isRuntimeActive()) {
+                                  broadcastAgentToolsMessage(agentId, {
                                       type: 'relay_reasoning_stream',
                                       relayAgentId: targetId,
                                       relayAgentName: targetName,
                                       content,
                                       isNew
-                                  }));
+                                  });
                               }
                           };
                           const onRelayChunk = (chunk) => {
-                              if (ws._agentToolsActiveRequestId !== requestId) return;
+                              if (!isRuntimeActive()) return;
                               if (typeof chunk === 'string') {
                                   emitRelayText(chunk);
                                   return;
                               }
                               if (!chunk || typeof chunk !== 'object') return;
+                              if (chunk.type === 'execution_event' && chunk.event) {
+                                  emitRelayExecution(chunk.event);
+                                  return;
+                              }
                               if (chunk.type === 'reasoning_stream') {
                                   emitRelayReasoning(chunk.content);
                                   return;
@@ -16166,8 +16688,9 @@ wss.on('connection', (ws, req) => {
                           };
                           const onRelayDone = () => {
                               ws._agentToolsStreamHandle = null;
+                              runtime.streamHandle = null;
                               markRelayBusyEnd();
-                              if (ws._agentToolsActiveRequestId !== requestId) {
+                              if (!isRuntimeActive()) {
                                   resolveRelay({
                                       targetId,
                                       targetName,
@@ -16217,8 +16740,9 @@ wss.on('connection', (ws, req) => {
                           };
                           const onRelayError = (error) => {
                               ws._agentToolsStreamHandle = null;
+                              runtime.streamHandle = null;
                               markRelayBusyEnd();
-                              if (ws._agentToolsActiveRequestId !== requestId) {
+                              if (!isRuntimeActive()) {
                                   resolveRelay({
                                       targetId,
                                       targetName,
@@ -16235,14 +16759,14 @@ wss.on('connection', (ws, req) => {
                                   label: '转发失败',
                                   detail: error && error.message ? String(error.message) : 'unknown error'
                               });
-                              if (ws.readyState === WebSocket.OPEN) {
-                                  ws.send(JSON.stringify({
+                              if (isRuntimeActive()) {
+                                  broadcastAgentToolsMessage(agentId, {
                                       type: 'relay_text_stream',
                                       relayAgentId: targetId,
                                       relayAgentName: targetName,
                                       content: errorText,
                                       isNew: !relayStarted
-                                  }));
+                                  });
                               }
                               appendAgentToolsHistory(agentId, 'assistant', errorText, {
                                   agentId: targetId,
@@ -16259,33 +16783,74 @@ wss.on('connection', (ws, req) => {
                               });
                           };
 
-                          ws._agentToolsStreamHandle = openclaw.sendMessageStream(
+                          emitRelayExecution({
+                              code: 'gateway_http',
+                              label: '执行通道',
+                              detail: 'Gateway Agent SSE（reasoning enabled）'
+                          });
+                          const controller = new AbortController();
+                          ws._agentToolsStreamHandle = { abort: () => controller.abort() };
+                          runtime.streamHandle = ws._agentToolsStreamHandle;
+                          streamOpenClawHTTP(
                               targetId,
                               relayInput,
-                              onRelayChunk,
-                              onRelayDone,
-                              onRelayError,
-                              { thinking: 'high' }
+                              {
+                                  onText: (content) => onRelayChunk({ type: 'text_stream', content }),
+                                  onReasoning: (content) => onRelayChunk({ type: 'reasoning_stream', content }),
+                                  onExecution: (event) => emitRelayExecution(event),
+                                  onDone: () => onRelayDone(),
+                                  onError: (error) => {
+                                      if (isOpenClawCliFallbackEnabled() && canFallbackToRelayCli()) {
+                                          emitRelayExecution({
+                                              code: 'gateway_error',
+                                              label: 'Gateway 失败',
+                                              detail: error && error.message ? String(error.message) : 'unknown error'
+                                          });
+                                          emitRelayExecution({
+                                              code: 'gateway_cli_fallback',
+                                              label: '自动回退',
+                                              detail: '已回退到 OpenClaw CLI 本地流式'
+                                          });
+                                          startRelayCliStream();
+                                          return;
+                                      }
+                                      onRelayError(error);
+                                  }
+                              },
+                              {
+                                  controller,
+                                  silentAbort: true,
+                                  model: `openclaw:${targetId}`,
+                                  gatewayAgentId: targetId,
+                                  sessionKey: relaySessionKey,
+                                  reasoningEnabled: true
+                              }
                           );
                       });
                       return relayResult;
                   };
 
                   const onChunk = (chunk) => {
-                          if (ws._agentToolsActiveRequestId !== requestId || ws.readyState !== WebSocket.OPEN) return;
+                          if (!isRuntimeActive()) return;
                           const emitText = (content) => {
                               if (typeof content !== 'string' || !content) return;
+                              primarySessionLockRetryCount = 0;
+                              hasModelStreaming = true;
                               const isNew = !hasStartedStreaming;
                               hasStartedStreaming = true;
                               fullResponse += content;
-                              ws.send(JSON.stringify({ type: 'text_stream', content, isNew }));
+                              runtime.fullResponse = fullResponse;
+                              broadcastAgentToolsMessage(agentId, { type: 'text_stream', content, isNew });
                           };
                           const emitReasoning = (content) => {
                               if (typeof content !== 'string' || !content) return;
+                              primarySessionLockRetryCount = 0;
+                              hasModelStreaming = true;
                               const isNew = !hasStartedStreaming;
                               hasStartedStreaming = true;
                               fullReasoning += content;
-                              ws.send(JSON.stringify({ type: 'reasoning_stream', content, isNew }));
+                              runtime.fullReasoning = fullReasoning;
+                              broadcastAgentToolsMessage(agentId, { type: 'reasoning_stream', content, isNew });
                           };
 
                           if (typeof chunk === 'string') {
@@ -16293,6 +16858,10 @@ wss.on('connection', (ws, req) => {
                               return;
                           }
                           if (!chunk || typeof chunk !== 'object') return;
+                          if (chunk.type === 'execution_event' && chunk.event) {
+                              emitPrimaryExecutionEvent(chunk.event);
+                              return;
+                          }
                           if (chunk.type === 'reasoning_stream') {
                               emitReasoning(chunk.content);
                               return;
@@ -16302,10 +16871,12 @@ wss.on('connection', (ws, req) => {
                           }
                       };
                   const onDone = () => {
-                          if (ws._agentToolsActiveRequestId !== requestId) return;
+                          if (!isRuntimeActive()) return;
+                          primarySessionLockRetryCount = 0;
                           ws._agentToolsStreamHandle = null;
+                          runtime.streamHandle = null;
                           const finalizeTurn = async () => {
-                              if (ws._agentToolsActiveRequestId !== requestId) return;
+                              if (!isRuntimeActive()) return;
                               let primaryResponse = fullResponse.trim();
                               const primaryReasoning = fullReasoning.trim();
                               if (requiredHandoffTargetNames.length > 0 && primaryResponse) {
@@ -16314,15 +16885,16 @@ wss.on('connection', (ws, req) => {
                                       const appendedDelta = patchedResponse.startsWith(primaryResponse)
                                           ? patchedResponse.slice(primaryResponse.length)
                                           : `\n\n${patchedResponse}`;
-                                      if (appendedDelta && ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
-                                          ws.send(JSON.stringify({
+                                      if (appendedDelta && isRuntimeActive()) {
+                                          broadcastAgentToolsMessage(agentId, {
                                               type: 'text_stream',
                                               content: appendedDelta,
                                               isNew: !hasStartedStreaming
-                                          }));
+                                          });
                                       }
                                       fullResponse = patchedResponse;
                                       primaryResponse = patchedResponse;
+                                      runtime.fullResponse = fullResponse;
                                       hasStartedStreaming = true;
                                   }
                               }
@@ -16365,7 +16937,7 @@ wss.on('connection', (ws, req) => {
                                   const relayHopLimit = 8;
                                   let relayHopCount = 0;
 
-                                  while (relayQueue.length > 0 && ws._agentToolsActiveRequestId === requestId) {
+                                  while (relayQueue.length > 0 && isRuntimeActive()) {
                                       if (relayHopCount >= relayHopLimit) {
                                           emitPrimaryExecutionEvent({
                                               code: 'relay_hop_limit',
@@ -16400,7 +16972,7 @@ wss.on('connection', (ws, req) => {
                                           : nextRelay.content;
 
                                       for (const chainedTargetId of chainedTargets) {
-                                          if (ws._agentToolsActiveRequestId !== requestId) break;
+                                          if (!isRuntimeActive()) break;
                                           if (!chainedTargetId || chainedTargetId === relayResult.targetId) continue;
                                           if (!chainedContent) continue;
                                           relayQueue.push({
@@ -16412,20 +16984,20 @@ wss.on('connection', (ws, req) => {
                                   }
                               }
 
-                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
-                                  ws.send(JSON.stringify({ type: 'stream_done' }));
+                              if (isRuntimeActive()) {
+                                  broadcastAgentToolsMessage(agentId, { type: 'stream_done' });
                                   // Send state update event to refresh UI (Prompt, Skills, etc.)
-                                  ws.send(JSON.stringify({ type: 'state_updated' }));
+                                  broadcastAgentToolsMessage(agentId, { type: 'state_updated' });
                               }
 
                               // Generate Audio (primary response only)
                               const agent = AGENTS[agentId];
                               const voiceId = agent ? agent.voiceId : DEFAULT_VOICE_IDS[0];
-                              if (voiceId && primaryResponse && ws._agentToolsActiveRequestId === requestId) {
+                              if (voiceId && primaryResponse && isRuntimeActive()) {
                                   console.log(`[AgentTools] Generating audio for ${voiceId}`);
                                   generateAudioStream(primaryResponse, voiceId, (audioChunk) => {
-                                      if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
-                                          ws.send(JSON.stringify({ type: 'audio_stream', audio: audioChunk }));
+                                      if (isRuntimeActive()) {
+                                          broadcastAgentToolsMessage(agentId, { type: 'audio_stream', audio: audioChunk });
                                       }
                                   });
                               }
@@ -16433,14 +17005,16 @@ wss.on('connection', (ws, req) => {
 
                           finalizeTurn().catch((error) => {
                               console.error('[AgentTools] finalize turn error', error);
-                              if (ws.readyState === WebSocket.OPEN && ws._agentToolsActiveRequestId === requestId) {
-                                  ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
-                                  ws.send(JSON.stringify({ type: 'stream_done' }));
+                              if (isRuntimeActive()) {
+                                  broadcastAgentToolsMessage(agentId, { type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming });
+                                  broadcastAgentToolsMessage(agentId, { type: 'stream_done' });
                               }
                           }).finally(() => {
-                              if (ws._agentToolsActiveRequestId !== requestId) return;
+                              if (!isRuntimeActive()) return;
                               ws._agentToolsStreamHandle = null;
                               ws._agentToolsActiveRequestId = null;
+                              runtime.streamHandle = null;
+                              runtime.active = false;
                               if (ws._agentToolsRelayBusyAgents && ws._agentToolsRelayBusyAgents.size > 0) {
                                   for (const busyAgentId of ws._agentToolsRelayBusyAgents) {
                                       markAgentRuntimeBusyEnd(busyAgentId);
@@ -16451,10 +17025,39 @@ wss.on('connection', (ws, req) => {
                                   markAgentRuntimeBusyEnd(agentId);
                                   ws._agentToolsBusyMarked = false;
                               }
+                              clearAgentToolsRuntime(agentId, requestId);
                           });
                       };
                   const onError = (error) => {
-                          if (ws._agentToolsActiveRequestId !== requestId) return;
+                          if (!isRuntimeActive()) return;
+                          const canRetrySessionLock = (
+                              isSessionLockError(error)
+                              && typeof primaryCliRestartFn === 'function'
+                              && primarySessionLockRetryCount < PRIMARY_SESSION_LOCK_RETRY_MAX
+                              && !hasModelStreaming
+                              && !String(fullResponse || '').trim()
+                              && !String(fullReasoning || '').trim()
+                          );
+                          if (canRetrySessionLock) {
+                              primarySessionLockRetryCount += 1;
+                              const retryDelayMs = PRIMARY_SESSION_LOCK_RETRY_DELAY_MS * primarySessionLockRetryCount;
+                              ws._agentToolsStreamHandle = null;
+                              runtime.streamHandle = null;
+                              emitPrimaryExecutionEvent({
+                                  code: 'session_lock_retry',
+                                  label: '会话锁重试',
+                                  detail: `检测到会话文件锁，${Math.round(retryDelayMs / 1000)}s 后自动重试（${primarySessionLockRetryCount}/${PRIMARY_SESSION_LOCK_RETRY_MAX}）`
+                              });
+                              setTimeout(() => {
+                                  if (!isRuntimeActive()) return;
+                                  try {
+                                      primaryCliRestartFn();
+                                  } catch (retryErr) {
+                                      onError(retryErr);
+                                  }
+                              }, retryDelayMs);
+                              return;
+                          }
                           emitPrimaryExecutionEvent({
                               code: 'stream_error',
                               label: '执行失败',
@@ -16462,6 +17065,8 @@ wss.on('connection', (ws, req) => {
                           });
                           ws._agentToolsStreamHandle = null;
                           ws._agentToolsActiveRequestId = null;
+                          runtime.streamHandle = null;
+                          runtime.active = false;
                           if (ws._agentToolsRelayBusyAgents && ws._agentToolsRelayBusyAgents.size > 0) {
                               for (const busyAgentId of ws._agentToolsRelayBusyAgents) {
                                   markAgentRuntimeBusyEnd(busyAgentId);
@@ -16472,10 +17077,9 @@ wss.on('connection', (ws, req) => {
                               markAgentRuntimeBusyEnd(agentId);
                               ws._agentToolsBusyMarked = false;
                           }
-                          if (ws.readyState === WebSocket.OPEN) {
-                              ws.send(JSON.stringify({ type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming }));
-                              ws.send(JSON.stringify({ type: 'stream_done' }));
-                          }
+                          broadcastAgentToolsMessage(agentId, { type: 'text_stream', content: `[Error: ${error.message}]`, isNew: !hasStartedStreaming });
+                          broadcastAgentToolsMessage(agentId, { type: 'stream_done' });
+                          clearAgentToolsRuntime(agentId, requestId);
                       };
 
                   if (multimodalMessages) {
@@ -16486,12 +17090,14 @@ wss.on('connection', (ws, req) => {
                       });
                       const controller = new AbortController();
                       ws._agentToolsStreamHandle = { abort: () => controller.abort() };
+                      runtime.streamHandle = ws._agentToolsStreamHandle;
                       streamOpenClawHTTP(
                           agentId,
                           finalText,
                           {
                               onText: (content) => onChunk({ type: 'text_stream', content }),
                               onReasoning: (content) => onChunk({ type: 'reasoning_stream', content }),
+                              onExecution: (event) => emitPrimaryExecutionEvent(event),
                               onDone: () => onDone(),
                               onError: (error) => onError(error)
                           },
@@ -16507,18 +17113,75 @@ wss.on('connection', (ws, req) => {
                           }
                       );
                   } else {
+                      const primarySessionKey = `agent:${agentId}:main`;
+                      const startPrimaryCliStream = () => {
+                          emitPrimaryExecutionEvent({
+                              code: 'cli_local',
+                              label: '执行通道',
+                              detail: `OpenClaw CLI 本地流式（thinking=${thinkingLevel || 'off'}）`
+                          });
+                          ws._agentToolsStreamHandle = openclaw.sendMessageStream(
+                              agentId,
+                              finalText,
+                              onChunk,
+                              onDone,
+                              onError,
+                              {
+                                  ...streamOptions,
+                                  sessionId: primarySessionKey
+                              }
+                          );
+                          runtime.streamHandle = ws._agentToolsStreamHandle;
+                      };
+                      primaryCliRestartFn = startPrimaryCliStream;
+                      const canFallbackToPrimaryCli = () => {
+                          if (hasModelStreaming) return false;
+                          if (typeof fullResponse === 'string' && fullResponse.length > 0) return false;
+                          if (typeof fullReasoning === 'string' && fullReasoning.length > 0) return false;
+                          return true;
+                      };
                       emitPrimaryExecutionEvent({
-                          code: 'cli_local',
+                          code: 'gateway_http',
                           label: '执行通道',
-                          detail: `OpenClaw CLI 本地流式（thinking=${thinkingLevel || 'off'}）`
+                          detail: 'Gateway Agent SSE（reasoning enabled）'
                       });
-                      ws._agentToolsStreamHandle = openclaw.sendMessageStream(
+                      const controller = new AbortController();
+                      ws._agentToolsStreamHandle = { abort: () => controller.abort() };
+                      runtime.streamHandle = ws._agentToolsStreamHandle;
+                      streamOpenClawHTTP(
                           agentId,
                           finalText,
-                          onChunk,
-                          onDone,
-                          onError,
-                          streamOptions
+                          {
+                              onText: (content) => onChunk({ type: 'text_stream', content }),
+                              onReasoning: (content) => onChunk({ type: 'reasoning_stream', content }),
+                              onExecution: (event) => emitPrimaryExecutionEvent(event),
+                              onDone: () => onDone(),
+                              onError: (error) => {
+                                  if (isOpenClawCliFallbackEnabled() && canFallbackToPrimaryCli()) {
+                                      emitPrimaryExecutionEvent({
+                                          code: 'gateway_error',
+                                          label: 'Gateway 失败',
+                                          detail: error && error.message ? String(error.message) : 'unknown error'
+                                      });
+                                      emitPrimaryExecutionEvent({
+                                          code: 'gateway_cli_fallback',
+                                          label: '自动回退',
+                                          detail: '已回退到 OpenClaw CLI 本地流式'
+                                      });
+                                      startPrimaryCliStream();
+                                      return;
+                                  }
+                                  onError(error);
+                              }
+                          },
+                          {
+                              controller,
+                              silentAbort: true,
+                              model: `openclaw:${agentId}`,
+                              gatewayAgentId: agentId,
+                              sessionKey: primarySessionKey,
+                              reasoningEnabled: true
+                          }
                       );
                   }
               }
@@ -16528,6 +17191,16 @@ wss.on('connection', (ws, req) => {
       });
 
       ws.on('close', () => {
+          const runtime = getAgentToolsRuntime(agentId);
+          const closingRequestId = ws._agentToolsActiveRequestId || null;
+          const shouldKeepStreaming = !!(runtime
+              && runtime.active
+              && closingRequestId
+              && runtime.requestId === closingRequestId);
+          if (shouldKeepStreaming) {
+              untrackAgentToolsSocket(agentId, ws);
+              return;
+          }
           if (ws._agentToolsStreamHandle && typeof ws._agentToolsStreamHandle.abort === 'function') {
               try { ws._agentToolsStreamHandle.abort(); } catch(e) {}
               ws._agentToolsStreamHandle = null;
@@ -16543,6 +17216,7 @@ wss.on('connection', (ws, req) => {
               markAgentRuntimeBusyEnd(agentId);
               ws._agentToolsBusyMarked = false;
           }
+          clearAgentToolsRuntime(agentId, closingRequestId);
           untrackAgentToolsSocket(agentId, ws);
       });
       return;

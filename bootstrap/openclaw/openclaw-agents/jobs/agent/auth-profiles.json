@@ -23,12 +23,18 @@
       "refresh": "rt_EeGWxZd3gF2ndujmuWsrX0aZEi6GZnYzs-BtbeeCzqo.e0_bVw2eohkoRuV-bzL9mkqDGGhYjPkeJ9-dt3mHxPs",
       "expires": 1775213433000,
       "accountId": "0e57f4b7-b6c7-4495-82c5-8593442f5f2e"
+    },
+    "kimi:default": {
+      "type": "api_key",
+      "provider": "kimi",
+      "key": ""
     }
   },
   "lastGood": {
     "kimi-openai": "kimi-openai:default",
     "minimax": "minimax:default",
-    "kimi-coding": "kimi-coding:default"
+    "kimi-coding": "kimi-coding:default",
+    "kimi": "kimi:default"
   },
   "usageStats": {
     "kimi-openai:default": {
@@ -43,7 +49,11 @@
     },
     "kimi-coding:default": {
       "errorCount": 0,
-      "lastUsed": 1774876260003
+      "lastUsed": 1775112066993
+    },
+    "kimi:default": {
+      "errorCount": 0,
+      "lastUsed": 1775112745183
     }
   }
 }

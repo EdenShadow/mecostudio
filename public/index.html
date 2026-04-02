@@ -941,6 +941,22 @@
             box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.22), 0 0 18px rgba(59, 130, 246, 0.2);
             animation: assistantBubblePulse 1.9s ease-in-out infinite;
         }
+        .assistant-bubble.compact-stream {
+            width: fit-content;
+            min-width: 0;
+            display: inline-flex;
+            align-items: center;
+            padding-left: 0.95rem !important;
+            padding-right: 0.95rem !important;
+        }
+        .assistant-bubble.compact-stream .message-content {
+            display: none;
+        }
+        .assistant-bubble.compact-stream .bubble-stream-status {
+            margin-top: 0 !important;
+            width: auto;
+            max-width: none;
+        }
         @keyframes assistantBubblePulse {
             0%, 100% {
                 box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.14), 0 0 12px rgba(59, 130, 246, 0.12);
@@ -961,6 +977,17 @@
             font-size: inherit;
             line-height: 1;
             padding: 0;
+        }
+        .bubble-stream-status.is-compact {
+            width: auto;
+            max-width: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.44rem;
+        }
+        .bubble-stream-status.is-compact .bubble-stream-elapsed {
+            justify-self: auto;
+            margin-left: 0.08rem;
         }
         .assistant-bubble .message-content:empty + .bubble-stream-status {
             margin-top: 0;
@@ -993,6 +1020,10 @@
             line-height: 1.32;
             word-break: break-word;
         }
+        .message-content.streaming-plain {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
         .bubble-stream-elapsed {
             display: inline-flex;
             align-items: center;
@@ -1002,6 +1033,71 @@
             flex-shrink: 0;
             line-height: 1.1;
             justify-self: end;
+        }
+        .approve-actions-wrap {
+            margin-top: 0.62rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.46rem;
+        }
+        .approve-actions-row {
+            border: 1px solid rgba(147, 197, 253, 0.2);
+            background: rgba(30, 41, 59, 0.24);
+            border-radius: 0.78rem;
+            padding: 0.48rem 0.56rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .approve-actions-meta {
+            font-size: 11px;
+            color: rgba(191, 219, 254, 0.95);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.36rem;
+            min-width: 0;
+        }
+        .approve-actions-meta .aid {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            color: rgba(226, 232, 240, 0.96);
+            font-size: 11px;
+        }
+        .approve-actions-btns {
+            display: inline-flex;
+            gap: 0.36rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .approve-action-btn {
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            background: rgba(15, 23, 42, 0.42);
+            color: rgba(226, 232, 240, 0.96);
+            border-radius: 999px;
+            padding: 0.24rem 0.62rem;
+            font-size: 11px;
+            line-height: 1.2;
+            cursor: pointer;
+            transition: all 0.16s ease;
+        }
+        .approve-action-btn:hover:not(:disabled) {
+            border-color: rgba(96, 165, 250, 0.62);
+            color: rgba(219, 234, 254, 1);
+            box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.22);
+        }
+        .approve-action-btn:disabled {
+            opacity: 0.56;
+            cursor: not-allowed;
+        }
+        .approve-action-btn.primary {
+            border-color: rgba(96, 165, 250, 0.64);
+            background: rgba(30, 64, 175, 0.28);
+        }
+        .approve-action-status {
+            font-size: 11px;
+            color: rgba(148, 163, 184, 0.94);
+            min-height: 1em;
         }
         body.meco-chat-compact #at-chat-messages .reasoning-thread-card {
             border-radius: 0.62rem !important;
@@ -2243,6 +2339,9 @@
         const AT_STATUS_PREF_KEY = 'meco.agenttools.runtimeStatus';
         const AT_PENDING_AGENT_REQUESTS_KEY = 'meco.agenttools.pendingAgentRequests.v1';
         const AT_PENDING_AGENT_REQUEST_TTL_MS = 30 * 60 * 1000;
+        const AT_PENDING_RESTORE_REPLAY_DELAY_MS = 2200;
+        const AT_SESSION_LOCK_RETRY_DELAY_MS = 2400;
+        const AT_SESSION_LOCK_MAX_RETRY = 2;
         const AT_STATUS_POLL_INTERVAL_MS = 2500;
         let atCurrentAudioSource = null;
         let atAudioContext = null;
@@ -2264,6 +2363,7 @@
         const AT_AUDIO_IDLE_RESET_MS = 900;
         const AT_TYPING_CHARS_PER_TICK = 6;
         const AT_TYPING_TICK_MS = 20;
+        const AT_STREAM_RENDER_PLAIN_TEXT = true;
         const AT_SHOW_REASONING_PANEL = false;
         const AT_SHOW_EXECUTION_PANEL = false;
         const AT_CLIP_DEMO_PREVIEW_PATH = '/clip-demo-shot.png';
@@ -2298,11 +2398,14 @@
         let atHistoryScrollTicking = false;
         const atAgentTypingTimers = new Map();
         const atChannelTypingTimers = new Map();
+        const atAgentReconnectTimers = new Map();
         let atStreamStatusTicker = null;
         let atLoadingIndicatorTicker = null;
+        let atPageUnloading = false;
         const atAgentSentInputHistory = new Map();
         const atChannelSentInputHistory = new Map();
         const atSkillToggleState = new Map();
+        const atApprovalStatusById = new Map();
         let atSkillToggleSeq = 0;
         let atSkillFetchSeq = 0;
         let atAttachmentUploadDepth = 0;
@@ -2799,11 +2902,13 @@
                     ttsStreamingActive: false,
                     activePayload: null,
                     streamMessageIndex: null,
+                    autoStickToBottomDuringStream: false,
                     historyLoaded: false,
                     historyPage: 0,
                     hasMoreHistory: false,
                     historyLoading: false,
-                    pendingQueue: []
+                    pendingQueue: [],
+                    lockRetryCount: 0
                 };
             }
             if (!atAgentChatState.has(key)) {
@@ -2814,11 +2919,13 @@
                     ttsStreamingActive: false,
                     activePayload: null,
                     streamMessageIndex: null,
+                    autoStickToBottomDuringStream: false,
                     historyLoaded: false,
                     historyPage: 0,
                     hasMoreHistory: false,
                     historyLoading: false,
-                    pendingQueue: []
+                    pendingQueue: [],
+                    lockRetryCount: 0
                 });
             }
             const state = atAgentChatState.get(key);
@@ -2833,6 +2940,8 @@
             if (typeof state.hasMoreHistory !== 'boolean') state.hasMoreHistory = false;
             if (typeof state.historyLoading !== 'boolean') state.historyLoading = false;
             if (!Number.isInteger(state.streamMessageIndex)) state.streamMessageIndex = null;
+            if (typeof state.autoStickToBottomDuringStream !== 'boolean') state.autoStickToBottomDuringStream = false;
+            if (!Number.isInteger(state.lockRetryCount) || state.lockRetryCount < 0) state.lockRetryCount = 0;
             return state;
         }
 
@@ -3006,12 +3115,6 @@
                 return false;
             }
 
-            const latest = state.messages.length > 0 ? state.messages[state.messages.length - 1] : null;
-            if (latest && latest.role === 'assistant') {
-                clearPendingAgentRequestSnapshot(id);
-                return false;
-            }
-
             const snapshotUserText = typeof snapshot.userText === 'string' ? snapshot.userText.trim() : '';
             if (snapshotUserText) {
                 const currentLastUserText = getLastUserMessageTextFromState(state);
@@ -3032,14 +3135,166 @@
             state.pendingQueue.push(payload);
             state.loading = true;
             state.inFlight = false;
-            state.streamMessageIndex = null;
+            const provisionalPreludeText = inferExecutionPreludeText(payload.content || '', 'agent');
+            const provisional = ensureAgentProvisionalStreamMessage(state, provisionalPreludeText);
+            if (provisional) {
+                syncStreamingDisplayNow(provisional);
+            } else {
+                state.streamMessageIndex = null;
+            }
             syncAgentPendingRequestSnapshot(id);
             updateSidebarBusyIndicators();
             if (currentAgentToolId === id) {
                 renderAgentToolsChat(id);
             }
-            setTimeout(() => processAgentSendQueue(id), 0);
+            const shouldDelayReplay = !!snapshot.inFlight;
+            setTimeout(() => processAgentSendQueue(id), shouldDelayReplay ? AT_PENDING_RESTORE_REPLAY_DELAY_MS : 0);
             return true;
+        }
+
+        function hasVisibleAssistantPayload(msg) {
+            if (!msg || typeof msg !== 'object') return false;
+            if (hasRenderableText(String(msg.content || ''))) return true;
+            if (hasRenderableText(String(msg.reasoning || ''))) return true;
+            if (Array.isArray(msg.files) && msg.files.length > 0) return true;
+            return false;
+        }
+
+        function ensureAgentProvisionalStreamMessage(state, preludeText = '') {
+            if (!state || !Array.isArray(state.messages)) return null;
+            let idx = Number.isInteger(state.streamMessageIndex) ? state.streamMessageIndex : null;
+            let msg = Number.isInteger(idx) ? state.messages[idx] : null;
+            const reusable = !!(
+                msg
+                && msg.role === 'assistant'
+                && (msg.provisional === true || !hasVisibleAssistantPayload(msg))
+            );
+            if (!reusable) {
+                state.messages.push({
+                    role: 'assistant',
+                    content: '',
+                    reasoning: '',
+                    executionEvents: [],
+                    files: [],
+                    displayContent: '',
+                    displayReasoning: '',
+                    preludeText: '',
+                    streamStartedAt: Date.now(),
+                    provisional: true,
+                    senderName: '',
+                    agentId: ''
+                });
+                idx = state.messages.length - 1;
+                msg = state.messages[idx];
+            } else {
+                msg.content = '';
+                msg.reasoning = '';
+                msg.executionEvents = [];
+                msg.files = Array.isArray(msg.files) ? msg.files : [];
+                msg.displayContent = '';
+                msg.displayReasoning = '';
+                msg.provisional = true;
+                msg.senderName = typeof msg.senderName === 'string' ? msg.senderName : '';
+                msg.agentId = typeof msg.agentId === 'string' ? msg.agentId : '';
+                if (!Number.isFinite(Number(msg.streamStartedAt))) {
+                    msg.streamStartedAt = Date.now();
+                }
+            }
+            msg.preludeText = preludeText || msg.preludeText || '';
+            state.streamMessageIndex = idx;
+            return msg;
+        }
+
+        function getAgentStreamingMessage(state) {
+            if (!state || !Array.isArray(state.messages)) return null;
+            const idx = state.streamMessageIndex;
+            if (!Number.isInteger(idx)) return null;
+            const msg = state.messages[idx];
+            if (!msg || msg.role !== 'assistant') return null;
+            return msg;
+        }
+
+        function normalizeAgentStreamingState(state) {
+            if (!state || typeof state !== 'object') return;
+            const streamMsg = getAgentStreamingMessage(state);
+            if (streamMsg) return;
+            if (state.inFlight || state.loading) {
+                const prelude = inferExecutionPreludeText(getLastUserMessageTextFromState(state), 'agent');
+                const provisional = ensureAgentProvisionalStreamMessage(state, prelude);
+                if (provisional) {
+                    syncStreamingDisplayNow(provisional);
+                } else {
+                    state.streamMessageIndex = null;
+                }
+                return;
+            }
+            state.streamMessageIndex = null;
+        }
+
+        function pruneAgentEmptyAssistantPlaceholders(state) {
+            if (!state || !Array.isArray(state.messages) || state.messages.length === 0) return;
+            const originalStreamIdx = Number.isInteger(state.streamMessageIndex) ? state.streamMessageIndex : -1;
+            const nextMessages = [];
+            let nextStreamIdx = null;
+
+            state.messages.forEach((msg, idx) => {
+                if (!msg || msg.role !== 'assistant') {
+                    nextMessages.push(msg);
+                    if (idx === originalStreamIdx) {
+                        nextStreamIdx = nextMessages.length - 1;
+                    }
+                    return;
+                }
+
+                const hasVisible = hasVisibleAssistantPayload(msg)
+                    || hasRenderableText(String(msg.displayContent || ''))
+                    || hasRenderableText(String(msg.displayReasoning || ''));
+                const isStreamingPlaceholder = idx === originalStreamIdx;
+
+                if (hasVisible || isStreamingPlaceholder) {
+                    nextMessages.push(msg);
+                    if (isStreamingPlaceholder) {
+                        nextStreamIdx = nextMessages.length - 1;
+                    }
+                }
+            });
+
+            state.messages = nextMessages;
+            state.streamMessageIndex = Number.isInteger(nextStreamIdx) ? nextStreamIdx : null;
+        }
+
+        function isSessionLockErrorText(text) {
+            const raw = typeof text === 'string' ? text : '';
+            if (!raw) return false;
+            return /session file locked|jsonl\.lock|sessions\.json\.lock|failovererror/i.test(raw);
+        }
+
+        function clearAgentReconnectTimer(agentId) {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            if (!id) return;
+            const timer = atAgentReconnectTimers.get(id);
+            if (timer) {
+                clearTimeout(timer);
+                atAgentReconnectTimers.delete(id);
+            }
+        }
+
+        function scheduleAgentReconnect(agentId, delayMs = 420) {
+            const id = typeof agentId === 'string' ? agentId.trim() : '';
+            if (!id || atPageUnloading) return;
+            clearAgentReconnectTimer(id);
+            const timer = setTimeout(() => {
+                atAgentReconnectTimers.delete(id);
+                if (atPageUnloading) return;
+                try {
+                    connectAgentToolsSocket(id);
+                } catch (_) {}
+                setTimeout(() => {
+                    if (atPageUnloading) return;
+                    processAgentSendQueue(id);
+                }, 80);
+            }, Math.max(120, Number(delayMs) || 420));
+            atAgentReconnectTimers.set(id, timer);
         }
 
         function normalizeSentInputHistoryItems(rawItems) {
@@ -7076,6 +7331,12 @@
             if (atHistoryScrollTicking) return;
             const chatContainer = document.getElementById('at-chat-messages');
             if (!chatContainer) return;
+            if (!currentChannelId && currentAgentToolId) {
+                const state = getAgentChatState(currentAgentToolId);
+                if (state && state.inFlight && state.autoStickToBottomDuringStream && !isChatContainerNearBottom(chatContainer, 180)) {
+                    state.autoStickToBottomDuringStream = false;
+                }
+            }
             if (chatContainer.scrollTop > 22) return;
             atHistoryScrollTicking = true;
             Promise.resolve().then(async () => {
@@ -7251,6 +7512,25 @@
                 // Load History
                 if (!state.historyLoaded) {
                     try {
+                        const inFlightBeforeHistory = !!state.inFlight;
+                        const loadingBeforeHistory = !!state.loading;
+                        const streamingBeforeHistory = getAgentStreamingMessage(state);
+                        const streamingSnapshot = streamingBeforeHistory
+                            ? {
+                                role: 'assistant',
+                                content: typeof streamingBeforeHistory.content === 'string' ? streamingBeforeHistory.content : '',
+                                reasoning: typeof streamingBeforeHistory.reasoning === 'string' ? streamingBeforeHistory.reasoning : '',
+                                executionEvents: normalizeExecutionEvents(streamingBeforeHistory.executionEvents),
+                                files: normalizeMessageFiles(streamingBeforeHistory.files),
+                                displayContent: typeof streamingBeforeHistory.displayContent === 'string' ? streamingBeforeHistory.displayContent : '',
+                                displayReasoning: typeof streamingBeforeHistory.displayReasoning === 'string' ? streamingBeforeHistory.displayReasoning : '',
+                                preludeText: typeof streamingBeforeHistory.preludeText === 'string' ? streamingBeforeHistory.preludeText : '',
+                                streamStartedAt: Number(streamingBeforeHistory.streamStartedAt) || Date.now(),
+                                provisional: !!streamingBeforeHistory.provisional,
+                                senderName: typeof streamingBeforeHistory.senderName === 'string' ? streamingBeforeHistory.senderName : '',
+                                agentId: typeof streamingBeforeHistory.agentId === 'string' ? streamingBeforeHistory.agentId : ''
+                            }
+                            : null;
                         const historyData = await fetchAgentHistoryPage(agentId, 1);
                         if (historyData.history && Array.isArray(historyData.history)) {
                             const normalizedHistory = historyData.history
@@ -7266,7 +7546,12 @@
                                 }));
                             if (normalizedHistory.length > 0) {
                                 state.messages = normalizedHistory.slice(-AT_HISTORY_PAGE_SIZE);
+                                if ((inFlightBeforeHistory || loadingBeforeHistory) && streamingSnapshot) {
+                                    state.messages.push(streamingSnapshot);
+                                    state.streamMessageIndex = state.messages.length - 1;
+                                }
                             }
+                            normalizeAgentStreamingState(state);
                         }
                         state.historyPage = historyData.page || 1;
                         state.hasMoreHistory = !!historyData.hasMore;
@@ -7499,6 +7784,22 @@
             return state;
         }
 
+        function isChatContainerNearBottom(container, threshold = 88) {
+            if (!container) return true;
+            const maxTop = Math.max(0, container.scrollHeight - container.clientHeight);
+            const distance = Math.max(0, maxTop - container.scrollTop);
+            return distance <= threshold;
+        }
+
+        function forceChatScrollToBottom(container) {
+            if (!container) return;
+            requestAnimationFrame(() => {
+                container.scrollTop = container.scrollHeight;
+                setTimeout(() => { container.scrollTop = container.scrollHeight; }, 48);
+                setTimeout(() => { container.scrollTop = container.scrollHeight; }, 128);
+            });
+        }
+
         function patchStreamingChannelAssistantDom(channelId, agentId) {
             if (!channelId || currentChannelId !== channelId) return;
             const state = getChannelChatState(channelId);
@@ -7507,9 +7808,14 @@
             if (!Number.isInteger(idx) || !state.messages[idx]) return;
             const chatContainer = document.getElementById('at-chat-messages');
             if (!chatContainer) return;
+            const shouldStickToBottom = isChatContainerNearBottom(chatContainer);
             let messageDiv = chatContainer.querySelector(`[data-msg-index=\"${idx}\"]`);
             if (!messageDiv) {
-                renderAgentToolsChannelChat(channelId);
+                renderAgentToolsChannelChat(channelId, {
+                    preserveScrollAnchor: true,
+                    previousScrollTop: chatContainer.scrollTop,
+                    previousScrollHeight: chatContainer.scrollHeight
+                });
                 messageDiv = chatContainer.querySelector(`[data-msg-index=\"${idx}\"]`);
             }
             if (!messageDiv) return;
@@ -7519,7 +7825,12 @@
             const contentDiv = messageDiv.querySelector('.message-content');
             if (contentDiv) {
                 const streamingText = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
-                renderBubbleContent(contentDiv, streamingText, true);
+                if (AT_STREAM_RENDER_PLAIN_TEXT) {
+                    renderBubbleContentStreaming(contentDiv, streamingText);
+                } else {
+                    renderBubbleContent(contentDiv, streamingText, true);
+                }
+                renderOpenClawApproveActions(messageDiv, streamingText);
             }
             const senderLabel = messageDiv.querySelector('.sender-label');
             const senderName = (typeof msg.senderName === 'string') ? msg.senderName.trim() : '';
@@ -7542,7 +7853,9 @@
                 preludeText: msg.preludeText || ''
             });
             renderBubbleStreamingIndicator(messageDiv, msg, true);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            if (shouldStickToBottom) {
+                forceChatScrollToBottom(chatContainer);
+            }
         }
 
         function scheduleChannelTypingRender(channelId, agentId) {
@@ -7596,7 +7909,8 @@
             state.messages[idx].content += text;
             state.loading = false;
             if (currentChannelId === channelId) {
-                scheduleChannelTypingRender(channelId, key);
+                syncStreamingDisplayNow(state.messages[idx]);
+                patchStreamingChannelAssistantDom(channelId, key);
             } else {
                 syncStreamingDisplayNow(state.messages[idx]);
             }
@@ -7612,7 +7926,8 @@
             state.messages[idx].reasoning = (state.messages[idx].reasoning || '') + text;
             state.loading = false;
             if (currentChannelId === channelId) {
-                scheduleChannelTypingRender(channelId, key);
+                syncStreamingDisplayNow(state.messages[idx]);
+                patchStreamingChannelAssistantDom(channelId, key);
             } else {
                 syncStreamingDisplayNow(state.messages[idx]);
             }
@@ -7681,8 +7996,13 @@
             if (!chatContainer) return;
             const state = getChannelChatState(channelId);
             const preserveScrollAnchor = !!(options && options.preserveScrollAnchor);
-            const previousScrollTop = Number(options && options.previousScrollTop) || 0;
-            const previousScrollHeight = Number(options && options.previousScrollHeight) || 0;
+            const previousScrollTop = Number.isFinite(Number(options && options.previousScrollTop))
+                ? Number(options.previousScrollTop)
+                : chatContainer.scrollTop;
+            const previousScrollHeight = Number.isFinite(Number(options && options.previousScrollHeight))
+                ? Number(options.previousScrollHeight)
+                : chatContainer.scrollHeight;
+            const shouldStickToBottom = !preserveScrollAnchor && isChatContainerNearBottom(chatContainer);
             stopLoadingIndicatorTicker();
             chatContainer.innerHTML = '';
             currentMessageDiv = null;
@@ -7717,9 +8037,12 @@
                 if (preserveScrollAnchor) {
                     const nextHeight = chatContainer.scrollHeight;
                     chatContainer.scrollTop = Math.max(0, nextHeight - previousScrollHeight + previousScrollTop);
-                } else {
+                } else if (shouldStickToBottom) {
                     chatContainer.scrollTop = chatContainer.scrollHeight;
                     setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
+                } else {
+                    const nextHeight = chatContainer.scrollHeight;
+                    chatContainer.scrollTop = Math.max(0, nextHeight - previousScrollHeight + previousScrollTop);
                 }
             });
         }
@@ -7961,6 +8284,95 @@
 
                 if (data.type === 'text_stream') {
                     appendAgentText(agentId, data.content, data.isNew);
+                } else if (data.type === 'agent_inflight_snapshot') {
+                    const state = getAgentChatState(agentId);
+                    const response = typeof data.response === 'string' ? data.response : '';
+                    const reasoning = typeof data.reasoning === 'string' ? data.reasoning : '';
+                    const executionEvents = normalizeExecutionEvents(data.executionEvents);
+                    const startedAt = Number(data.startedAt) || Date.now();
+                    state.inFlight = true;
+                    state.loading = true;
+                    const liveChatContainer = (currentAgentToolId === agentId) ? document.getElementById('at-chat-messages') : null;
+                    state.autoStickToBottomDuringStream = !liveChatContainer || isChatContainerNearBottom(liveChatContainer, 120);
+                    state.pendingQueue = [];
+                    state.activePayload = null;
+                    clearPendingAgentRequestSnapshot(agentId);
+                    const prevIdx = state.streamMessageIndex;
+                    const hasVisible = hasRenderableText(response)
+                        || hasRenderableText(reasoning);
+                    if (hasVisible) {
+                        let idx = state.streamMessageIndex;
+                        if (!Number.isInteger(idx) || !state.messages[idx] || state.messages[idx].role !== 'assistant') {
+                            state.messages.push({
+                                role: 'assistant',
+                                content: '',
+                                reasoning: '',
+                                executionEvents: [],
+                                files: [],
+                                displayContent: '',
+                                displayReasoning: '',
+                                preludeText: '',
+                                streamStartedAt: startedAt,
+                                provisional: false,
+                                senderName: '',
+                                agentId: ''
+                            });
+                            idx = state.messages.length - 1;
+                            state.streamMessageIndex = idx;
+                        }
+                        const msg = state.messages[idx];
+                        msg.content = response;
+                        msg.reasoning = reasoning;
+                        msg.executionEvents = executionEvents;
+                        msg.streamStartedAt = startedAt;
+                        msg.provisional = false;
+                        syncStreamingDisplayNow(msg);
+                    } else {
+                        const provisionalPreludeText = inferExecutionPreludeText(getLastUserMessageTextFromState(state), 'agent');
+                        if (Number.isInteger(prevIdx) && state.messages[prevIdx]) {
+                            const prevMsg = state.messages[prevIdx];
+                            const prevVisible = hasRenderableText(String(prevMsg.content || ''))
+                                || hasRenderableText(String(prevMsg.reasoning || ''))
+                                || (Array.isArray(prevMsg.files) && prevMsg.files.length > 0);
+                            if (!prevVisible) {
+                                if (prevMsg.role === 'assistant') {
+                                    prevMsg.content = '';
+                                    prevMsg.reasoning = '';
+                                    prevMsg.executionEvents = executionEvents;
+                                    prevMsg.preludeText = provisionalPreludeText || prevMsg.preludeText || '';
+                                    prevMsg.provisional = true;
+                                    prevMsg.streamStartedAt = Number.isFinite(Number(prevMsg.streamStartedAt))
+                                        ? Number(prevMsg.streamStartedAt)
+                                        : startedAt;
+                                    syncStreamingDisplayNow(prevMsg);
+                                    state.streamMessageIndex = prevIdx;
+                                } else {
+                                    state.messages.splice(prevIdx, 1);
+                                    state.streamMessageIndex = null;
+                                }
+                            } else {
+                                state.streamMessageIndex = prevIdx;
+                            }
+                        } else {
+                            const provisional = ensureAgentProvisionalStreamMessage(state, provisionalPreludeText);
+                            if (provisional) {
+                                provisional.executionEvents = executionEvents;
+                                provisional.streamStartedAt = Number.isFinite(Number(provisional.streamStartedAt))
+                                    ? Number(provisional.streamStartedAt)
+                                    : startedAt;
+                                syncStreamingDisplayNow(provisional);
+                            } else {
+                                state.streamMessageIndex = null;
+                            }
+                        }
+                    }
+                    if (currentAgentToolId === agentId) {
+                        renderAgentToolsChat(agentId);
+                        if (Number.isInteger(state.streamMessageIndex)) {
+                            patchStreamingAssistantDom(agentId);
+                        }
+                    }
+                    updateSidebarBusyIndicators();
                 } else if (data.type === 'reasoning_stream' || data.type === 'thinking_stream') {
                     appendAgentReasoning(agentId, data.content, data.isNew);
                 } else if (data.type === 'execution_event') {
@@ -7997,6 +8409,7 @@
                     }] : [];
                     state.loading = false;
                     state.inFlight = false;
+                    state.autoStickToBottomDuringStream = false;
                     state.ttsStreamingActive = false;
                     state.streamMessageIndex = null;
                     state.historyLoaded = true;
@@ -8022,8 +8435,13 @@
                 if (currentAgentToolId === agentId) {
                     atSocket = socket;
                 }
+                clearAgentReconnectTimer(agentId);
                 console.log(`Agent Tools Socket Connected: ${agentId}`);
                 updateAgentToolsPersonaRefreshUi();
+                const state = getAgentChatState(agentId);
+                if (!state.inFlight && state.pendingQueue.length > 0 && !atPageUnloading) {
+                    setTimeout(() => processAgentSendQueue(agentId), 0);
+                }
             };
 
             socket.onclose = () => {
@@ -8038,23 +8456,35 @@
                 if (state.inFlight) {
                     clearAgentTypingTimer(agentId);
                     finalizeAgentTtsStream(agentId);
+                    const retryPayload = sanitizePendingMessagePayload(state.activePayload);
+                    const idx = state.streamMessageIndex;
+                    if (Number.isInteger(idx) && state.messages[idx]) {
+                        const msg = state.messages[idx];
+                        if (!hasVisibleAssistantPayload(msg)) {
+                            state.messages.splice(idx, 1);
+                        }
+                    }
                     state.inFlight = false;
                     state.loading = false;
+                    state.autoStickToBottomDuringStream = false;
                     state.ttsStreamingActive = false;
                     state.streamMessageIndex = null;
                     state.activePayload = null;
-                    state.messages.push({
-                        role: 'assistant',
-                        content: '[Error: 连接中断，本轮回复未完成]',
-                        reasoning: '',
-                        files: []
-                    });
+                    if (retryPayload) {
+                        state.pendingQueue.unshift(retryPayload);
+                        state.loading = true;
+                    } else {
+                        state.loading = true;
+                    }
+                    syncAgentPendingRequestSnapshot(agentId);
                     if (currentAgentToolId === agentId) {
                         renderAgentToolsChat(agentId);
                     }
-                    if (state.pendingQueue.length > 0) {
-                        setTimeout(() => processAgentSendQueue(agentId), 0);
+                    if (!atPageUnloading) {
+                        scheduleAgentReconnect(agentId, 320);
                     }
+                } else if (state.pendingQueue.length > 0 && !atPageUnloading) {
+                    scheduleAgentReconnect(agentId, 420);
                 }
                 updateSidebarBusyIndicators();
             };
@@ -8235,6 +8665,249 @@
                 imageUrls: dedupedImages,
                 videoUrls: dedupedVideos
             };
+        }
+
+        function parseOpenClawApproveCommands(text) {
+            const source = typeof text === 'string' ? text : '';
+            if (!source) return [];
+            const regex = /\/approve\s+([a-zA-Z0-9_-]{4,128})\s+(allow-once|allow-always)\b/gi;
+            const rows = new Map();
+            let m;
+            while ((m = regex.exec(source)) !== null) {
+                const approvalId = String(m[1] || '').trim();
+                if (!approvalId) continue;
+                const mode = String(m[2] || '').trim().toLowerCase();
+                if (!rows.has(approvalId)) {
+                    rows.set(approvalId, new Set());
+                }
+                if (mode === 'allow-once' || mode === 'allow-always') {
+                    rows.get(approvalId).add(mode);
+                }
+            }
+            return Array.from(rows.entries()).map(([approvalId, modeSet]) => ({
+                approvalId,
+                modes: Array.from(modeSet)
+            }));
+        }
+
+        function notifyAgentToolsInline(message, isError = false) {
+            const text = String(message || '').trim();
+            if (!text) return;
+            if (typeof showAgentToolsRefreshToast === 'function') {
+                showAgentToolsRefreshToast(text, isError ? 'error' : 'success');
+                return;
+            }
+            if (typeof showAgentToolsToast === 'function') {
+                showAgentToolsToast(text, !!isError);
+                return;
+            }
+            if (isError) {
+                console.error(text);
+            } else {
+                console.log(text);
+            }
+        }
+
+        function renderOpenClawApproveActions(messageDiv, rawText) {
+            if (!messageDiv) return;
+            const bubble = messageDiv.querySelector('.assistant-bubble');
+            if (!bubble) return;
+            const existing = bubble.querySelector('[data-approve-actions]');
+            if (existing) existing.remove();
+
+            const commands = parseOpenClawApproveCommands(rawText);
+            if (!commands.length) return;
+
+            const inferApproveAgentId = () => {
+                const hinted = String(messageDiv.dataset.senderAgentId || '').trim();
+                if (hinted) return hinted;
+                const fallback = String(currentAgentToolId || '').trim();
+                return fallback;
+            };
+
+            const enqueueAgentPayloadIfNeeded = (agentId, payload) => {
+                const state = getAgentChatState(agentId);
+                if (!state || !Array.isArray(state.pendingQueue)) return false;
+                const normalized = sanitizePendingMessagePayload(payload);
+                if (!normalized) return false;
+                const sameExists = state.pendingQueue.some((item) => {
+                    const p = sanitizePendingMessagePayload(item);
+                    if (!p) return false;
+                    return (p.content || '') === (normalized.content || '')
+                        && (!Array.isArray(p.files) || p.files.length === 0)
+                        && (!Array.isArray(p.systemPaths) || p.systemPaths.length === 0);
+                });
+                if (!sameExists) {
+                    state.pendingQueue.unshift(normalized);
+                }
+                state.loading = true;
+                syncAgentPendingRequestSnapshot(agentId);
+                updateSidebarBusyIndicators();
+                if (currentAgentToolId === agentId) {
+                    renderAgentToolsChat(agentId);
+                }
+                setTimeout(() => processAgentSendQueue(agentId), 0);
+                return true;
+            };
+
+            const resumeAgentTaskAfterApprove = () => {
+                const agentId = inferApproveAgentId();
+                if (!agentId) return false;
+                const state = getAgentChatState(agentId);
+                if (!state) return false;
+                if (state.inFlight) {
+                    // 当前会话仍在跑，不需要重放
+                    return true;
+                }
+
+                const queuedPayload = Array.isArray(state.pendingQueue)
+                    ? state.pendingQueue.map(sanitizePendingMessagePayload).find(Boolean)
+                    : null;
+                if (queuedPayload) {
+                    return enqueueAgentPayloadIfNeeded(agentId, queuedPayload);
+                }
+
+                const activePayload = sanitizePendingMessagePayload(state.activePayload);
+                if (activePayload) {
+                    return enqueueAgentPayloadIfNeeded(agentId, activePayload);
+                }
+
+                const snapshot = getPendingAgentRequestSnapshot(agentId);
+                const snapshotPayload = sanitizePendingMessagePayload(snapshot && snapshot.payload);
+                if (snapshotPayload) {
+                    return enqueueAgentPayloadIfNeeded(agentId, snapshotPayload);
+                }
+
+                const lastUserText = getLastUserMessageTextFromState(state);
+                if (!lastUserText) return false;
+                return enqueueAgentPayloadIfNeeded(agentId, {
+                    type: 'message',
+                    content: lastUserText,
+                    files: [],
+                    systemPaths: []
+                });
+            };
+
+            const wrap = document.createElement('div');
+            wrap.className = 'approve-actions-wrap';
+            wrap.setAttribute('data-approve-actions', '1');
+
+            commands.forEach((item) => {
+                const row = document.createElement('div');
+                row.className = 'approve-actions-row';
+                row.setAttribute('data-approval-id', item.approvalId);
+
+                const meta = document.createElement('div');
+                meta.className = 'approve-actions-meta';
+                meta.innerHTML = `<span>需要授权</span><span class="aid">${escapeHtml(item.approvalId)}</span>`;
+
+                const btns = document.createElement('div');
+                btns.className = 'approve-actions-btns';
+
+                const status = document.createElement('span');
+                status.className = 'approve-action-status';
+
+                const onceBtn = document.createElement('button');
+                onceBtn.type = 'button';
+                onceBtn.className = 'approve-action-btn';
+                onceBtn.textContent = '一次授权';
+
+                const alwaysBtn = document.createElement('button');
+                alwaysBtn.type = 'button';
+                alwaysBtn.className = 'approve-action-btn primary';
+                alwaysBtn.textContent = '永久授权';
+
+                const setBusy = (busy) => {
+                    onceBtn.disabled = !!busy;
+                    alwaysBtn.disabled = !!busy;
+                };
+
+                const lockApprovedUi = (mode) => {
+                    const normalized = String(mode || '').trim().toLowerCase();
+                    const isAlways = normalized === 'allow-always';
+                    status.textContent = isAlways ? '已授权（永久）' : '已授权（一次）';
+                    onceBtn.disabled = true;
+                    alwaysBtn.disabled = true;
+                    onceBtn.classList.add('hidden');
+                    alwaysBtn.classList.add('hidden');
+                    row.setAttribute('data-approval-state', 'approved');
+                    atApprovalStatusById.set(item.approvalId, {
+                        state: 'approved',
+                        mode: isAlways ? 'allow-always' : 'allow-once'
+                    });
+                };
+
+                const lockExpiredUi = () => {
+                    status.textContent = '授权已过期，请重新触发';
+                    onceBtn.disabled = true;
+                    alwaysBtn.disabled = true;
+                    onceBtn.classList.add('hidden');
+                    alwaysBtn.classList.add('hidden');
+                    row.setAttribute('data-approval-state', 'expired');
+                    atApprovalStatusById.set(item.approvalId, { state: 'expired' });
+                };
+
+                const runApprove = async (mode) => {
+                    try {
+                        setBusy(true);
+                        status.textContent = mode === 'allow-always' ? '授权中（永久）...' : '授权中（一次）...';
+                        const res = await fetch('/api/openclaw/approve', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                approvalId: item.approvalId,
+                                mode
+                            })
+                        });
+                        let data = null;
+                        try {
+                            data = await res.json();
+                        } catch (_) {}
+                        if (!res.ok || !data || data.success === false) {
+                            throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
+                        }
+                        lockApprovedUi(mode);
+                        notifyAgentToolsInline(`授权成功: ${item.approvalId} (${mode})`, false);
+                        const resumed = resumeAgentTaskAfterApprove();
+                        if (resumed) {
+                            notifyAgentToolsInline('已自动继续执行当前任务', false);
+                        } else {
+                            notifyAgentToolsInline('已授权。若未继续，请再发送一次你的请求。', false);
+                        }
+                    } catch (e) {
+                        const msg = e && e.message ? String(e.message) : 'approve failed';
+                        const isExpiredApproval = /unknown or expired approval id/i.test(msg);
+                        if (isExpiredApproval) {
+                            lockExpiredUi();
+                            notifyAgentToolsInline('该授权单已过期或已处理，请重新发送一次需要授权的请求。', true);
+                        } else {
+                            status.textContent = '授权失败';
+                            notifyAgentToolsInline(`授权失败: ${msg}`, true);
+                            setBusy(false);
+                        }
+                    }
+                };
+
+                const stored = atApprovalStatusById.get(item.approvalId);
+                if (stored && stored.state === 'approved') {
+                    lockApprovedUi(stored.mode || 'allow-once');
+                } else if (stored && stored.state === 'expired') {
+                    lockExpiredUi();
+                } else {
+                    onceBtn.addEventListener('click', () => runApprove('allow-once'));
+                    alwaysBtn.addEventListener('click', () => runApprove('allow-always'));
+                }
+
+                btns.appendChild(onceBtn);
+                btns.appendChild(alwaysBtn);
+                btns.appendChild(status);
+
+                row.appendChild(meta);
+                row.appendChild(btns);
+                wrap.appendChild(row);
+            });
+
+            bubble.appendChild(wrap);
         }
 
         function getAttachmentExt(nameOrPath) {
@@ -8418,9 +9091,19 @@
                 ? parseAssistantImageUrls(source)
                 : { text: source, imageUrls: [], videoUrls: [] };
             if (contentDiv) {
+                contentDiv.classList.remove('streaming-plain');
                 contentDiv.innerHTML = renderMarkdownToHtml(parsed.text);
             }
             return parsed;
+        }
+
+        function renderBubbleContentStreaming(contentDiv, rawText) {
+            const source = typeof rawText === 'string' ? rawText : '';
+            if (contentDiv) {
+                contentDiv.classList.add('streaming-plain');
+                contentDiv.textContent = source;
+            }
+            return { text: source, imageUrls: [], videoUrls: [] };
         }
 
         function normalizeReasoningThreadKey(rawKey, fallbackIndex) {
@@ -8710,24 +9393,20 @@
         }
 
         function deriveBubbleStreamingText(msg = {}) {
-            const reasoningSource = (typeof msg.displayReasoning === 'string' && msg.displayReasoning.trim())
-                ? msg.displayReasoning
-                : (typeof msg.reasoning === 'string' ? msg.reasoning : '');
-            const reasoningHint = extractReasoningHint(reasoningSource);
-            if (reasoningHint) return reasoningHint;
+            // Keep the streaming status minimal: spinner + elapsed only.
+            return '';
+        }
 
-            const events = normalizeExecutionEvents(msg.executionEvents);
-            if (events.length > 0) {
-                const lastEvent = events[events.length - 1];
-                const detail = sanitizeExecutionDetail(lastEvent.detail || '');
-                if (detail) return detail;
-                const label = truncateExecutionText(lastEvent.label || '', 160);
-                if (label && !/执行通道|思考等级/i.test(label)) return label;
-            }
-
-            const prelude = typeof msg.preludeText === 'string' ? msg.preludeText.trim() : '';
-            if (prelude) return prelude;
-            return '模型思考中';
+        function hasRenderableText(value) {
+            const raw = typeof value === 'string' ? value : '';
+            if (!raw) return false;
+            // Remove ANSI/control chars and invisible whitespace before visibility check
+            const normalized = raw
+                .replace(/\x1b\[[0-9;]*m/g, '')
+                .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+                .replace(/[\s\u00A0\u1680\u180E\u2000-\u200D\u2028\u2029\u202F\u205F\u3000\uFEFF\u2060-\u206F]/g, '')
+                .trim();
+            return normalized.length > 0;
         }
 
         function renderBubbleStreamingIndicator(messageDiv, msg, streaming) {
@@ -8738,7 +9417,9 @@
 
             if (!streaming) {
                 bubbleEl.classList.remove('is-streaming');
+                bubbleEl.classList.remove('compact-stream');
                 statusEl.classList.add('hidden');
+                statusEl.classList.remove('is-compact');
                 return;
             }
 
@@ -8749,10 +9430,21 @@
             const textEl = statusEl.querySelector('[data-stream-status-text]');
             const elapsedEl = statusEl.querySelector('[data-stream-status-elapsed]');
             const liveText = deriveBubbleStreamingText(msg);
+            const contentEl = messageDiv.querySelector('.message-content');
+            const domText = String((contentEl && contentEl.textContent) || '');
+            const displayText = String((msg && typeof msg.displayContent === 'string') ? msg.displayContent : '');
+            const hasVisiblePayload = hasRenderableText(domText)
+                || hasRenderableText(displayText);
+            const compact = !liveText && !hasVisiblePayload;
 
             bubbleEl.classList.add('is-streaming');
+            bubbleEl.classList.toggle('compact-stream', compact);
             statusEl.classList.remove('hidden');
-            if (textEl) textEl.textContent = liveText || '模型思考中';
+            statusEl.classList.toggle('is-compact', compact);
+            if (textEl) {
+                textEl.textContent = liveText || '';
+                textEl.classList.toggle('hidden', !liveText);
+            }
             if (elapsedEl) elapsedEl.textContent = formatStreamingElapsedByStartedAt(msg.streamStartedAt);
         }
 
@@ -9106,6 +9798,14 @@
                 div.dataset.msgIndex = String(options.messageIndex);
             }
             div.setAttribute('data-role', isUser ? 'user' : 'assistant');
+            if (!isUser) {
+                const senderAgentId = (typeof options.senderAgentId === 'string' && options.senderAgentId.trim())
+                    ? options.senderAgentId.trim()
+                    : (typeof currentAgentToolId === 'string' ? currentAgentToolId.trim() : '');
+                if (senderAgentId) {
+                    div.dataset.senderAgentId = senderAgentId;
+                }
+            }
             // Remove mb-6 to avoid large gaps, add specific margins
             div.className = `flex gap-4 max-w-[90%] ${isUser ? 'ml-auto flex-row-reverse' : ''} mb-4 ${animateIn ? 'animate-scale-in' : ''} group`;
             
@@ -9176,7 +9876,12 @@
             
             const contentDiv = div.querySelector('.message-content');
             const rawRenderText = typeof options.renderedContent === 'string' ? options.renderedContent : (text || '');
-            const parsedAssistant = renderBubbleContent(contentDiv, rawRenderText, !isUser);
+            const parsedAssistant = (!isUser && options.streaming && AT_STREAM_RENDER_PLAIN_TEXT)
+                ? renderBubbleContentStreaming(contentDiv, rawRenderText)
+                : renderBubbleContent(contentDiv, rawRenderText, !isUser);
+            if (!isUser) {
+                renderOpenClawApproveActions(div, rawRenderText);
+            }
             const senderLabel = div.querySelector('.sender-label');
             const senderName = (!isUser && typeof options.senderName === 'string') ? options.senderName.trim() : '';
             if (senderLabel && senderName) {
@@ -9226,8 +9931,17 @@
 
             const state = getAgentChatState(agentId);
             const preserveScrollAnchor = !!(options && options.preserveScrollAnchor);
-            const previousScrollTop = Number(options && options.previousScrollTop) || 0;
-            const previousScrollHeight = Number(options && options.previousScrollHeight) || 0;
+            const forceStickToBottom = !!(options && options.forceStickToBottom);
+            const previousScrollTop = Number.isFinite(Number(options && options.previousScrollTop))
+                ? Number(options.previousScrollTop)
+                : chatContainer.scrollTop;
+            const previousScrollHeight = Number.isFinite(Number(options && options.previousScrollHeight))
+                ? Number(options.previousScrollHeight)
+                : chatContainer.scrollHeight;
+            const shouldStickToBottom = forceStickToBottom || (!preserveScrollAnchor && isChatContainerNearBottom(chatContainer));
+            pruneAgentEmptyAssistantPlaceholders(state);
+            normalizeAgentStreamingState(state);
+            pruneAgentEmptyAssistantPlaceholders(state);
             stopLoadingIndicatorTicker();
             chatContainer.innerHTML = '';
             currentMessageDiv = null;
@@ -9256,7 +9970,8 @@
                 });
             });
 
-            if (state.loading && !Number.isInteger(state.streamMessageIndex)) {
+            const streamMsg = getAgentStreamingMessage(state);
+            if (state.loading && !streamMsg) {
                 showLoadingIndicator();
             }
 
@@ -9264,9 +9979,11 @@
                 if (preserveScrollAnchor) {
                     const nextHeight = chatContainer.scrollHeight;
                     chatContainer.scrollTop = Math.max(0, nextHeight - previousScrollHeight + previousScrollTop);
+                } else if (shouldStickToBottom) {
+                    forceChatScrollToBottom(chatContainer);
                 } else {
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                    setTimeout(() => chatContainer.scrollTop = chatContainer.scrollHeight, 60);
+                    const nextHeight = chatContainer.scrollHeight;
+                    chatContainer.scrollTop = Math.max(0, nextHeight - previousScrollHeight + previousScrollTop);
                 }
             });
         }
@@ -9322,7 +10039,11 @@
             if (!chatContainer) return false;
             let messageDiv = chatContainer.querySelector(`[data-msg-index="${streamIndex}"]`);
             if (!messageDiv) {
-                renderAgentToolsChat(agentId);
+                renderAgentToolsChat(agentId, {
+                    preserveScrollAnchor: true,
+                    previousScrollTop: chatContainer.scrollTop,
+                    previousScrollHeight: chatContainer.scrollHeight
+                });
                 messageDiv = chatContainer.querySelector(`[data-msg-index="${streamIndex}"]`);
             }
             if (!messageDiv) return false;
@@ -9337,13 +10058,21 @@
             if (!Number.isInteger(streamIndex)) return;
             const msg = state.messages[streamIndex];
             if (!msg || msg.role !== 'assistant') return;
+            const chatContainer = document.getElementById('at-chat-messages');
+            const shouldStickToBottom = !!(chatContainer && isChatContainerNearBottom(chatContainer));
+            const streamStick = !!state.autoStickToBottomDuringStream;
 
             removeLoadingIndicator();
 
             const contentDiv = currentMessageDiv.querySelector('.message-content');
             if (contentDiv) {
                 const streamingText = (typeof msg.displayContent === 'string') ? msg.displayContent : (msg.content || '');
-                renderBubbleContent(contentDiv, streamingText, true);
+                if (AT_STREAM_RENDER_PLAIN_TEXT) {
+                    renderBubbleContentStreaming(contentDiv, streamingText);
+                } else {
+                    renderBubbleContent(contentDiv, streamingText, true);
+                }
+                renderOpenClawApproveActions(currentMessageDiv, streamingText);
             }
             const senderLabel = currentMessageDiv.querySelector('.sender-label');
             const senderName = (typeof msg.senderName === 'string') ? msg.senderName.trim() : '';
@@ -9364,9 +10093,8 @@
                 preludeText: msg.preludeText || ''
             });
             renderBubbleStreamingIndicator(currentMessageDiv, msg, true);
-            const chatContainer = document.getElementById('at-chat-messages');
-            if (chatContainer) {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
+            if (chatContainer && (shouldStickToBottom || streamStick)) {
+                forceChatScrollToBottom(chatContainer);
             }
         }
 
@@ -9506,28 +10234,49 @@
 
         function finalizeAgentStream(agentId) {
             const state = getAgentChatState(agentId);
+            const shouldStickToBottomOnFinalize = !!state.autoStickToBottomDuringStream;
             finalizeAgentTtsStream(agentId);
             clearAgentTypingTimer(agentId);
+            const retryPayload = sanitizePendingMessagePayload(state.activePayload);
             const idx = state.streamMessageIndex;
             if (Number.isInteger(idx) && state.messages[idx]) {
                 const lastMsg = state.messages[idx];
                 syncStreamingDisplayNow(lastMsg);
-                const hasContent = !!String(lastMsg.content || '').trim()
-                    || !!String(lastMsg.reasoning || '').trim()
-                    || (Array.isArray(lastMsg.files) && lastMsg.files.length > 0);
-                const hasEvents = Array.isArray(lastMsg.executionEvents) && lastMsg.executionEvents.length > 0;
-                if (!hasContent && !hasEvents) {
+                const lockHit = isSessionLockErrorText(String(lastMsg.content || ''));
+                const canRetryLock = !!retryPayload && lockHit && state.lockRetryCount < AT_SESSION_LOCK_MAX_RETRY;
+                if (canRetryLock) {
+                    state.lockRetryCount += 1;
                     state.messages.splice(idx, 1);
+                    state.inFlight = false;
+                    state.loading = true;
+                    state.autoStickToBottomDuringStream = true;
+                    state.streamMessageIndex = null;
+                    state.activePayload = null;
+                    state.pendingQueue.unshift(retryPayload);
+                    syncAgentPendingRequestSnapshot(agentId);
+                    updateSidebarBusyIndicators();
+                    if (currentAgentToolId === agentId) {
+                        renderAgentToolsChat(agentId);
+                    }
+                    scheduleAgentReconnect(agentId, AT_SESSION_LOCK_RETRY_DELAY_MS);
+                    return;
+                }
+                if (!hasVisibleAssistantPayload(lastMsg)) {
+                    state.messages.splice(idx, 1);
+                } else if (!lockHit) {
+                    state.lockRetryCount = 0;
                 }
             }
+            pruneAgentEmptyAssistantPlaceholders(state);
             state.inFlight = false;
             state.loading = false;
+            state.autoStickToBottomDuringStream = false;
             state.streamMessageIndex = null;
             state.activePayload = null;
             syncAgentPendingRequestSnapshot(agentId);
             updateSidebarBusyIndicators();
             if (currentAgentToolId === agentId) {
-                renderAgentToolsChat(agentId);
+                renderAgentToolsChat(agentId, { forceStickToBottom: shouldStickToBottomOnFinalize });
             }
             if (state.pendingQueue.length > 0) {
                 setTimeout(() => processAgentSendQueue(agentId), 0);
@@ -9540,26 +10289,20 @@
             const payload = state.pendingQueue.shift();
             if (!payload) return;
 
+            const chatContainer = (currentAgentToolId === agentId)
+                ? document.getElementById('at-chat-messages')
+                : null;
+            state.autoStickToBottomDuringStream = !chatContainer || isChatContainerNearBottom(chatContainer, 160);
             state.inFlight = true;
             state.loading = true;
-            state.streamMessageIndex = null;
             state.activePayload = payload;
             const preludeText = inferExecutionPreludeText(payload.content || '', 'agent');
-            state.messages.push({
-                role: 'assistant',
-                content: '',
-                reasoning: '',
-                executionEvents: [],
-                files: [],
-                displayContent: '',
-                displayReasoning: '',
-                preludeText,
-                streamStartedAt: Date.now(),
-                provisional: true,
-                senderName: '',
-                agentId: ''
-            });
-            state.streamMessageIndex = state.messages.length - 1;
+            const provisionalMsg = ensureAgentProvisionalStreamMessage(state, preludeText);
+            if (provisionalMsg) {
+                syncStreamingDisplayNow(provisionalMsg);
+            } else {
+                state.streamMessageIndex = null;
+            }
             syncAgentPendingRequestSnapshot(agentId);
             updateSidebarBusyIndicators();
             if (currentAgentToolId === agentId) {
@@ -9575,17 +10318,15 @@
             } catch (e) {
                 state.inFlight = false;
                 state.loading = false;
+                state.autoStickToBottomDuringStream = false;
                 const provisionalIdx = state.streamMessageIndex;
                 if (Number.isInteger(provisionalIdx) && state.messages[provisionalIdx]) {
                     const msg = state.messages[provisionalIdx];
-                    const hasContent = !!String(msg.content || '').trim()
-                        || !!String(msg.reasoning || '').trim()
-                        || (Array.isArray(msg.files) && msg.files.length > 0);
-                    const hasEvents = Array.isArray(msg.executionEvents) && msg.executionEvents.length > 0;
-                    if (!hasContent && !hasEvents) {
+                    if (!hasVisibleAssistantPayload(msg)) {
                         state.messages.splice(provisionalIdx, 1);
                     }
                 }
+                pruneAgentEmptyAssistantPlaceholders(state);
                 state.streamMessageIndex = null;
                 state.activePayload = null;
                 syncAgentPendingRequestSnapshot(agentId);
@@ -9616,15 +10357,10 @@
             if (!indicatorEl) return;
             const startedAt = Number(indicatorEl.dataset.startedAt) || Date.now();
             const elapsedMs = Math.max(0, Date.now() - startedAt);
-            const dotCount = (Math.floor(elapsedMs / 520) % 3) + 1;
             const labelEl = indicatorEl.querySelector('[data-loading-label]');
             const elapsedEl = indicatorEl.querySelector('[data-loading-elapsed]');
             if (labelEl) {
-                if (elapsedMs >= 12000) {
-                    labelEl.textContent = `等待模型输出中（该模型可能不返回思考流）${'.'.repeat(dotCount)}`;
-                } else {
-                    labelEl.textContent = `模型思考中${'.'.repeat(dotCount)}`;
-                }
+                labelEl.textContent = '';
             }
             if (elapsedEl) {
                 elapsedEl.textContent = `${Math.floor(elapsedMs / 1000)}s`;
@@ -9642,6 +10378,7 @@
         function showLoadingIndicator() {
              const chatContainer = document.getElementById('at-chat-messages');
              if (!chatContainer) return;
+             const shouldStickToBottom = isChatContainerNearBottom(chatContainer);
 
              const existing = document.getElementById('at-loading-indicator');
              if (existing) {
@@ -9680,12 +10417,10 @@
 
              div.innerHTML = `
                 ${avatarHtml}
-                <div class="bg-white/5 text-gray-300 border border-white/5 p-4 rounded-3xl rounded-tl-sm backdrop-blur-md min-w-[200px] max-w-[min(82vw,360px)]">
-                    <div class="flex items-center gap-2 text-[12px]">
-                        <span class="inline-block w-3 h-3 rounded-full border border-blue-300/40 border-t-blue-400 animate-spin shadow-[0_0_8px_rgba(96,165,250,0.9)]"></span>
-                        <span data-loading-label class="text-gray-300">模型思考中...</span>
-                        <span data-loading-elapsed class="ml-auto text-[11px] text-gray-500 tabular-nums">0s</span>
-                    </div>
+                <div class="bg-white/5 text-gray-300 border border-blue-300/25 px-3 py-2.5 rounded-3xl rounded-tl-sm backdrop-blur-md inline-flex items-center gap-2 w-auto min-w-0 max-w-[min(68vw,260px)] shadow-[0_0_0_1px_rgba(59,130,246,0.14),0_0_16px_rgba(59,130,246,0.16)]">
+                    <span class="inline-block w-3 h-3 rounded-full border border-blue-300/40 border-t-blue-400 animate-spin shadow-[0_0_8px_rgba(96,165,250,0.9)]"></span>
+                    <span data-loading-label class="hidden"></span>
+                    <span data-loading-elapsed class="text-[11px] text-gray-400 tabular-nums">0s</span>
                 </div>
              `;
 
@@ -9700,9 +10435,11 @@
                  }
                  refreshLoadingIndicator(target);
              }, 260);
-             requestAnimationFrame(() => {
-                 chatContainer.scrollTop = chatContainer.scrollHeight;
-             });
+             if (shouldStickToBottom) {
+                 requestAnimationFrame(() => {
+                     chatContainer.scrollTop = chatContainer.scrollHeight;
+                 });
+             }
         }
 
         let atPendingFiles = [];
@@ -10313,6 +11050,7 @@
             }] : [];
             state.loading = false;
             state.inFlight = false;
+            state.autoStickToBottomDuringStream = false;
             state.ttsStreamingActive = false;
             state.streamMessageIndex = null;
             state.historyLoaded = true;
@@ -10881,6 +11619,13 @@
                     closeAgentToolsClipDemoEditor({ immediate: true });
                 }
                 checkMecoUpdateStatus();
+            });
+            window.addEventListener('beforeunload', () => {
+                atPageUnloading = true;
+                for (const timer of atAgentReconnectTimers.values()) {
+                    clearTimeout(timer);
+                }
+                atAgentReconnectTimers.clear();
             });
             document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
