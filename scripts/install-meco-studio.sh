@@ -312,6 +312,58 @@ detect_installed_openclaw_version() {
   printf '%s\n' "$version"
 }
 
+detect_openclaw_package_dir() {
+  local npm_root candidate openclaw_bin
+
+  npm_root="$(npm root -g 2>/dev/null || true)"
+  if [[ -n "$npm_root" ]]; then
+    candidate="$npm_root/openclaw"
+    if [[ -f "$candidate/package.json" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  openclaw_bin="$(command -v openclaw 2>/dev/null || true)"
+  if [[ -n "$openclaw_bin" ]]; then
+    candidate="$(cd "$(dirname "$openclaw_bin")/../lib/node_modules/openclaw" 2>/dev/null && pwd -P || true)"
+    if [[ -n "$candidate" && -f "$candidate/package.json" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' ''
+}
+
+verify_openclaw_install_health() {
+  local package_dir dist_dir
+  command -v openclaw >/dev/null 2>&1 || return 1
+  openclaw --version >/dev/null 2>&1 || return 1
+
+  package_dir="$(detect_openclaw_package_dir)"
+  [[ -n "$package_dir" ]] || return 1
+  [[ -f "$package_dir/package.json" ]] || return 1
+
+  dist_dir="$package_dir/dist"
+  [[ -d "$dist_dir" ]] || return 1
+
+  # 关键完整性检查：避免缺少 pi-tools runtime 导致 run/tool 调用崩溃。
+  if ! compgen -G "$dist_dir/pi-tools.before-tool-call.runtime-*.js" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  return 0
+}
+
+reinstall_openclaw_clean() {
+  log "Reinstalling OpenClaw (self-heal for broken global install)..."
+  npm uninstall -g openclaw >/dev/null 2>&1 || true
+  npm cache verify >/dev/null 2>&1 || true
+  npm install -g openclaw@latest >/dev/null
+  hash -r || true
+}
+
 ensure_openclaw() {
   local required_version installed_version should_upgrade reason final_version
   should_upgrade=0
@@ -351,6 +403,17 @@ ensure_openclaw() {
   final_version="$(detect_installed_openclaw_version)"
   if [[ -n "$final_version" ]]; then
     log "OpenClaw version in use: $final_version"
+  fi
+
+  if ! verify_openclaw_install_health; then
+    warn "OpenClaw health check failed (possible corrupted/missing internal modules), attempting self-heal reinstall"
+    reinstall_openclaw_clean || die "openclaw reinstall failed during self-heal"
+    command -v openclaw >/dev/null 2>&1 || die "openclaw install failed after self-heal"
+    final_version="$(detect_installed_openclaw_version)"
+    if [[ -n "$final_version" ]]; then
+      log "OpenClaw version after self-heal: $final_version"
+    fi
+    verify_openclaw_install_health || die "openclaw health check still failed after self-heal reinstall"
   fi
 }
 

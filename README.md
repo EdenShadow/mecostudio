@@ -53,6 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 - 安装 git（未安装自动安装）
 - 安装 OpenClaw（未安装自动安装）；已安装时仅在版本低于最低要求时自动升级到 `openclaw@latest`
+- 增加 OpenClaw 完整性自检（缺少内部模块时自动执行卸载+重装自愈）
 - 安装 Python3 + pip（未安装自动安装）
 - 安装 Kimi CLI（`curl -L code.kimi.com/install.sh | bash`）
 - 安装 Whisper（`openai-whisper`，用于 hot-topics 音频分析）
