@@ -588,6 +588,21 @@
     return false;
   }
 
+  function isLoopbackContext() {
+    try {
+      const current = new URL(window.location.href);
+      return isLoopbackHostname(current.hostname);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function shouldUseLocalLoopback(device) {
+    if (!device) return false;
+    if (!isCurrentMachineByFingerprint(device)) return false;
+    return isLoopbackContext();
+  }
+
   function isLocalDevice(device) {
     if (!device) return false;
     const bindingId = toSafeString(state.localProfile.bindingId);
@@ -2259,7 +2274,7 @@
       const iframeToken = Number(iframe.dataset.loadToken || 0);
       const activeToken = Number(session.pendingLoadToken || 0);
       if (!iframeToken || iframeToken !== activeToken) return;
-      if (toSafeString(session.mode).toLowerCase() === 'web' && !isLocalDevice(session.device)) {
+      if (toSafeString(session.mode).toLowerCase() === 'web' && !shouldUseLocalLoopback(session.device)) {
         let loadedHref = '';
         try {
           loadedHref = toSafeString(
@@ -2433,7 +2448,8 @@
   async function resolveWebLaunch(device) {
     const deviceId = toSafeString(device && device.id);
     const localDevice = isLocalDevice(device);
-    if (localDevice) {
+    const useLoopbackLocal = shouldUseLocalLoopback(device);
+    if (localDevice && useLoopbackLocal) {
       try {
         const body = await resolveRemoteLaunch(deviceId, { preferLan: true, lanReachable: true, forceMode: 'lan' });
         const launch = body && body.launch ? body.launch : {};
@@ -2675,7 +2691,12 @@
   }
 
   async function tryAutoOpenRemoteRoute() {
-    if (window.self !== window.top && !state.allowEmbedRemoteRouteAutoOpen) return;
+    if (window.self === window.top) {
+      // 顶层直接访问公网 /web/... 时，不自动切换成底部任务栏子窗口模式。
+      clearRemoteRouteFromUrl();
+      return;
+    }
+    if (!state.allowEmbedRemoteRouteAutoOpen) return;
     const routePath = normalizeRoutePath(state.pendingRemoteRoute || '');
     const mode = toSafeString(state.pendingRemoteMode || '').toLowerCase();
     if (!routePath || routePath === '/') return;

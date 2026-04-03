@@ -531,6 +531,48 @@ function normalizeReasoningEnabled(value, thinkingLevel = 'high') {
   return defaultEnabled;
 }
 
+function deriveOpenClawWebUiCandidate(rawUrl) {
+  const source = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+  if (!source) return '';
+  let normalized = source;
+  if (/^wss?:\/\//i.test(normalized)) {
+    normalized = normalized.replace(/^ws:\/\//i, 'http://').replace(/^wss:\/\//i, 'https://');
+  } else if (!/^https?:\/\//i.test(normalized)) {
+    return '';
+  }
+  try {
+    const parsed = new URL(normalized);
+    let pathname = parsed.pathname || '/';
+    pathname = pathname.replace(/\/v1\/chat\/completions\/?$/i, '/');
+    pathname = pathname.replace(/\/chat\/completions\/?$/i, '/');
+    pathname = pathname.replace(/\/+$/g, '');
+    const basePath = pathname ? `${pathname}/` : '/';
+    return `${parsed.protocol}//${parsed.host}${basePath}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function buildOpenClawWebUiCandidates(runtime = {}) {
+  const rawCandidates = [
+    runtime && runtime.openclawHttpUrl ? String(runtime.openclawHttpUrl) : '',
+    runtime && runtime.openclawWsUrl ? String(runtime.openclawWsUrl) : '',
+    'http://127.0.0.1:18789/',
+    'http://localhost:18789/'
+  ];
+  const seen = new Set();
+  const result = [];
+  for (const raw of rawCandidates) {
+    const candidate = deriveOpenClawWebUiCandidate(raw);
+    if (!candidate) continue;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(candidate);
+  }
+  return result;
+}
+
 function extractSseContentDelta(parsed) {
   const choice = parsed?.choices?.[0] || {};
   const delta = choice?.delta || {};
@@ -4057,6 +4099,20 @@ app.get('/api/settings', (req, res) => {
     res.json({ settings, masked });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/openclaw/webui-url', (req, res) => {
+  try {
+    const runtime = getRuntimeSettings();
+    const candidates = buildOpenClawWebUiCandidates(runtime);
+    res.json({
+      success: true,
+      webuiUrl: candidates[0] || '',
+      candidates
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || 'failed to resolve openclaw webui url' });
   }
 });
 

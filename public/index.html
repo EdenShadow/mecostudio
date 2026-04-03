@@ -2418,6 +2418,7 @@
         let currentMessageDiv = null;
         let currentAgentAvatarUrl = null;
         let appRuntimeSettings = null;
+        let openclawWebUiResolvedUrl = '';
         let sidebarActiveAgentId = null;
         let sidebarActiveChannelId = null;
         let atChannelComposing = false;
@@ -6154,6 +6155,76 @@
             return String(value);
         }
 
+        function setOpenClawWebUiHint(message, isError = false) {
+            const hintEl = document.getElementById('cfg-openclaw-webui-hint');
+            if (!hintEl) return;
+            hintEl.textContent = message || '';
+            hintEl.classList.toggle('text-red-300', !!isError);
+            hintEl.classList.toggle('text-gray-400', !isError);
+        }
+
+        async function refreshOpenClawWebUiInfo() {
+            const btn = document.getElementById('open-openclaw-webui-btn');
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.add('opacity-70', 'cursor-not-allowed');
+            }
+            setOpenClawWebUiHint('正在检测 OpenClaw WebUI 地址...');
+            try {
+                const res = await fetch('/api/openclaw/webui-url');
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data || data.success === false) {
+                    throw new Error((data && data.error) || `load failed (${res.status})`);
+                }
+                openclawWebUiResolvedUrl = typeof data.webuiUrl === 'string' ? data.webuiUrl.trim() : '';
+                if (openclawWebUiResolvedUrl) {
+                    setOpenClawWebUiHint(`当前地址：${openclawWebUiResolvedUrl}`);
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.classList.remove('opacity-70', 'cursor-not-allowed');
+                    }
+                } else {
+                    setOpenClawWebUiHint('未检测到可用地址，请先安装并启动 OpenClaw Gateway。', true);
+                }
+            } catch (e) {
+                openclawWebUiResolvedUrl = '';
+                setOpenClawWebUiHint(`检测失败：${e.message || e}`, true);
+            }
+        }
+
+        window.openOpenClawWebUi = async function() {
+            const btn = document.getElementById('open-openclaw-webui-btn');
+            const originalLabel = btn ? btn.innerText : '';
+            try {
+                if (btn) {
+                    btn.disabled = true;
+                    btn.classList.add('opacity-70', 'cursor-not-allowed');
+                    btn.innerText = '打开中...';
+                }
+                if (!openclawWebUiResolvedUrl) {
+                    await refreshOpenClawWebUiInfo();
+                }
+                const url = String(openclawWebUiResolvedUrl || '').trim();
+                if (!url) {
+                    throw new Error('未检测到 OpenClaw WebUI 地址');
+                }
+                const win = window.open(url, '_blank', 'noopener,noreferrer');
+                if (!win) {
+                    alert(`浏览器拦截了新窗口，请手动打开：\n${url}`);
+                }
+            } catch (e) {
+                alert(`打开 OpenClaw WebUI 失败：${e.message || e}`);
+            } finally {
+                if (btn) {
+                    btn.innerText = originalLabel || '打开 OpenClaw WebUI';
+                    const hasUrl = !!String(openclawWebUiResolvedUrl || '').trim();
+                    btn.disabled = !hasUrl;
+                    btn.classList.toggle('opacity-70', !hasUrl);
+                    btn.classList.toggle('cursor-not-allowed', !hasUrl);
+                }
+            }
+        };
+
         function readApiSettingsCache() {
             try {
                 const raw = localStorage.getItem(MECO_API_SETTINGS_CACHE_KEY);
@@ -6230,6 +6301,7 @@
                 appRuntimeSettings = { ...cachedSettings };
                 applyApiSettingsToInputs(appRuntimeSettings);
             }
+            refreshOpenClawWebUiInfo();
             try {
                 const res = await fetch('/api/settings');
                 const data = await res.json();
@@ -6239,6 +6311,7 @@
                 appRuntimeSettings = mergeApiSettingsWithCache(fetched, cachedSettings);
                 applyApiSettingsToInputs(appRuntimeSettings);
                 saveApiSettingsCache(appRuntimeSettings);
+                refreshOpenClawWebUiInfo();
             } catch (e) {
                 console.error('Load settings failed', e);
                 if (cachedSettings && Object.keys(cachedSettings).length > 0) {
@@ -13164,6 +13237,18 @@
             </button>
         </div>
         <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
+            <div class="md:col-span-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div class="min-w-0">
+                    <label class="block text-xs text-gray-300 mb-1">OpenClaw WebUI</label>
+                    <p id="cfg-openclaw-webui-hint" class="text-xs text-gray-400 truncate">正在检测 OpenClaw WebUI 地址...</p>
+                </div>
+                <button id="open-openclaw-webui-btn"
+                        type="button"
+                        onclick="openOpenClawWebUi()"
+                        class="h-9 px-3 rounded-lg border border-primary/35 bg-primary/15 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors whitespace-nowrap">
+                    打开 OpenClaw WebUI
+                </button>
+            </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">OpenClaw Model</label>
                 <input id="cfg-openclaw-model" class="w-full h-10 rounded-lg bg-white/5 border border-white/10 px-3 text-sm text-white" placeholder="kimi-coding/k2p5">
