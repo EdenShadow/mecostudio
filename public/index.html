@@ -225,6 +225,35 @@
             padding: 0;
             font-size: inherit;
         }
+        #at-chat-messages .message-content .md-table-wrap {
+            margin: 0.6rem 0;
+            overflow-x: auto;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 0.7rem;
+            background: rgba(255, 255, 255, 0.04);
+        }
+        #at-chat-messages .message-content .md-table-wrap table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 360px;
+        }
+        #at-chat-messages .message-content .md-table-wrap th,
+        #at-chat-messages .message-content .md-table-wrap td {
+            padding: 0.46rem 0.62rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            vertical-align: top;
+            text-align: left;
+            line-height: 1.45;
+        }
+        #at-chat-messages .message-content .md-table-wrap th {
+            background: rgba(255, 255, 255, 0.08);
+            font-weight: 600;
+            color: rgba(243, 244, 246, 0.98);
+            white-space: nowrap;
+        }
+        #at-chat-messages .message-content .md-table-wrap tbody tr:last-child td {
+            border-bottom: none;
+        }
         #at-chat-messages .message-content a {
             color: #93c5fd;
             text-decoration: underline;
@@ -2327,9 +2356,16 @@
         let atChannelRefreshInProgress = false;
         let atChannelRuleMode = true;
         let atSingleChatImmersive = true;
+        let atThinkingMode = 'think';
+        let atThinkingModeByAgent = {};
+        let atThinkingModeByChannel = {};
+        let atThinkingModePrefsLoaded = false;
+        let atThinkingModePrefsLoadingPromise = null;
         const AT_SOUND_PREF_KEY = 'meco.agenttools.soundEnabled';
         const AT_CHANNEL_RULE_MODE_PREF_KEY = 'meco.agenttools.channelRuleMode';
         const AT_IMMERSIVE_PREF_KEY = 'meco.agenttools.singleChatImmersive';
+        const AT_THINKING_MODE_FAST = 'fast';
+        const AT_THINKING_MODE_THINK = 'think';
         const AT_SENT_INPUT_HISTORY_STORE_KEY = 'meco.agenttools.sentInputHistory.v1';
         const AT_SENT_INPUT_HISTORY_MAX_KEYS = 160;
         const AT_SENT_INPUT_HISTORY_LIMIT = 20;
@@ -3012,6 +3048,8 @@
             const type = typeof payload.type === 'string' ? payload.type.trim() : '';
             if (type !== 'message') return null;
             const content = typeof payload.content === 'string' ? payload.content : '';
+            const thinkingLevel = normalizeAgentToolsThinkingLevel(payload.thinkingLevel);
+            const reasoningEnabled = payload.reasoningEnabled !== false;
             const files = Array.isArray(payload.files) ? payload.files : [];
             const systemPaths = Array.isArray(payload.systemPaths) ? payload.systemPaths : [];
             if (files.length > 0 || systemPaths.length > 0) {
@@ -3020,6 +3058,8 @@
             return {
                 type: 'message',
                 content,
+                thinkingLevel,
+                reasoningEnabled,
                 files: [],
                 systemPaths: []
             };
@@ -3889,6 +3929,169 @@
             }
         }
 
+        function normalizeAgentToolsThinkingMode(mode) {
+            const raw = typeof mode === 'string' ? mode.trim().toLowerCase() : '';
+            if (raw === AT_THINKING_MODE_FAST || raw === 'low' || raw === 'quick') {
+                return AT_THINKING_MODE_FAST;
+            }
+            return AT_THINKING_MODE_THINK;
+        }
+
+        function normalizeAgentToolsThinkingLevel(level) {
+            const raw = typeof level === 'string' ? level.trim().toLowerCase() : '';
+            if (!raw) return 'high';
+            if (raw === 'off' || raw === 'none') return 'off';
+            if (raw === 'low' || raw === 'minimal' || raw === 'fast') return 'low';
+            if (raw === 'medium') return 'medium';
+            if (raw === 'high' || raw === 'think' || raw === 'deep') return 'high';
+            if (raw === 'xhigh' || raw === 'max' || raw === 'ultra') return 'xhigh';
+            return 'high';
+        }
+
+        function getAgentToolsThinkingLevel() {
+            return normalizeAgentToolsThinkingMode(atThinkingMode) === AT_THINKING_MODE_FAST ? 'off' : 'high';
+        }
+
+        function getAgentToolsReasoningEnabled() {
+            return normalizeAgentToolsThinkingMode(atThinkingMode) !== AT_THINKING_MODE_FAST;
+        }
+
+        function normalizeAgentToolsThinkingModeMap(rawMap) {
+            const normalized = {};
+            if (!rawMap || typeof rawMap !== 'object') return normalized;
+            for (const [rawId, rawMode] of Object.entries(rawMap)) {
+                const id = typeof rawId === 'string' ? rawId.trim() : '';
+                if (!id) continue;
+                normalized[id] = normalizeAgentToolsThinkingMode(rawMode);
+            }
+            return normalized;
+        }
+
+        function getAgentToolsThinkingModeContext() {
+            if (currentChannelId) {
+                return { type: 'channel', id: String(currentChannelId).trim() };
+            }
+            if (currentAgentToolId) {
+                return { type: 'agent', id: String(currentAgentToolId).trim() };
+            }
+            return { type: null, id: '' };
+        }
+
+        function resolveAgentToolsThinkingModeForContext(type, id) {
+            const normalizedType = type === 'channel' ? 'channel' : (type === 'agent' ? 'agent' : null);
+            const key = typeof id === 'string' ? id.trim() : '';
+            if (!normalizedType || !key) return AT_THINKING_MODE_THINK;
+            if (normalizedType === 'channel') {
+                return normalizeAgentToolsThinkingMode(atThinkingModeByChannel[key] || AT_THINKING_MODE_THINK);
+            }
+            return normalizeAgentToolsThinkingMode(atThinkingModeByAgent[key] || AT_THINKING_MODE_THINK);
+        }
+
+        function setAgentToolsThinkingModeForContext(type, id, mode) {
+            const normalizedType = type === 'channel' ? 'channel' : (type === 'agent' ? 'agent' : null);
+            const key = typeof id === 'string' ? id.trim() : '';
+            if (!normalizedType || !key) return;
+            const normalizedMode = normalizeAgentToolsThinkingMode(mode);
+            if (normalizedType === 'channel') {
+                atThinkingModeByChannel[key] = normalizedMode;
+            } else {
+                atThinkingModeByAgent[key] = normalizedMode;
+            }
+        }
+
+        function applyAgentToolsThinkingModeForActiveContext() {
+            const ctx = getAgentToolsThinkingModeContext();
+            atThinkingMode = resolveAgentToolsThinkingModeForContext(ctx.type, ctx.id);
+            updateAgentToolsThinkingModeUi();
+        }
+
+        async function fetchAgentToolsThinkingModePreferences(force = false) {
+            if (!force && atThinkingModePrefsLoaded) return;
+            if (!force && atThinkingModePrefsLoadingPromise) return atThinkingModePrefsLoadingPromise;
+            atThinkingModePrefsLoadingPromise = (async () => {
+                const res = await fetch('/api/agent-tools/preferences');
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data || data.success === false) {
+                    throw new Error((data && data.error) || `Failed to load thinking mode preferences (${res.status})`);
+                }
+                const preferences = data.preferences && typeof data.preferences === 'object' ? data.preferences : {};
+                atThinkingModeByAgent = normalizeAgentToolsThinkingModeMap(preferences.agents || preferences.agentThinkingModes || {});
+                atThinkingModeByChannel = normalizeAgentToolsThinkingModeMap(preferences.channels || preferences.channelThinkingModes || {});
+                atThinkingModePrefsLoaded = true;
+            })();
+            try {
+                await atThinkingModePrefsLoadingPromise;
+            } finally {
+                atThinkingModePrefsLoadingPromise = null;
+            }
+        }
+
+        function persistAgentToolsThinkingModePref() {
+            const ctx = getAgentToolsThinkingModeContext();
+            if (!ctx.type || !ctx.id) return;
+            const normalizedMode = normalizeAgentToolsThinkingMode(atThinkingMode);
+            setAgentToolsThinkingModeForContext(ctx.type, ctx.id, normalizedMode);
+            fetch('/api/agent-tools/preferences', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    type: ctx.type,
+                    id: ctx.id,
+                    thinkingMode: normalizedMode
+                })
+            }).then(async (res) => {
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data || data.success === false) {
+                    throw new Error((data && data.error) || `save failed (${res.status})`);
+                }
+                if (data.preferences && typeof data.preferences === 'object') {
+                    atThinkingModeByAgent = normalizeAgentToolsThinkingModeMap(data.preferences.agents || data.preferences.agentThinkingModes || atThinkingModeByAgent);
+                    atThinkingModeByChannel = normalizeAgentToolsThinkingModeMap(data.preferences.channels || data.preferences.channelThinkingModes || atThinkingModeByChannel);
+                    atThinkingModePrefsLoaded = true;
+                }
+            }).catch((e) => {
+                console.warn('[AgentTools] persist thinking mode failed:', e && e.message ? e.message : e);
+            });
+        }
+
+        function loadAgentToolsThinkingModePref() {
+            atThinkingMode = AT_THINKING_MODE_THINK;
+            fetchAgentToolsThinkingModePreferences().then(() => {
+                applyAgentToolsThinkingModeForActiveContext();
+            }).catch((e) => {
+                console.warn('[AgentTools] load thinking mode preferences failed:', e && e.message ? e.message : e);
+            });
+        }
+
+        function updateAgentToolsThinkingModeUi() {
+            const btn = document.getElementById('at-thinking-mode-btn');
+            const icon = document.getElementById('at-thinking-mode-icon');
+            const text = document.getElementById('at-thinking-mode-text');
+            if (!btn || !icon || !text) return;
+            const mode = normalizeAgentToolsThinkingMode(atThinkingMode);
+            const thinkingLevel = getAgentToolsThinkingLevel();
+            const isThink = mode === AT_THINKING_MODE_THINK;
+            btn.setAttribute('aria-pressed', isThink ? 'true' : 'false');
+            btn.title = isThink ? 'Switch to Fast mode' : 'Switch to Think mode';
+            icon.textContent = isThink ? 'psychology' : 'bolt';
+            text.textContent = isThink ? 'Think' : 'Fast';
+            btn.classList.toggle('bg-primary/20', isThink);
+            btn.classList.toggle('text-primary', isThink);
+            btn.classList.toggle('border-primary/40', isThink);
+            btn.classList.toggle('bg-white/5', !isThink);
+            btn.classList.toggle('text-gray-300', !isThink);
+            btn.classList.toggle('border-white/10', !isThink);
+            btn.dataset.thinkingLevel = thinkingLevel;
+        }
+
+        window.toggleAgentToolsThinkingMode = function() {
+            atThinkingMode = normalizeAgentToolsThinkingMode(atThinkingMode) === AT_THINKING_MODE_THINK
+                ? AT_THINKING_MODE_FAST
+                : AT_THINKING_MODE_THINK;
+            persistAgentToolsThinkingModePref();
+            updateAgentToolsThinkingModeUi();
+        };
+
         function updateAgentToolsChannelRuleModeUi() {
             const btn = document.getElementById('at-channel-rule-mode-btn');
             const icon = document.getElementById('at-channel-rule-mode-icon');
@@ -4263,6 +4466,7 @@
                 appRuntimeSettings = settings;
                 atMiniMaxConfigured = !!(typeof settings.minimaxApiKey === 'string' && settings.minimaxApiKey.trim());
                 updateAgentToolsSoundToggleUi();
+                updateAgentToolsThinkingModeUi();
                 updateAgentToolsPersonaRefreshUi();
             } catch (e) {
                 console.error('Failed to refresh sound availability', e);
@@ -4281,6 +4485,7 @@
                 stopAgentToolsAudioPlayback();
             }
             updateAgentToolsSoundToggleUi();
+            updateAgentToolsThinkingModeUi();
         };
 
         window.toggleAgentToolsChannelRuleMode = function() {
@@ -5359,6 +5564,7 @@
                 updateAgentToolsChannelRuleModeUi();
                 updateAgentToolsImmersiveToggleUi();
                 updateAgentToolsSoundToggleUi();
+                updateAgentToolsThinkingModeUi();
                 currentAgentAvatarUrl = null;
                 return;
             }
@@ -5415,6 +5621,7 @@
                 updateAgentToolsPersonaRefreshUi();
                 updateAgentToolsChannelRuleModeUi();
                 updateAgentToolsImmersiveToggleUi();
+                updateAgentToolsThinkingModeUi();
                 return;
             }
 
@@ -5503,6 +5710,7 @@
             updateAgentToolsPersonaRefreshUi();
             updateAgentToolsChannelRuleModeUi();
             updateAgentToolsImmersiveToggleUi();
+            updateAgentToolsThinkingModeUi();
         }
 
         function renderSidebarChannels() {
@@ -7612,6 +7820,14 @@
             if (options.updateHash !== false) {
                 updateAgentToolsHashSelection('agent', agentId);
             }
+            applyAgentToolsThinkingModeForActiveContext();
+            fetchAgentToolsThinkingModePreferences().then(() => {
+                if (!currentChannelId && currentAgentToolId === agentId) {
+                    applyAgentToolsThinkingModeForActiveContext();
+                }
+            }).catch((e) => {
+                console.warn('[AgentTools] sync thinking mode for agent failed:', e && e.message ? e.message : e);
+            });
             setSidebarSelectedAgent(agentId);
             applyAgentToolsLayoutMode();
             atSocket = atSockets.get(agentId) || null;
@@ -7933,6 +8149,14 @@
             if (options.updateHash !== false) {
                 updateAgentToolsHashSelection('channel', channel.id);
             }
+            applyAgentToolsThinkingModeForActiveContext();
+            fetchAgentToolsThinkingModePreferences().then(() => {
+                if (currentChannelId === channel.id && !currentAgentToolId) {
+                    applyAgentToolsThinkingModeForActiveContext();
+                }
+            }).catch((e) => {
+                console.warn('[AgentTools] sync thinking mode for channel failed:', e && e.message ? e.message : e);
+            });
             stopAgentToolsAudioPlayback();
             setSidebarSelectedChannel(channel.id);
             applyAgentToolsLayoutMode();
@@ -9337,8 +9561,63 @@
             return html;
         }
 
+        function splitMarkdownTableCells(rawLine) {
+            let line = String(rawLine || '').trim();
+            if (line.startsWith('|')) line = line.slice(1);
+            if (line.endsWith('|')) line = line.slice(0, -1);
+            return line.split('|').map(cell => cell.trim());
+        }
+
+        function parseMarkdownTableAlignments(rawLine) {
+            const cells = splitMarkdownTableCells(rawLine);
+            if (!cells.length) return null;
+            const alignments = [];
+            for (const rawCell of cells) {
+                const cell = String(rawCell || '').trim();
+                if (!/^:?-{3,}:?$/.test(cell)) return null;
+                if (cell.startsWith(':') && cell.endsWith(':')) {
+                    alignments.push('center');
+                } else if (cell.endsWith(':')) {
+                    alignments.push('right');
+                } else {
+                    alignments.push('left');
+                }
+            }
+            return alignments;
+        }
+
+        function isMarkdownTableCandidateLine(rawLine) {
+            const line = String(rawLine || '').trim();
+            if (!line || !line.includes('|')) return false;
+            if (/^[-*+]\s+/.test(line)) return false;
+            if (/^\d+\.\s+/.test(line)) return false;
+            if (/^>\s?/.test(line)) return false;
+            return line.startsWith('|') || line.endsWith('|');
+        }
+
+        function normalizeMarkdownTableSpacing(rawText) {
+            const lines = String(rawText || '').split('\n');
+            const normalized = [];
+            for (let i = 0; i < lines.length; i += 1) {
+                const line = lines[i];
+                if (String(line || '').trim()) {
+                    normalized.push(line);
+                    continue;
+                }
+                const prev = i > 0 ? String(lines[i - 1] || '').trim() : '';
+                const next = i + 1 < lines.length ? String(lines[i + 1] || '').trim() : '';
+                const betweenTableRows = prev && next
+                    && (isMarkdownTableCandidateLine(prev) || !!parseMarkdownTableAlignments(prev))
+                    && (isMarkdownTableCandidateLine(next) || !!parseMarkdownTableAlignments(next));
+                if (betweenTableRows) continue;
+                normalized.push(line);
+            }
+            return normalized.join('\n');
+        }
+
         function renderMarkdownToHtml(rawText) {
-            const escaped = escapeHtml(String(rawText || '').replace(/\r\n?/g, '\n'));
+            const normalizedSource = normalizeMarkdownTableSpacing(String(rawText || '').replace(/\r\n?/g, '\n'));
+            const escaped = escapeHtml(normalizedSource);
             if (!escaped.trim()) return '';
 
             const blockTokens = [];
@@ -9369,7 +9648,8 @@
                 }
             };
 
-            for (const rawLine of lines) {
+            for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+                const rawLine = lines[lineIdx];
                 const line = String(rawLine || '');
                 const trimmed = line.trim();
                 if (!trimmed) {
@@ -9385,6 +9665,38 @@
                         parts.push(blockTokens[idx]);
                     }
                     continue;
+                }
+
+                const nextTrimmed = lineIdx + 1 < lines.length ? String(lines[lineIdx + 1] || '').trim() : '';
+                if (isMarkdownTableCandidateLine(trimmed) && nextTrimmed) {
+                    const alignments = parseMarkdownTableAlignments(nextTrimmed);
+                    const headerCells = splitMarkdownTableCells(trimmed);
+                    if (alignments && headerCells.length && headerCells.length === alignments.length) {
+                        closeLists();
+                        const headerHtml = headerCells.map((cell, cellIdx) => {
+                            const align = alignments[cellIdx] || 'left';
+                            return `<th style="text-align:${align}">${renderMarkdownInline(cell)}</th>`;
+                        }).join('');
+                        const bodyRows = [];
+                        lineIdx += 2;
+                        while (lineIdx < lines.length) {
+                            const rowTrimmed = String(lines[lineIdx] || '').trim();
+                            if (!rowTrimmed) break;
+                            if (!isMarkdownTableCandidateLine(rowTrimmed)) break;
+                            const rowCells = splitMarkdownTableCells(rowTrimmed);
+                            if (rowCells.length !== headerCells.length) break;
+                            const rowHtml = rowCells.map((cell, cellIdx) => {
+                                const align = alignments[cellIdx] || 'left';
+                                return `<td style="text-align:${align}">${renderMarkdownInline(cell)}</td>`;
+                            }).join('');
+                            bodyRows.push(`<tr>${rowHtml}</tr>`);
+                            lineIdx += 1;
+                        }
+                        lineIdx -= 1;
+                        const tbodyHtml = bodyRows.length ? `<tbody>${bodyRows.join('')}</tbody>` : '';
+                        parts.push(`<div class="md-table-wrap"><table><thead><tr>${headerHtml}</tr></thead>${tbodyHtml}</table></div>`);
+                        continue;
+                    }
                 }
 
                 const headingMatch = /^(#{1,6})\s+(.+)$/.exec(trimmed);
@@ -11472,7 +11784,14 @@
                 return;
             }
 
-            const payload = { type: 'message', content: text, files: [], systemPaths: [] };
+            const payload = {
+                type: 'message',
+                content: text,
+                thinkingLevel: getAgentToolsThinkingLevel(),
+                reasoningEnabled: getAgentToolsReasoningEnabled(),
+                files: [],
+                systemPaths: []
+            };
             if (atPendingFiles.length > 0) {
                 beginAttachmentUpload('Uploading attachments...');
                 try {
@@ -11703,6 +12022,7 @@
             loadAgentToolsSoundPref();
             loadAgentToolsChannelRuleModePref();
             loadAgentToolsImmersivePref();
+            loadAgentToolsThinkingModePref();
             loadAgentToolsRuntimeStatusPref();
             loadSentInputHistoryStore();
             loadApprovalAlwaysAgentsStore();
@@ -11740,6 +12060,7 @@
             setAttachmentUploadIndicator(false);
             updateAgentToolsImmersiveToggleUi();
             updateAgentToolsChannelRuleModeUi();
+            updateAgentToolsThinkingModeUi();
             updateAgentToolsClipDemoButtonUi();
             initClipDemoPreviewImage();
             updateSidebarBusyIndicators();
@@ -12307,6 +12628,15 @@
                                      class="hidden inline-flex items-center gap-2 h-9 px-4 rounded-full border bg-primary/20 text-primary border-primary/40 hover:bg-primary/25 transition-colors">
                                  <span id="at-channel-rule-mode-icon" class="material-icons-round text-[18px]">rule</span>
                                  <span id="at-channel-rule-mode-text" class="text-sm font-medium">Rule On</span>
+                             </button>
+                             <button id="at-thinking-mode-btn"
+                                     type="button"
+                                     onclick="toggleAgentToolsThinkingMode()"
+                                     aria-pressed="true"
+                                     title="Switch to Fast mode"
+                                     class="inline-flex items-center gap-2 h-9 px-4 rounded-full border bg-primary/20 text-primary border-primary/40 hover:bg-primary/25 transition-colors">
+                                 <span id="at-thinking-mode-icon" class="material-icons-round text-[18px]">psychology</span>
+                                 <span id="at-thinking-mode-text" class="text-sm font-medium">Think</span>
                              </button>
                              <button id="at-persona-refresh-btn"
                                      type="button"

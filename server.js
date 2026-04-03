@@ -48,6 +48,100 @@ const MINIMAX_TASK_CONTINUE_HISTORY_LIMIT = 10000;
 const MINIMAX_RECOMMENDED_RPM_BUDGET = 22;
 let wsConnectionSeq = 0;
 
+const AGENT_TOOLS_PREFS_PATH = process.env.MECO_AGENT_TOOLS_PREFS_PATH
+  ? path.resolve(String(process.env.MECO_AGENT_TOOLS_PREFS_PATH))
+  : path.join(appSettings.SETTINGS_DIR || path.join(os.homedir(), '.meco-studio'), 'agent-tools-preferences.json');
+
+function normalizeThinkingModeValue(value, fallback = 'think') {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!raw) return fallback;
+  if (raw === 'fast' || raw === 'low' || raw === 'quick') return 'fast';
+  if (raw === 'think' || raw === 'high' || raw === 'deep') return 'think';
+  return fallback;
+}
+
+function normalizeThinkingModeMap(rawMap) {
+  const next = {};
+  if (!rawMap || typeof rawMap !== 'object') return next;
+  for (const [rawId, rawMode] of Object.entries(rawMap)) {
+    const id = typeof rawId === 'string' ? rawId.trim() : '';
+    if (!id) continue;
+    next[id] = normalizeThinkingModeValue(rawMode, 'think');
+  }
+  return next;
+}
+
+function normalizeThinkingContextType(value) {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === 'agent' || raw === 'channel') return raw;
+  return '';
+}
+
+function normalizeThinkingContextId(value) {
+  const id = typeof value === 'string' ? value.trim() : '';
+  if (!id) return '';
+  return id.slice(0, 256);
+}
+
+function readAgentToolsThinkingModePreferences() {
+  const fallback = {
+    version: 1,
+    updatedAt: '',
+    agentThinkingModes: {},
+    channelThinkingModes: {}
+  };
+  try {
+    if (!fs.existsSync(AGENT_TOOLS_PREFS_PATH)) return fallback;
+    const raw = fs.readFileSync(AGENT_TOOLS_PREFS_PATH, 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    if (!parsed || typeof parsed !== 'object') return fallback;
+    return {
+      version: 1,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+      agentThinkingModes: normalizeThinkingModeMap(parsed.agentThinkingModes || parsed.agents || {}),
+      channelThinkingModes: normalizeThinkingModeMap(parsed.channelThinkingModes || parsed.channels || {})
+    };
+  } catch (e) {
+    console.warn(`[AgentTools] Failed to read thinking mode prefs: ${e.message}`);
+    return fallback;
+  }
+}
+
+function writeAgentToolsThinkingModePreferences(nextPrefs) {
+  const normalized = {
+    version: 1,
+    updatedAt: typeof nextPrefs?.updatedAt === 'string' && nextPrefs.updatedAt ? nextPrefs.updatedAt : new Date().toISOString(),
+    agentThinkingModes: normalizeThinkingModeMap(nextPrefs?.agentThinkingModes || nextPrefs?.agents || {}),
+    channelThinkingModes: normalizeThinkingModeMap(nextPrefs?.channelThinkingModes || nextPrefs?.channels || {})
+  };
+  fs.mkdirSync(path.dirname(AGENT_TOOLS_PREFS_PATH), { recursive: true });
+  fs.writeFileSync(AGENT_TOOLS_PREFS_PATH, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
+  return normalized;
+}
+
+function setAgentToolsThinkingModePreference({ type, id, thinkingMode }) {
+  const normalizedType = normalizeThinkingContextType(type);
+  const normalizedId = normalizeThinkingContextId(id);
+  if (!normalizedType || !normalizedId) {
+    throw new Error('type/id invalid');
+  }
+  const mode = normalizeThinkingModeValue(thinkingMode, 'think');
+  const current = readAgentToolsThinkingModePreferences();
+  if (normalizedType === 'agent') {
+    current.agentThinkingModes[normalizedId] = mode;
+  } else {
+    current.channelThinkingModes[normalizedId] = mode;
+  }
+  current.updatedAt = new Date().toISOString();
+  const saved = writeAgentToolsThinkingModePreferences(current);
+  return {
+    type: normalizedType,
+    id: normalizedId,
+    thinkingMode: mode,
+    preferences: saved
+  };
+}
+
 const minimaxTaskContinueQueue = [];
 const minimaxTaskContinueSentHistory = [];
 let minimaxTaskContinueTimer = null;
@@ -410,6 +504,31 @@ function normalizeSseTextValue(value) {
     if (typeof value.output_text === 'string') return value.output_text;
   }
   return '';
+}
+
+function normalizeThinkingLevel(value, fallback = 'high') {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (!raw) return fallback;
+  if (raw === 'off' || raw === 'none') return 'off';
+  if (raw === 'low' || raw === 'minimal' || raw === 'fast') return 'low';
+  if (raw === 'medium') return 'medium';
+  if (raw === 'high' || raw === 'think' || raw === 'deep') return 'high';
+  if (raw === 'xhigh' || raw === 'max' || raw === 'ultra') return 'xhigh';
+  return fallback;
+}
+
+function normalizeReasoningEnabled(value, thinkingLevel = 'high') {
+  const level = normalizeThinkingLevel(thinkingLevel, 'high');
+  const defaultEnabled = !(level === 'low' || level === 'off');
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const raw = value.trim().toLowerCase();
+    if (!raw) return defaultEnabled;
+    if (raw === '0' || raw === 'false' || raw === 'off' || raw === 'no' || raw === 'disabled') return false;
+    if (raw === '1' || raw === 'true' || raw === 'on' || raw === 'yes' || raw === 'enabled') return true;
+  }
+  return defaultEnabled;
 }
 
 function extractSseContentDelta(parsed) {
@@ -876,7 +995,9 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
     const stableUser = typeof options.user === 'string' && options.user.trim()
       ? options.user.trim()
       : normalizedSessionKey;
+    const gatewayThinkingLevel = normalizeThinkingLevel(options.thinkingLevel, '');
 
+    const gatewayReasoningEnabled = options.reasoningEnabled !== false;
     const response = await fetch(gatewayUrl, {
       method: 'POST',
       headers,
@@ -884,8 +1005,9 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
         model: options.model || defaultModel,
         messages: outboundMessages,
         stream: true,
+        ...(gatewayThinkingLevel ? { thinking: gatewayThinkingLevel } : {}),
         ...(stableUser ? { user: stableUser } : {}),
-        ...(options.reasoningEnabled ? { reasoning: { enabled: true } } : {})
+        reasoning: { enabled: gatewayReasoningEnabled }
       }),
       signal: controller.signal
     });
@@ -15097,6 +15219,59 @@ app.get('/api/agent-tools/status', (req, res) => {
   res.json(buildAgentToolsStatusSnapshot());
 });
 
+app.get('/api/agent-tools/preferences', (req, res) => {
+  try {
+    const preferences = readAgentToolsThinkingModePreferences();
+    const type = normalizeThinkingContextType(req.query?.type);
+    const id = normalizeThinkingContextId(req.query?.id);
+    let thinkingMode = 'think';
+    if (type && id) {
+      if (type === 'agent') {
+        thinkingMode = normalizeThinkingModeValue(preferences.agentThinkingModes[id], 'think');
+      } else {
+        thinkingMode = normalizeThinkingModeValue(preferences.channelThinkingModes[id], 'think');
+      }
+    }
+    res.json({
+      success: true,
+      defaultThinkingMode: 'think',
+      thinkingMode,
+      preferences: {
+        agents: preferences.agentThinkingModes,
+        channels: preferences.channelThinkingModes
+      },
+      updatedAt: preferences.updatedAt || ''
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || 'failed to load preferences' });
+  }
+});
+
+app.put('/api/agent-tools/preferences', (req, res) => {
+  try {
+    const type = normalizeThinkingContextType(req.body?.type);
+    const id = normalizeThinkingContextId(req.body?.id);
+    const thinkingMode = normalizeThinkingModeValue(req.body?.thinkingMode, 'think');
+    if (!type || !id) {
+      return res.status(400).json({ success: false, error: 'type and id are required' });
+    }
+    const saved = setAgentToolsThinkingModePreference({ type, id, thinkingMode });
+    res.json({
+      success: true,
+      type: saved.type,
+      id: saved.id,
+      thinkingMode: saved.thinkingMode,
+      preferences: {
+        agents: saved.preferences.agentThinkingModes,
+        channels: saved.preferences.channelThinkingModes
+      },
+      updatedAt: saved.preferences.updatedAt || ''
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message || 'failed to save preferences' });
+  }
+});
+
 // Get Agent Details
 app.get('/api/agents/:id', (req, res) => {
     const { id } = req.params;
@@ -15904,6 +16079,8 @@ wss.on('connection', (ws, req) => {
           }
           const channelMembers = Array.isArray(activeChannel.agentIds) ? activeChannel.agentIds : [];
           const channelRuleMode = data.channelRuleMode !== false;
+          const thinkingLevel = normalizeThinkingLevel(data.thinkingLevel, 'high');
+          const reasoningEnabled = normalizeReasoningEnabled(data.reasoningEnabled, thinkingLevel);
           const routingText = typeof userText === 'string' ? userText : '';
           let designatedByNextMembers = [];
           let designatedByMentionMembers = [];
@@ -16130,7 +16307,7 @@ wss.on('connection', (ws, req) => {
                       emitExecutionEvent({
                           code: 'gateway_http',
                           label: '执行通道',
-                          detail: 'Gateway HTTP SSE（reasoning enabled）'
+                          detail: `Gateway HTTP SSE（reasoning ${reasoningEnabled ? 'enabled' : 'disabled'}）`
                       });
                       const controller = new AbortController();
                       ws._agentChannelStreamHandle = { abort: () => controller.abort() };
@@ -16152,7 +16329,8 @@ wss.on('connection', (ws, req) => {
                               model: `openclaw:${safeAgentId}`,
                               gatewayAgentId: safeAgentId,
                               sessionKey: channelSessionKey,
-                              reasoningEnabled: true
+                              thinkingLevel,
+                              reasoningEnabled
                           }
                       );
                       return;
@@ -16162,19 +16340,22 @@ wss.on('connection', (ws, req) => {
                       emitExecutionEvent({
                           code: 'cli_local',
                           label: '执行通道',
-                          detail: 'OpenClaw CLI 本地流式（thinking=high）'
+                          detail: `OpenClaw CLI 本地流式（thinking=${thinkingLevel || 'off'}）`
                       });
+                      const channelStreamOptions = {
+                          emitCliProgressEvents: true,
+                          sessionId: channelSessionKey
+                      };
+                      if (thinkingLevel) {
+                          channelStreamOptions.thinking = thinkingLevel;
+                      }
                       ws._agentChannelStreamHandle = openclaw.sendMessageStream(
                           safeAgentId,
                           inputText,
                           onChunk,
                           onDone,
                           onError,
-                          {
-                              thinking: 'high',
-                              emitCliProgressEvents: true,
-                              sessionId: channelSessionKey
-                          }
+                          channelStreamOptions
                       );
                   };
                   const canFallbackToChannelCli = () => {
@@ -16186,7 +16367,7 @@ wss.on('connection', (ws, req) => {
                   emitExecutionEvent({
                       code: 'gateway_http',
                       label: '执行通道',
-                      detail: 'Gateway Agent SSE（reasoning enabled）'
+                      detail: `Gateway Agent SSE（reasoning ${reasoningEnabled ? 'enabled' : 'disabled'}）`
                   });
                   const controller = new AbortController();
                   ws._agentChannelStreamHandle = { abort: () => controller.abort() };
@@ -16222,7 +16403,8 @@ wss.on('connection', (ws, req) => {
                           model: `openclaw:${safeAgentId}`,
                           gatewayAgentId: safeAgentId,
                           sessionKey: channelSessionKey,
-                          reasoningEnabled: true
+                          thinkingLevel,
+                          reasoningEnabled
                       }
                   );
               });
@@ -16276,6 +16458,11 @@ wss.on('connection', (ws, req) => {
                       detail: `默认执行当前频道成员: ${channelMembers.join(', ')}`
                   });
               }
+              executionPreface.push({
+                  code: 'thinking_level',
+                  label: '思考等级',
+                  detail: `thinking=${thinkingLevel || 'off'}`
+              });
               if (requiredHandoffTargetNames.length > 0) {
                   executionPreface.push({
                       code: 'handoff_guard',
@@ -16515,7 +16702,8 @@ wss.on('connection', (ws, req) => {
                   let fullReasoning = '';
                   let hasStartedStreaming = false;
                   let hasModelStreaming = false;
-                  const thinkingLevel = (typeof data.thinkingLevel === 'string' && data.thinkingLevel.trim()) ? data.thinkingLevel.trim() : 'high';
+                  const thinkingLevel = normalizeThinkingLevel(data.thinkingLevel, 'high');
+                  const reasoningEnabled = normalizeReasoningEnabled(data.reasoningEnabled, thinkingLevel);
                   const primaryExecutionEvents = [];
                   const emitPrimaryExecutionEvent = (payload) => {
                       const normalized = normalizeExecutionEventItem({
@@ -16575,7 +16763,7 @@ wss.on('connection', (ws, req) => {
                   ws._agentToolsBusyMarked = true;
 
                   const streamOptions = {};
-                  if (thinkingLevel && thinkingLevel !== 'off') {
+                  if (thinkingLevel) {
                       streamOptions.thinking = thinkingLevel;
                   }
                   streamOptions.emitCliProgressEvents = true;
@@ -16702,19 +16890,22 @@ wss.on('connection', (ws, req) => {
                           emitRelayExecution({
                               code: 'cli_local',
                               label: '执行通道',
-                              detail: 'OpenClaw CLI 本地流式（thinking=high）'
+                              detail: `OpenClaw CLI 本地流式（thinking=${thinkingLevel || 'off'}）`
                           });
+                          const relayStreamOptions = {
+                              emitCliProgressEvents: true,
+                              sessionId: relaySessionKey
+                          };
+                          if (thinkingLevel) {
+                              relayStreamOptions.thinking = thinkingLevel;
+                          }
                           ws._agentToolsStreamHandle = openclaw.sendMessageStream(
                               targetId,
                               relayInput,
                               onRelayChunk,
                               onRelayDone,
                               onRelayError,
-                              {
-                                  thinking: 'high',
-                                  emitCliProgressEvents: true,
-                                  sessionId: relaySessionKey
-                              }
+                              relayStreamOptions
                           );
                           runtime.streamHandle = ws._agentToolsStreamHandle;
                       };
@@ -16877,7 +17068,7 @@ wss.on('connection', (ws, req) => {
                           emitRelayExecution({
                               code: 'gateway_http',
                               label: '执行通道',
-                              detail: 'Gateway Agent SSE（reasoning enabled）'
+                              detail: `Gateway Agent SSE（reasoning ${reasoningEnabled ? 'enabled' : 'disabled'}）`
                           });
                           const controller = new AbortController();
                           ws._agentToolsStreamHandle = { abort: () => controller.abort() };
@@ -16914,7 +17105,8 @@ wss.on('connection', (ws, req) => {
                                   model: `openclaw:${targetId}`,
                                   gatewayAgentId: targetId,
                                   sessionKey: relaySessionKey,
-                                  reasoningEnabled: true
+                                  thinkingLevel,
+                                  reasoningEnabled
                               }
                           );
                       });
@@ -17177,7 +17369,7 @@ wss.on('connection', (ws, req) => {
                       emitPrimaryExecutionEvent({
                           code: 'gateway_http',
                           label: '执行通道',
-                          detail: 'Gateway HTTP SSE（reasoning enabled）'
+                          detail: `Gateway HTTP SSE（reasoning ${reasoningEnabled ? 'enabled' : 'disabled'}）`
                       });
                       const controller = new AbortController();
                       ws._agentToolsStreamHandle = { abort: () => controller.abort() };
@@ -17200,7 +17392,8 @@ wss.on('connection', (ws, req) => {
                               model: `openclaw:${agentId}`,
                               gatewayAgentId: agentId,
                               sessionKey: `agent:${agentId}:main`,
-                              reasoningEnabled: true
+                              thinkingLevel,
+                              reasoningEnabled
                           }
                       );
                   } else {
@@ -17234,7 +17427,7 @@ wss.on('connection', (ws, req) => {
                       emitPrimaryExecutionEvent({
                           code: 'gateway_http',
                           label: '执行通道',
-                          detail: 'Gateway Agent SSE（reasoning enabled）'
+                          detail: `Gateway Agent SSE（reasoning ${reasoningEnabled ? 'enabled' : 'disabled'}）`
                       });
                       const controller = new AbortController();
                       ws._agentToolsStreamHandle = { abort: () => controller.abort() };
@@ -17271,7 +17464,8 @@ wss.on('connection', (ws, req) => {
                               model: `openclaw:${agentId}`,
                               gatewayAgentId: agentId,
                               sessionKey: primarySessionKey,
-                              reasoningEnabled: true
+                              thinkingLevel,
+                              reasoningEnabled
                           }
                       );
                   }
