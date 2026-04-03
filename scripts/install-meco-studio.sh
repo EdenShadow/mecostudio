@@ -312,8 +312,81 @@ detect_installed_openclaw_version() {
   printf '%s\n' "$version"
 }
 
+resolve_realpath_safe() {
+  local target="$1"
+  [[ -n "$target" ]] || return 1
+  node - "$target" <<'NODE'
+const fs = require('fs');
+const p = String(process.argv[2] || '');
+if (!p) process.exit(1);
+try {
+  process.stdout.write(fs.realpathSync(p));
+} catch (_) {
+  process.exit(1);
+}
+NODE
+}
+
+get_npm_global_bin_dir() {
+  local npm_root
+  npm_root="$(npm root -g 2>/dev/null || true)"
+  [[ -n "$npm_root" ]] || return 0
+  printf '%s\n' "$(cd "$npm_root/.." 2>/dev/null && pwd -P || true)/bin"
+}
+
+prefer_npm_global_openclaw_command() {
+  local npm_bin
+  npm_bin="$(get_npm_global_bin_dir)"
+  if [[ -n "$npm_bin" && -x "$npm_bin/openclaw" ]]; then
+    if [[ ":$PATH:" != *":$npm_bin:"* ]]; then
+      export PATH="$npm_bin:$PATH"
+    fi
+    hash -r || true
+  fi
+}
+
+detect_openclaw_package_dir_from_bin() {
+  local openclaw_bin="$1"
+  local resolved candidate base_dir
+  [[ -n "$openclaw_bin" ]] || return 1
+
+  resolved="$(resolve_realpath_safe "$openclaw_bin" 2>/dev/null || true)"
+  if [[ -z "$resolved" ]]; then
+    resolved="$openclaw_bin"
+  fi
+
+  base_dir="$(cd "$(dirname "$resolved")" 2>/dev/null && pwd -P || true)"
+  [[ -n "$base_dir" ]] || return 1
+
+  for candidate in \
+    "$base_dir/../lib/node_modules/openclaw" \
+    "$base_dir/../../lib/node_modules/openclaw" \
+    "$base_dir/../libexec/lib/node_modules/openclaw"; do
+    candidate="$(cd "$candidate" 2>/dev/null && pwd -P || true)"
+    if [[ -n "$candidate" && -f "$candidate/package.json" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+detect_openclaw_command_package_dir() {
+  local openclaw_bin
+  openclaw_bin="$(command -v openclaw 2>/dev/null || true)"
+  [[ -n "$openclaw_bin" ]] || return 1
+  detect_openclaw_package_dir_from_bin "$openclaw_bin"
+}
+
 detect_openclaw_package_dir() {
-  local npm_root candidate openclaw_bin
+  local npm_root candidate openclaw_bin command_package_dir
+
+  command_package_dir="$(detect_openclaw_command_package_dir 2>/dev/null || true)"
+  if [[ -n "$command_package_dir" ]]; then
+    printf '%s\n' "$command_package_dir"
+    return 0
+  fi
 
   npm_root="$(npm root -g 2>/dev/null || true)"
   if [[ -n "$npm_root" ]]; then
@@ -326,8 +399,8 @@ detect_openclaw_package_dir() {
 
   openclaw_bin="$(command -v openclaw 2>/dev/null || true)"
   if [[ -n "$openclaw_bin" ]]; then
-    candidate="$(cd "$(dirname "$openclaw_bin")/../lib/node_modules/openclaw" 2>/dev/null && pwd -P || true)"
-    if [[ -n "$candidate" && -f "$candidate/package.json" ]]; then
+    candidate="$(detect_openclaw_package_dir_from_bin "$openclaw_bin" 2>/dev/null || true)"
+    if [[ -n "$candidate" ]]; then
       printf '%s\n' "$candidate"
       return 0
     fi
@@ -337,7 +410,7 @@ detect_openclaw_package_dir() {
 }
 
 verify_openclaw_install_health() {
-  local package_dir dist_dir
+  local package_dir dist_dir runtime_file
   command -v openclaw >/dev/null 2>&1 || return 1
   openclaw --version >/dev/null 2>&1 || return 1
 
@@ -347,9 +420,11 @@ verify_openclaw_install_health() {
 
   dist_dir="$package_dir/dist"
   [[ -d "$dist_dir" ]] || return 1
+  [[ -f "$dist_dir/index.js" ]] || return 1
 
   # 关键完整性检查：避免缺少 pi-tools runtime 导致 run/tool 调用崩溃。
-  if ! compgen -G "$dist_dir/pi-tools.before-tool-call.runtime-*.js" >/dev/null 2>&1; then
+  runtime_file="$(compgen -G "$dist_dir/pi-tools.before-tool-call.runtime-*.js" | head -n 1 || true)"
+  if [[ -z "$runtime_file" || ! -f "$runtime_file" ]]; then
     return 1
   fi
 
@@ -388,6 +463,7 @@ ensure_openclaw() {
     if (( should_upgrade == 1 )); then
       log "Updating OpenClaw to latest ($reason)..."
       npm install -g openclaw@latest >/dev/null
+      prefer_npm_global_openclaw_command
     else
       if [[ -n "$required_version" && -n "$installed_version" ]]; then
         log "OpenClaw already installed ($installed_version), meets required minimum ($required_version), skip upgrade"
@@ -398,8 +474,11 @@ ensure_openclaw() {
   else
     log "OpenClaw not found, installing..."
     npm install -g openclaw@latest >/dev/null
+    prefer_npm_global_openclaw_command
   fi
+  prefer_npm_global_openclaw_command
   command -v openclaw >/dev/null 2>&1 || die "openclaw install failed"
+  log "OpenClaw command path: $(command -v openclaw)"
   final_version="$(detect_installed_openclaw_version)"
   if [[ -n "$final_version" ]]; then
     log "OpenClaw version in use: $final_version"
@@ -408,7 +487,9 @@ ensure_openclaw() {
   if ! verify_openclaw_install_health; then
     warn "OpenClaw health check failed (possible corrupted/missing internal modules), attempting self-heal reinstall"
     reinstall_openclaw_clean || die "openclaw reinstall failed during self-heal"
+    prefer_npm_global_openclaw_command
     command -v openclaw >/dev/null 2>&1 || die "openclaw install failed after self-heal"
+    log "OpenClaw command path after self-heal: $(command -v openclaw)"
     final_version="$(detect_installed_openclaw_version)"
     if [[ -n "$final_version" ]]; then
       log "OpenClaw version after self-heal: $final_version"
@@ -1445,22 +1526,75 @@ restart_openclaw_if_update() {
     fi
   fi
 
-  if command -v curl >/dev/null 2>&1; then
-    local probe_url
-    probe_url="http://127.0.0.1:${gateway_port}/v1/chat/completions"
-    local i=1
-    local status_code=""
-    while (( i <= MECO_HEALTHCHECK_RETRIES )); do
-      status_code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' --data '{}' "$probe_url" || true)"
-      if [[ "$status_code" != "000" && "$status_code" != "404" ]]; then
-        log "OpenClaw gateway endpoint ready: $probe_url (status=$status_code)"
+  local i=1
+  local probe_ok=0
+  while (( i <= MECO_HEALTHCHECK_RETRIES )); do
+    if openclaw gateway probe --json 2>/dev/null | node -e '
+      const fs = require("fs");
+      const text = fs.readFileSync(0, "utf8");
+      const firstJson = (() => {
+        for (let start = 0; start < text.length; start++) {
+          const ch = text[start];
+          if (ch !== "{" && ch !== "[") continue;
+          let depth = 0;
+          let inString = false;
+          let escaped = false;
+          for (let i = start; i < text.length; i++) {
+            const c = text[i];
+            if (inString) {
+              if (escaped) escaped = false;
+              else if (c === "\\\\") escaped = true;
+              else if (c === "\"") inString = false;
+              continue;
+            }
+            if (c === "\"") { inString = true; continue; }
+            if (c === "{" || c === "[") depth++;
+            if (c === "}" || c === "]") {
+              depth--;
+              if (depth === 0) {
+                const candidate = text.slice(start, i + 1);
+                try {
+                  return JSON.parse(candidate);
+                } catch (_) {
+                  break;
+                }
+              }
+            }
+          }
+        }
+        return null;
+      })();
+
+      if (!firstJson || typeof firstJson !== "object") process.exit(1);
+      const targets = Array.isArray(firstJson.targets) ? firstJson.targets : [];
+      const active = targets.find((t) => t && t.active) || targets[0] || null;
+      const connect = active && active.connect && typeof active.connect === "object" ? active.connect : null;
+      const ok = !!(firstJson.ok === true && connect && connect.ok === true && connect.rpcOk === true);
+      process.exit(ok ? 0 : 1);
+    '; then
+      probe_ok=1
+      break
+    fi
+    sleep "$MECO_HEALTHCHECK_INTERVAL_SEC"
+    i=$((i + 1))
+  done
+
+  if (( probe_ok == 1 )); then
+    log "OpenClaw gateway probe ready: ws://127.0.0.1:${gateway_port}"
+    return 0
+  fi
+
+  warn "OpenClaw gateway probe failed after retries; attempting one self-heal reinstall + restart"
+  if reinstall_openclaw_clean >/dev/null 2>&1; then
+    prefer_npm_global_openclaw_command
+    if openclaw gateway restart >/dev/null 2>&1 || openclaw gateway start >/dev/null 2>&1; then
+      if openclaw gateway probe --json >/dev/null 2>&1; then
+        log "OpenClaw gateway recovered after self-heal reinstall"
         return 0
       fi
-      sleep "$MECO_HEALTHCHECK_INTERVAL_SEC"
-      i=$((i + 1))
-    done
-    warn "OpenClaw gateway endpoint /v1/chat/completions not ready (url=$probe_url, last_status=${status_code:-unknown})"
+    fi
   fi
+  warn "OpenClaw gateway still unhealthy; check 'openclaw gateway probe' and reinstall OpenClaw manually if needed"
 }
 
 sync_local_version_marker() {

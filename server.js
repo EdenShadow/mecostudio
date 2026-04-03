@@ -3806,9 +3806,11 @@ function generateChannelId() {
 
 const UPDATE_STATE_DIR = path.join(os.homedir(), '.meco-studio');
 const UPDATE_STATE_PATH = path.join(UPDATE_STATE_DIR, 'update-state.json');
+const OPENCLAW_RESTART_STATE_PATH = path.join(UPDATE_STATE_DIR, 'openclaw-restart-state.json');
 const UPDATE_REMOTE_VERSION_URL = process.env.MECO_UPDATE_VERSION_URL || 'https://raw.githubusercontent.com/EdenShadow/mecostudio/main/VERSION';
 const UPDATE_REMOTE_CACHE_TTL_MS = 30000;
 const UPDATE_DEFAULT_LOG_LIMIT = 240;
+const OPENCLAW_RESTART_DEFAULT_LOG_LIMIT = 240;
 const UPDATE_MAX_LOG_LINES = 2000;
 const updateVersionCache = {
   checkedAt: 0,
@@ -3995,6 +3997,72 @@ function isUpdateTaskRunning(taskState) {
   return status === 'starting' || status === 'running';
 }
 
+function baseOpenclawRestartTaskState() {
+  return {
+    taskId: '',
+    status: 'idle',
+    phase: '',
+    startedAt: '',
+    finishedAt: '',
+    workerPid: 0,
+    error: '',
+    logs: []
+  };
+}
+
+function readOpenclawRestartTaskState() {
+  const base = baseOpenclawRestartTaskState();
+  try {
+    if (!fs.existsSync(OPENCLAW_RESTART_STATE_PATH)) return base;
+    const raw = JSON.parse(fs.readFileSync(OPENCLAW_RESTART_STATE_PATH, 'utf-8'));
+    if (!raw || typeof raw !== 'object') return base;
+    const next = { ...base, ...raw };
+    if (!Array.isArray(next.logs)) next.logs = [];
+    next.logs = next.logs.slice(-UPDATE_MAX_LOG_LINES);
+    return next;
+  } catch (e) {
+    console.warn(`[OpenClawRestart] failed to read ${OPENCLAW_RESTART_STATE_PATH}: ${e.message}`);
+    return base;
+  }
+}
+
+function writeOpenclawRestartTaskState(partial = {}) {
+  const current = readOpenclawRestartTaskState();
+  const merged = { ...current, ...partial };
+  if (!Array.isArray(merged.logs)) merged.logs = [];
+  merged.logs = merged.logs.slice(-UPDATE_MAX_LOG_LINES);
+  try {
+    fs.mkdirSync(UPDATE_STATE_DIR, { recursive: true });
+    fs.writeFileSync(OPENCLAW_RESTART_STATE_PATH, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+  } catch (e) {
+    console.warn(`[OpenClawRestart] failed to write ${OPENCLAW_RESTART_STATE_PATH}: ${e.message}`);
+  }
+  return merged;
+}
+
+function buildOpenclawRestartTaskPublicState(taskState, logLimit = OPENCLAW_RESTART_DEFAULT_LOG_LIMIT) {
+  const state = taskState && typeof taskState === 'object' ? taskState : baseOpenclawRestartTaskState();
+  const limit = Number.isFinite(Number(logLimit)) ? Math.max(0, Math.min(1000, Number(logLimit))) : OPENCLAW_RESTART_DEFAULT_LOG_LIMIT;
+  const logs = Array.isArray(state.logs) ? state.logs.slice(-limit) : [];
+  const running = state.status === 'running' || state.status === 'starting';
+  return {
+    taskId: state.taskId || '',
+    status: state.status || 'idle',
+    running,
+    phase: state.phase || '',
+    startedAt: state.startedAt || '',
+    finishedAt: state.finishedAt || '',
+    workerPid: Number(state.workerPid) || 0,
+    error: state.error || '',
+    logs
+  };
+}
+
+function isOpenclawRestartTaskRunning(taskState) {
+  const status = String(taskState?.status || '');
+  return status === 'starting' || status === 'running';
+}
+
 function startDetachedUpdateWorker({ taskId, localVersion, targetVersion, remoteVersionUrl }) {
   const workerPath = path.join(__dirname, 'scripts', 'run-update-worker.js');
   if (!fs.existsSync(workerPath)) {
@@ -4016,6 +4084,30 @@ function startDetachedUpdateWorker({ taskId, localVersion, targetVersion, remote
       MECO_UPDATE_TARGET_VERSION: String(targetVersion || ''),
       MECO_UPDATE_REMOTE_VERSION_URL: String(remoteVersionUrl || UPDATE_REMOTE_VERSION_URL),
       MECO_UPDATE_KIMI_CMD: String(kimiCommand || runtime.kimiCliCommand || 'kimi')
+    }
+  });
+  child.unref();
+  return child.pid;
+}
+
+function startDetachedOpenclawRestartWorker({ taskId }) {
+  const workerPath = path.join(__dirname, 'scripts', 'run-openclaw-restart-worker.js');
+  if (!fs.existsSync(workerPath)) {
+    throw new Error(`openclaw restart worker script not found: ${workerPath}`);
+  }
+  const runtime = getRuntimeSettings();
+  const kimiCommand = runtime.kimiCliCommand || 'kimi';
+  const { spawn } = require('child_process');
+  const child = spawn(process.execPath, [workerPath], {
+    cwd: __dirname,
+    detached: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      MECO_OC_RESTART_TASK_ID: String(taskId || ''),
+      MECO_OC_RESTART_STATE_PATH: OPENCLAW_RESTART_STATE_PATH,
+      MECO_OC_RESTART_REPO_DIR: __dirname,
+      MECO_OC_RESTART_KIMI_CMD: String(kimiCommand || 'kimi')
     }
   });
   child.unref();
@@ -4146,6 +4238,100 @@ app.post('/api/update/start', async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ success: false, error: e.message || 'update start failed' });
+  }
+});
+
+app.get('/api/openclaw/restart/status', (req, res) => {
+  try {
+    const logLimit = Number(req.query?.logLimit || OPENCLAW_RESTART_DEFAULT_LOG_LIMIT);
+    const taskState = readOpenclawRestartTaskState();
+    return res.json({
+      success: true,
+      task: buildOpenclawRestartTaskPublicState(taskState, logLimit)
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message || 'openclaw restart status failed' });
+  }
+});
+
+app.post('/api/openclaw/restart/start', (req, res) => {
+  try {
+    const updateTaskState = readUpdateTaskState();
+    if (isUpdateTaskRunning(updateTaskState)) {
+      return res.status(409).json({
+        success: false,
+        error: 'update task is running, please retry later',
+        updateTask: buildUpdateTaskPublicState(updateTaskState)
+      });
+    }
+
+    const currentTaskState = readOpenclawRestartTaskState();
+    if (isOpenclawRestartTaskRunning(currentTaskState)) {
+      return res.status(409).json({
+        success: false,
+        error: 'openclaw restart already running',
+        task: buildOpenclawRestartTaskPublicState(currentTaskState)
+      });
+    }
+
+    const taskId = `oc_restart_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const startTime = new Date().toISOString();
+    const nextState = writeOpenclawRestartTaskState({
+      taskId,
+      status: 'starting',
+      phase: 'queued',
+      startedAt: startTime,
+      finishedAt: '',
+      workerPid: 0,
+      error: '',
+      logs: [
+        {
+          ts: startTime,
+          level: 'info',
+          text: 'OpenClaw restart queued'
+        }
+      ]
+    });
+
+    let workerPid = 0;
+    try {
+      workerPid = startDetachedOpenclawRestartWorker({ taskId });
+      writeOpenclawRestartTaskState({
+        taskId,
+        status: 'running',
+        phase: 'worker_started',
+        workerPid
+      });
+    } catch (workerErr) {
+      const failed = writeOpenclawRestartTaskState({
+        taskId,
+        status: 'failed',
+        phase: 'worker_failed',
+        finishedAt: new Date().toISOString(),
+        error: workerErr.message || 'failed to start openclaw restart worker',
+        logs: [
+          ...(Array.isArray(nextState.logs) ? nextState.logs : []),
+          {
+            ts: new Date().toISOString(),
+            level: 'error',
+            text: `Failed to launch openclaw restart worker: ${workerErr.message || 'unknown error'}`
+          }
+        ]
+      });
+      return res.status(500).json({
+        success: false,
+        error: failed.error || 'failed to launch openclaw restart worker',
+        task: buildOpenclawRestartTaskPublicState(failed)
+      });
+    }
+
+    const running = readOpenclawRestartTaskState();
+    return res.json({
+      success: true,
+      task: buildOpenclawRestartTaskPublicState(running)
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message || 'openclaw restart start failed' });
   }
 });
 

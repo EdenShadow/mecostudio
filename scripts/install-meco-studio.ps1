@@ -321,6 +321,83 @@ function Test-VersionLessThan {
   return ((Compare-VersionTokens -Left $Left -Right $Right) -lt 0)
 }
 
+function Get-NpmGlobalRoot {
+  try {
+    $root = (& npm root -g 2>$null | Out-String).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($root)) { return $root }
+  }
+  catch {}
+  return ''
+}
+
+function Test-OpenclawInstallHealth {
+  if (-not (Test-Cmd 'openclaw')) { return $false }
+  try {
+    & openclaw --version *> $null
+    if ($LASTEXITCODE -ne 0) { return $false }
+  }
+  catch {
+    return $false
+  }
+
+  $npmRoot = Get-NpmGlobalRoot
+  if ([string]::IsNullOrWhiteSpace($npmRoot)) { return $false }
+  $packageDir = Join-Path $npmRoot 'openclaw'
+  if (-not (Test-Path (Join-Path $packageDir 'package.json'))) { return $false }
+  $distDir = Join-Path $packageDir 'dist'
+  if (-not (Test-Path $distDir)) { return $false }
+  if (-not (Test-Path (Join-Path $distDir 'index.js'))) { return $false }
+
+  $runtimeCandidates = @(Get-ChildItem -Path $distDir -Filter 'pi-tools.before-tool-call.runtime-*.js' -File -ErrorAction SilentlyContinue)
+  if ($runtimeCandidates.Count -le 0) { return $false }
+  return $true
+}
+
+function Repair-OpenclawInstall {
+  Write-Log 'Reinstalling OpenClaw (self-heal for broken global install)...'
+  try { & npm uninstall -g openclaw *> $null } catch {}
+  try { & npm cache verify *> $null } catch {}
+  Invoke-Checked -FilePath 'npm' -Arguments @('install', '-g', 'openclaw@latest')
+}
+
+function Get-FirstJsonObjectFromText {
+  param([string]$Text)
+  if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+
+  $start = $Text.IndexOf('{')
+  if ($start -lt 0) { return $null }
+  for ($end = $Text.Length - 1; $end -ge $start; $end--) {
+    if ($Text[$end] -ne '}') { continue }
+    $candidate = $Text.Substring($start, $end - $start + 1)
+    try {
+      return ($candidate | ConvertFrom-Json -Depth 100)
+    }
+    catch {}
+  }
+  return $null
+}
+
+function Test-OpenclawGatewayProbeHealthy {
+  if (-not (Test-Cmd 'openclaw')) { return $false }
+  try {
+    $raw = (& openclaw gateway probe --json 2>&1 | Out-String)
+    $parsed = Get-FirstJsonObjectFromText -Text $raw
+    if (-not $parsed) { return $false }
+    if (-not $parsed.ok) { return $false }
+    $targets = @($parsed.targets)
+    if ($targets.Count -le 0) { return $false }
+    $active = $targets | Where-Object { $_.active -eq $true } | Select-Object -First 1
+    if (-not $active) { $active = $targets | Select-Object -First 1 }
+    if (-not $active) { return $false }
+    if (-not $active.connect) { return $false }
+    if (($active.connect.ok -eq $true) -and ($active.connect.rpcOk -eq $true)) {
+      return $true
+    }
+  }
+  catch {}
+  return $false
+}
+
 function Ensure-Openclaw {
   $requiredVersion = Resolve-RequiredOpenclawVersion
 
@@ -359,18 +436,37 @@ function Ensure-Openclaw {
     if (-not [string]::IsNullOrWhiteSpace($finalVersion)) {
       Write-Log "OpenClaw version in use: $finalVersion"
     }
-    return
+  }
+  else {
+    Write-Log 'Installing OpenClaw...'
+    Invoke-Checked -FilePath 'npm' -Arguments @('install', '-g', 'openclaw@latest')
+
+    if (-not (Test-Cmd 'openclaw')) {
+      Throw-Fail 'openclaw install failed or command not available in PATH.'
+    }
+    $finalVersion = Get-InstalledOpenclawVersion
+    if (-not [string]::IsNullOrWhiteSpace($finalVersion)) {
+      Write-Log "OpenClaw version in use: $finalVersion"
+    }
   }
 
-  Write-Log 'Installing OpenClaw...'
-  Invoke-Checked -FilePath 'npm' -Arguments @('install', '-g', 'openclaw@latest')
-
-  if (-not (Test-Cmd 'openclaw')) {
-    Throw-Fail 'openclaw install failed or command not available in PATH.'
+  try {
+    $openclawPath = (Get-Command openclaw -ErrorAction Stop).Source
+    if (-not [string]::IsNullOrWhiteSpace($openclawPath)) {
+      Write-Log "OpenClaw command path: $openclawPath"
+    }
   }
-  $finalVersion = Get-InstalledOpenclawVersion
-  if (-not [string]::IsNullOrWhiteSpace($finalVersion)) {
-    Write-Log "OpenClaw version in use: $finalVersion"
+  catch {}
+
+  if (-not (Test-OpenclawInstallHealth)) {
+    Write-Warn 'OpenClaw health check failed (possible corrupted/missing internal modules), attempting self-heal reinstall'
+    Repair-OpenclawInstall
+    if (-not (Test-Cmd 'openclaw')) {
+      Throw-Fail 'openclaw install failed after self-heal'
+    }
+    if (-not (Test-OpenclawInstallHealth)) {
+      Throw-Fail 'openclaw health check still failed after self-heal reinstall'
+    }
   }
 }
 
@@ -1024,40 +1120,35 @@ function Ensure-OpenclawGateway {
     Write-Log 'OpenClaw gateway restarted'
   }
 
-  $gatewayPort = Get-OpenclawGatewayPort
-  $probeUrl = "http://127.0.0.1:$gatewayPort/v1/chat/completions"
   $ready = $false
-  $lastStatus = ''
   for ($i = 0; $i -lt $MecoHealthcheckRetries; $i++) {
-    try {
-      $resp = Invoke-WebRequest -UseBasicParsing -Method POST -Uri $probeUrl -ContentType 'application/json' -Body '{}' -TimeoutSec 3
-      $lastStatus = [string]$resp.StatusCode
-      if ($resp.StatusCode -ne 404) {
-        $ready = $true
-        break
-      }
-    }
-    catch {
-      $status = $null
-      if ($_.Exception -and $_.Exception.Response) {
-        try { $status = [int]$_.Exception.Response.StatusCode } catch {}
-      }
-      if ($null -ne $status) {
-        $lastStatus = [string]$status
-        if ($status -ne 404) {
-          $ready = $true
-          break
-        }
-      }
+    if (Test-OpenclawGatewayProbeHealthy) {
+      $ready = $true
+      break
     }
     Start-Sleep -Seconds $MecoHealthcheckIntervalSec
   }
 
   if ($ready) {
-    Write-Log "OpenClaw gateway endpoint ready: $probeUrl (status=$lastStatus)"
+    $gatewayPort = Get-OpenclawGatewayPort
+    Write-Log "OpenClaw gateway probe ready: ws://127.0.0.1:$gatewayPort"
   }
   else {
-    Write-Warn "OpenClaw gateway endpoint /v1/chat/completions not ready (url=$probeUrl, last_status=$lastStatus)"
+    Write-Warn 'OpenClaw gateway probe failed after retries; attempting one self-heal reinstall + restart'
+    try {
+      Repair-OpenclawInstall
+      & openclaw gateway restart *> $null
+      if ($LASTEXITCODE -ne 0) {
+        & openclaw gateway start *> $null
+      }
+      if (Test-OpenclawGatewayProbeHealthy) {
+        $gatewayPort = Get-OpenclawGatewayPort
+        Write-Log "OpenClaw gateway recovered after self-heal reinstall: ws://127.0.0.1:$gatewayPort"
+        return
+      }
+    }
+    catch {}
+    Write-Warn "OpenClaw gateway still unhealthy; run 'openclaw gateway probe --json' and repair OpenClaw install manually."
   }
 }
 

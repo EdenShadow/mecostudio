@@ -8,7 +8,7 @@
     <script src="lib/js/three.min.js"></script>
     <script src="lib/js/OrbitControls.js"></script>
     <script src="js/playgen.js"></script>
-    <script src="js/remote-control-dock.js?v=0.0.14"></script>
+    <script src="js/remote-control-dock.js?v=0.0.15"></script>
     <link href="lib/css/inter.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-outlined.css" rel="stylesheet"/>
     <link href="lib/css/material-icons-round.css" rel="stylesheet"/>
@@ -2459,7 +2459,13 @@
         let mecoUpdateLastTaskId = '';
         let mecoUpdateLastFinishedTaskId = '';
         let mecoUpdateSawRunningThisSession = false;
+        let mecoOpenClawRestartPollTimer = null;
+        let mecoOpenClawRestartChecking = false;
+        let mecoOpenClawRestartLastLogs = [];
+        let mecoOpenClawRestartLastFinishedTaskId = '';
+        let mecoOpenClawRestartSawRunningThisSession = false;
         const MECO_UPDATE_NOTIFIED_TASK_ID_KEY = 'meco.update.notifiedTaskId';
+        const MECO_OPENCLAW_RESTART_NOTIFIED_TASK_ID_KEY = 'meco.openclawRestart.notifiedTaskId';
         const MECO_AGENT_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.agentOrder.v1';
         const MECO_CHANNEL_SIDEBAR_ORDER_STORAGE_KEY = 'meco.sidebar.channelOrder.v1';
         const MECO_AT_APPROVAL_ALWAYS_SIGNATURES_KEY = 'meco.at.approvalAlwaysSignatures.v1';
@@ -6004,6 +6010,15 @@
             btn.classList.toggle('cursor-not-allowed', !!disabled);
         }
 
+        function setOpenClawRestartButton({ label, disabled } = {}) {
+            const btn = document.getElementById('restart-openclaw-gateway-btn');
+            if (!btn) return;
+            btn.textContent = label || '重启 OpenClaw / 网关';
+            btn.disabled = !!disabled;
+            btn.classList.toggle('opacity-60', !!disabled);
+            btn.classList.toggle('cursor-not-allowed', !!disabled);
+        }
+
         function applyMecoUpdateStatus(payload) {
             const data = payload && typeof payload === 'object' ? payload : {};
             const task = data.task && typeof data.task === 'object' ? data.task : {};
@@ -6054,6 +6069,47 @@
             }
         }
 
+        function applyOpenClawRestartStatus(payload) {
+            const data = payload && typeof payload === 'object' ? payload : {};
+            const task = data.task && typeof data.task === 'object' ? data.task : {};
+            const logs = Array.isArray(task.logs) ? task.logs : [];
+            if (logs.length) mecoOpenClawRestartLastLogs = logs.slice(-240);
+            const running = !!task.running;
+
+            if (running) {
+                mecoOpenClawRestartSawRunningThisSession = true;
+                setOpenClawRestartButton({ label: '重启中...', disabled: true });
+                setMecoUpdateOverlay(true, {
+                    title: '重启 OpenClaw / Gateway...',
+                    desc: '正在通过 Kimi CLI 执行重启，请保持页面打开',
+                    logs: mecoOpenClawRestartLastLogs
+                });
+                return;
+            }
+
+            const finishedTaskId = String(task.taskId || '').trim();
+            const isFinished = task.status === 'succeeded' || task.status === 'failed';
+            if (finishedTaskId && isFinished) {
+                const shouldNotify = mecoOpenClawRestartSawRunningThisSession && mecoOpenClawRestartLastFinishedTaskId !== finishedTaskId;
+                if (shouldNotify) {
+                    if (task.status === 'succeeded') {
+                        showMecoUpdateToast('OpenClaw / 网关重启成功', 'success');
+                    } else {
+                        showMecoUpdateToast(`重启失败: ${task.error || 'unknown error'}`, 'error');
+                    }
+                    setMecoUpdateOverlay(false);
+                }
+                if (mecoOpenClawRestartLastFinishedTaskId !== finishedTaskId) {
+                    mecoOpenClawRestartLastFinishedTaskId = finishedTaskId;
+                    try {
+                        localStorage.setItem(MECO_OPENCLAW_RESTART_NOTIFIED_TASK_ID_KEY, finishedTaskId);
+                    } catch (_) {}
+                }
+            }
+
+            setOpenClawRestartButton({ label: '重启 OpenClaw / 网关', disabled: false });
+        }
+
         function startMecoUpdatePolling() {
             if (mecoUpdatePollTimer) return;
             mecoUpdatePollTimer = window.setInterval(async () => {
@@ -6101,6 +6157,83 @@
             }
         }
 
+        function startOpenClawRestartPolling() {
+            if (mecoOpenClawRestartPollTimer) return;
+            mecoOpenClawRestartPollTimer = window.setInterval(async () => {
+                try {
+                    const res = await fetch('/api/openclaw/restart/status?logLimit=240');
+                    const data = await readJsonResponse(res, 'openclaw restart status failed');
+                    applyOpenClawRestartStatus(data);
+                    if (!data.task || !data.task.running) {
+                        stopOpenClawRestartPolling();
+                        checkOpenClawRestartStatus();
+                    }
+                } catch (_) {
+                    if (mecoUpdateOverlayVisible && mecoOpenClawRestartSawRunningThisSession) {
+                        setMecoUpdateOverlay(true, {
+                            title: '重启 OpenClaw / Gateway...',
+                            desc: '服务重启中，等待重新连接...',
+                            logs: mecoOpenClawRestartLastLogs
+                        });
+                    }
+                }
+            }, 1500);
+        }
+
+        function stopOpenClawRestartPolling() {
+            if (!mecoOpenClawRestartPollTimer) return;
+            clearInterval(mecoOpenClawRestartPollTimer);
+            mecoOpenClawRestartPollTimer = null;
+        }
+
+        async function checkOpenClawRestartStatus() {
+            if (mecoOpenClawRestartChecking) return;
+            mecoOpenClawRestartChecking = true;
+            try {
+                const res = await fetch('/api/openclaw/restart/status?logLimit=240');
+                const data = await readJsonResponse(res, 'openclaw restart status failed');
+                applyOpenClawRestartStatus(data);
+                if (data.task && data.task.running) {
+                    startOpenClawRestartPolling();
+                }
+            } catch (e) {
+                console.warn('OpenClaw restart status check failed', e);
+            } finally {
+                mecoOpenClawRestartChecking = false;
+            }
+        }
+
+        window.startOpenClawRestartFlow = async function() {
+            try {
+                mecoOpenClawRestartSawRunningThisSession = true;
+                setOpenClawRestartButton({ label: '重启中...', disabled: true });
+                setMecoUpdateOverlay(true, {
+                    title: '重启 OpenClaw / Gateway...',
+                    desc: '正在启动重启任务（通过 Kimi CLI）...'
+                });
+
+                const res = await fetch('/api/openclaw/restart/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await readJsonResponse(res, 'start openclaw restart failed');
+                if (!data.success) {
+                    const message = data.error || 'restart failed';
+                    setMecoUpdateOverlay(false);
+                    showMecoUpdateToast(message, 'error');
+                    await checkOpenClawRestartStatus();
+                    return;
+                }
+                applyOpenClawRestartStatus(data);
+                startOpenClawRestartPolling();
+            } catch (e) {
+                setMecoUpdateOverlay(false);
+                showMecoUpdateToast(`重启失败: ${e.message}`, 'error');
+                await checkOpenClawRestartStatus();
+            }
+        };
+
         window.startMecoUpdateFlow = async function() {
             try {
                 mecoUpdateSawRunningThisSession = true;
@@ -6142,6 +6275,7 @@
             closeProfileMenu();
             const modal = document.getElementById('api-settings-modal');
             if (modal) modal.classList.remove('hidden');
+            checkOpenClawRestartStatus();
             loadApiSettings();
         }
 
@@ -12114,6 +12248,12 @@
             } catch (_) {
                 mecoUpdateLastFinishedTaskId = '';
             }
+            try {
+                const cachedFinishedTaskId = localStorage.getItem(MECO_OPENCLAW_RESTART_NOTIFIED_TASK_ID_KEY);
+                mecoOpenClawRestartLastFinishedTaskId = String(cachedFinishedTaskId || '').trim();
+            } catch (_) {
+                mecoOpenClawRestartLastFinishedTaskId = '';
+            }
             applySidebarToggleModeClass();
             initMobileKeyboardLiftSupport();
             loadAgentToolsSoundPref();
@@ -12403,6 +12543,7 @@
                     closeAgentToolsClipDemoEditor({ immediate: true });
                 }
                 checkMecoUpdateStatus();
+                checkOpenClawRestartStatus();
             });
             window.addEventListener('beforeunload', () => {
                 atPageUnloading = true;
@@ -12414,11 +12555,13 @@
             document.addEventListener('visibilitychange', () => {
                 if (!document.hidden) {
                     checkMecoUpdateStatus();
+                    checkOpenClawRestartStatus();
                 }
             });
             ensureStreamStatusTicker();
             refreshAgentToolsSoundAvailability();
             checkMecoUpdateStatus({ force: true });
+            checkOpenClawRestartStatus();
             fetchAgents();
         });
     </script>
@@ -13266,12 +13409,20 @@
                     <label class="block text-xs text-gray-300 mb-1">OpenClaw WebUI</label>
                     <p id="cfg-openclaw-webui-hint" class="text-xs text-gray-400 truncate">正在检测 OpenClaw WebUI 地址...</p>
                 </div>
-                <button id="open-openclaw-webui-btn"
-                        type="button"
-                        onclick="openOpenClawWebUi()"
-                        class="h-9 px-3 rounded-lg border border-primary/35 bg-primary/15 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors whitespace-nowrap">
-                    打开 OpenClaw WebUI
-                </button>
+                <div class="flex items-center gap-2">
+                    <button id="open-openclaw-webui-btn"
+                            type="button"
+                            onclick="openOpenClawWebUi()"
+                            class="h-9 px-3 rounded-lg border border-primary/35 bg-primary/15 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors whitespace-nowrap">
+                        打开 OpenClaw WebUI
+                    </button>
+                    <button id="restart-openclaw-gateway-btn"
+                            type="button"
+                            onclick="startOpenClawRestartFlow()"
+                            class="h-9 px-3 rounded-lg border border-amber-300/35 bg-amber-300/15 text-amber-200 text-xs font-semibold hover:bg-amber-300/20 transition-colors whitespace-nowrap">
+                        重启 OpenClaw / 网关
+                    </button>
+                </div>
             </div>
             <div>
                 <label class="block text-xs text-gray-400 mb-1">OpenClaw Model</label>
