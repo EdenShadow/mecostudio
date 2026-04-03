@@ -6163,6 +6163,30 @@
             hintEl.classList.toggle('text-gray-400', !isError);
         }
 
+        function maskOpenClawWebUiUrlForHint(rawUrl) {
+            const source = String(rawUrl || '').trim();
+            if (!source) return '';
+            try {
+                const u = new URL(source, window.location.origin);
+                const maskKey = (key) => {
+                    if (!u.searchParams.has(key)) return;
+                    const value = String(u.searchParams.get(key) || '');
+                    if (!value) {
+                        u.searchParams.set(key, '***');
+                        return;
+                    }
+                    const head = value.slice(0, 4);
+                    const tail = value.length > 8 ? value.slice(-4) : '';
+                    u.searchParams.set(key, `${head}***${tail}`);
+                };
+                maskKey('token');
+                maskKey('password');
+                return u.toString();
+            } catch (_) {
+                return source;
+            }
+        }
+
         async function refreshOpenClawWebUiInfo() {
             const btn = document.getElementById('open-openclaw-webui-btn');
             if (btn) {
@@ -6178,7 +6202,7 @@
                 }
                 openclawWebUiResolvedUrl = typeof data.webuiUrl === 'string' ? data.webuiUrl.trim() : '';
                 if (openclawWebUiResolvedUrl) {
-                    setOpenClawWebUiHint(`当前地址：${openclawWebUiResolvedUrl}`);
+                    setOpenClawWebUiHint(`当前地址：${maskOpenClawWebUiUrlForHint(openclawWebUiResolvedUrl)}`);
                     if (btn) {
                         btn.disabled = false;
                         btn.classList.remove('opacity-70', 'cursor-not-allowed');

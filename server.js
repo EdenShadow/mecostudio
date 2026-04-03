@@ -573,6 +573,51 @@ function buildOpenClawWebUiCandidates(runtime = {}) {
   return result;
 }
 
+function deriveOpenClawGatewayWsUrl(runtime = {}, webuiBaseUrl = '') {
+  const rawCandidates = [
+    runtime && runtime.openclawWsUrl ? String(runtime.openclawWsUrl) : '',
+    runtime && runtime.openclawHttpUrl ? String(runtime.openclawHttpUrl) : '',
+    webuiBaseUrl
+  ];
+
+  for (const raw of rawCandidates) {
+    const base = deriveOpenClawWebUiCandidate(raw);
+    if (!base) continue;
+    try {
+      const parsed = new URL(base);
+      const wsProtocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+      let pathname = parsed.pathname || '/';
+      pathname = pathname.replace(/\/+$/g, '');
+      const suffix = pathname && pathname !== '/' ? pathname : '';
+      return `${wsProtocol}//${parsed.host}${suffix}`;
+    } catch (_) {}
+  }
+  return '';
+}
+
+function buildOpenClawWebUiLaunchUrl(baseUrl, runtime = {}) {
+  const target = typeof baseUrl === 'string' ? baseUrl.trim() : '';
+  if (!target) return '';
+  const token = runtime && runtime.openclawGatewayToken
+    ? String(runtime.openclawGatewayToken).trim()
+    : '';
+  if (!token) return target;
+
+  try {
+    const parsed = new URL(target);
+    const gatewayUrl = deriveOpenClawGatewayWsUrl(runtime, target);
+    if (gatewayUrl && !parsed.searchParams.has('gatewayUrl')) {
+      parsed.searchParams.set('gatewayUrl', gatewayUrl);
+    }
+    if (!parsed.searchParams.has('token')) {
+      parsed.searchParams.set('token', token);
+    }
+    return parsed.toString();
+  } catch (_) {
+    return target;
+  }
+}
+
 function extractSseContentDelta(parsed) {
   const choice = parsed?.choices?.[0] || {};
   const delta = choice?.delta || {};
@@ -4118,7 +4163,7 @@ app.get('/api/settings', (req, res) => {
 app.get('/api/openclaw/webui-url', (req, res) => {
   try {
     const runtime = getRuntimeSettings();
-    const candidates = buildOpenClawWebUiCandidates(runtime);
+    const candidates = buildOpenClawWebUiCandidates(runtime).map((item) => buildOpenClawWebUiLaunchUrl(item, runtime));
     res.json({
       success: true,
       webuiUrl: candidates[0] || '',
