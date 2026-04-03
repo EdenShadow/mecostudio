@@ -2014,18 +2014,19 @@
   function isSameOriginRemoteEntryUrl(rawUrl, device) {
     const text = normalizeRemoteLaunchUrl(rawUrl);
     if (!text) return false;
-    const targetRoute = normalizeRoutePath(device && device.routePath);
-    if (!targetRoute || targetRoute === '/') return false;
     try {
       const u = new URL(text, window.location.origin);
       if (!/^https?:$/i.test(u.protocol)) return false;
       const current = new URL(window.location.href);
       if (u.origin !== current.origin) return false;
+      const targetRoute = normalizeRoutePath(device && device.routePath);
       const pathOnly = normalizeRoutePath(u.pathname || '/');
-      if (pathOnly === targetRoute) return true;
       const routeFromQuery = normalizeRoutePath(u.searchParams.get('remoteRoute') || '');
-      if (routeFromQuery && routeFromQuery === targetRoute) return true;
-      return false;
+      // If remoteRoute explicitly points to the target device, this is an intended
+      // deep-link route and should be allowed.
+      if (targetRoute && targetRoute !== '/' && routeFromQuery === targetRoute) return false;
+      // Only treat same-origin root/index without remoteRoute as self-loop risk.
+      return !routeFromQuery && (pathOnly === '/' || pathOnly === '/index.html');
     } catch (_) {
       return false;
     }
@@ -2034,8 +2035,6 @@
   function isLikelyLocalCloudflareEntryUrl(rawUrl, device) {
     const text = normalizeRemoteLaunchUrl(rawUrl);
     if (!text) return false;
-    const targetRoute = normalizeRoutePath(device && device.routePath);
-    if (!targetRoute || targetRoute === '/') return false;
     const localPublicOrigin = normalizePublicHost(
       state.remoteConfig.cloudflarePublicHost
       || state.bootstrap.cloudflarePublicHost
@@ -2045,10 +2044,13 @@
     try {
       const u = new URL(text, window.location.origin);
       if (!/^https?:$/i.test(u.protocol)) return false;
+      const targetRoute = normalizeRoutePath(device && device.routePath);
       const pathOnly = normalizeRoutePath(u.pathname || '/');
       const routeFromQuery = normalizeRoutePath(u.searchParams.get('remoteRoute') || '');
-      const isRemoteEntry = pathOnly === targetRoute || (routeFromQuery && routeFromQuery === targetRoute);
-      if (!isRemoteEntry) return false;
+      // Explicit remoteRoute means caller intentionally targets a remote device.
+      if (targetRoute && targetRoute !== '/' && routeFromQuery === targetRoute) return false;
+      const isSelfIndex = !routeFromQuery && (pathOnly === '/' || pathOnly === '/index.html');
+      if (!isSelfIndex) return false;
       const candidateOrigin = `${u.protocol}//${u.host}`.replace(/\/+$/, '');
       return candidateOrigin === localPublicOrigin;
     } catch (_) {

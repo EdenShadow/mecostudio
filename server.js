@@ -19280,9 +19280,18 @@ app.get('/web/:owner/:device', (req, res) => {
     if (isEmbeddedRemoteEntryRequest(req)) {
       return res.redirect(302, buildEmbeddedAgenttoolsPath());
     }
-    // 顶层直接访问 /web/:owner/:device 时，进入该机器自身页面，不再注入 remoteRoute，
-    // 避免前端二次触发远控窗口模式后“跳回本机”。
-    return res.redirect(302, '/index.html#agenttools');
+    const owner = remoteToSlug(req.params.owner || '', 'user');
+    const device = remoteToSlug(req.params.device || '', 'dev');
+    const targetRoute = normalizeRemoteRoutePathForMatch(`/web/${owner}/${device}`);
+    const settings = getRuntimeSettings();
+    const mode = inferRemoteEntryMode(targetRoute, settings);
+    return res.redirect(
+      302,
+      buildRemoteEntryRedirectPath(
+        targetRoute,
+        mode === 'rustdesk' ? { mode: 'rustdesk' } : {}
+      )
+    );
   } catch (e) {
     console.warn(`[RemoteControl] /web route resolve failed: ${e.message || e}`);
     return res.redirect(302, '/index.html#agenttools');
