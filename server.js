@@ -1200,7 +1200,7 @@ function buildAgentsObject(agentIds, voiceIds) {
     let name = id.charAt(0).toUpperCase() + id.slice(1);
     let displayName = name;
     let emoji = '🎭';
-    let workspace = path.join(os.homedir(), `.openclaw/workspace-${id.toLowerCase()}`);
+    let workspace = getDefaultWorkspacePath(id);
 
     // 1. 优先继承现有 AGENTS 中的配置（保留 displayName、emoji 等）
     if (AGENTS[id]) {
@@ -1384,6 +1384,19 @@ function resolvePreferredWorkspacePath(agentId, fallbackPath = '') {
     } catch (_) {}
   }
   return fallbackPath || candidates[0] || '';
+}
+
+function getDefaultWorkspacePath(agentId) {
+  const normalizedId = String(agentId || '').trim();
+  if (!normalizedId || normalizedId.toLowerCase() === 'main') {
+    return path.join(OPENCLAW_ROOT_DIR, 'workspace');
+  }
+  return path.join(OPENCLAW_ROOT_DIR, `workspace-${normalizedId}`);
+}
+
+function getPreferredWorkspacePath(agentId, fallbackPath = '') {
+  const fallback = fallbackPath || getDefaultWorkspacePath(agentId);
+  return resolvePreferredWorkspacePath(agentId, fallback);
 }
 
 function patchOpenClawConfigCompat() {
@@ -1692,7 +1705,7 @@ function scanOpenClawAgents() {
       if (!agents[agentId]) {
           const localAgent = localAgentsMap[agentId];
           // Use local workspace path or fallback
-          const wsPath = localAgent.workspace || path.join(OPENCLAW_ROOT_DIR, `workspace-${agentId}`);
+          const wsPath = localAgent.workspace || getPreferredWorkspacePath(agentId);
           
           // Add as a valid agent
           agents[agentId] = {
@@ -8383,7 +8396,7 @@ app.post('/api/agents', upload.fields([
         // - ./data/agents/{agentId}/prompt.txt
         
         const agentDataDir = path.join(DATA_AGENTS_DIR, agentId);
-        const workspacePath = path.join(OPENCLAW_ROOT_DIR, `workspace-${agentId}`);
+        const workspacePath = getPreferredWorkspacePath(agentId);
         
         // 2. Handle Files (Avatar, Video, Voice)
         const files = req.files || {};
@@ -10293,7 +10306,7 @@ function createRoom(hostAgentId = 'jobs', agentIds = null, voiceIds = null, cate
             displayName: localDisplayName,
             emoji: '🎭',
             sessionKey: `agent:${id}:main`,
-            workspace: path.join(os.homedir(), `.openclaw/workspace-${id}`),
+            workspace: getPreferredWorkspacePath(id),
             systemPrompt: null,
             voiceId: voiceId
         };
@@ -15655,7 +15668,7 @@ app.get('/api/agents/:id/history', async (req, res) => {
         if (fs.existsSync(localAgentDir)) {
              agent = {
                  id: id,
-                 workspace: path.join(OPENCLAW_ROOT_DIR, `workspace-${id}`),
+                 workspace: getPreferredWorkspacePath(id),
                  name: id
              };
         }
@@ -17603,7 +17616,7 @@ wss.on('connection', (ws, req) => {
       displayName: agentId.charAt(0).toUpperCase() + agentId.slice(1),
       emoji: '🎭',
       sessionKey: `agent:${agentId}:main`,
-      workspace: path.join(os.homedir(), `.openclaw/workspace-${agentId.charAt(0).toUpperCase() + agentId.slice(1)}`),
+      workspace: getPreferredWorkspacePath(agentId),
       systemPrompt: null,
       voiceId: DEFAULT_VOICE_IDS[0]
     };
@@ -19036,13 +19049,9 @@ app.get('/web/:owner/:device', (req, res) => {
     if (isEmbeddedRemoteEntryRequest(req)) {
       return res.redirect(302, buildEmbeddedAgenttoolsPath());
     }
-    const owner = remoteToSlug(req.params.owner || '', 'user');
-    const device = remoteToSlug(req.params.device || '', 'dev');
-    const pathOnly = normalizeRemoteRoutePathForMatch(`/web/${owner}/${device}`);
-    const settings = getRuntimeSettings();
-    const bound = findBoundRemoteDeviceByPath(pathOnly, settings);
-    const targetRoute = bound && bound.routePath ? bound.routePath : pathOnly;
-    return res.redirect(302, buildRemoteEntryRedirectPath(targetRoute));
+    // 顶层直接访问 /web/:owner/:device 时，进入该机器自身页面，不再注入 remoteRoute，
+    // 避免前端二次触发远控窗口模式后“跳回本机”。
+    return res.redirect(302, '/index.html#agenttools');
   } catch (e) {
     console.warn(`[RemoteControl] /web route resolve failed: ${e.message || e}`);
     return res.redirect(302, '/index.html#agenttools');
