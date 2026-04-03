@@ -4720,6 +4720,20 @@ function buildRemoteEntryRedirectPath(routePath, options = {}) {
   return `/index.html?${qs.toString()}#agenttools`;
 }
 
+function isEmbeddedRemoteEntryRequest(req = {}) {
+  const query = (req && req.query && typeof req.query === 'object') ? req.query : {};
+  const mecoEmbed = remoteSafeString(query.mecoEmbed || '');
+  const mecoWindow = remoteSafeString(query.meco_window || '');
+  return mecoEmbed === '1' || mecoWindow === '1';
+}
+
+function buildEmbeddedAgenttoolsPath() {
+  const qs = new URLSearchParams();
+  qs.set('mecoEmbed', '1');
+  qs.set('meco_window', '1');
+  return `/index.html?${qs.toString()}#agenttools`;
+}
+
 function inferRemoteEntryMode(routePath, settings = {}) {
   const pathOnly = normalizeRemoteRoutePathForMatch(routePath);
   if (!pathOnly || pathOnly === '/') return '';
@@ -19019,6 +19033,9 @@ app.get('/web', (req, res) => {
 
 app.get('/web/:owner/:device', (req, res) => {
   try {
+    if (isEmbeddedRemoteEntryRequest(req)) {
+      return res.redirect(302, buildEmbeddedAgenttoolsPath());
+    }
     const owner = remoteToSlug(req.params.owner || '', 'user');
     const device = remoteToSlug(req.params.device || '', 'dev');
     const pathOnly = normalizeRemoteRoutePathForMatch(`/web/${owner}/${device}`);
@@ -19038,6 +19055,9 @@ app.get('/rustdesk', (req, res) => {
 
 app.get('/rustdesk/:owner/:device', (req, res) => {
   try {
+    if (isEmbeddedRemoteEntryRequest(req)) {
+      return res.redirect(302, buildEmbeddedAgenttoolsPath());
+    }
     const owner = remoteToSlug(req.params.owner || '', 'user');
     const device = remoteToSlug(req.params.device || '', 'dev');
     const rustdeskPath = normalizeRemoteRoutePathForMatch(`/rustdesk/${owner}/${device}`);
