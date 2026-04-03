@@ -88,6 +88,32 @@ NODE
   log "Synced docs version stamp: $version"
 }
 
+sync_public_asset_version_stamp() {
+  local version
+  version="$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || true)"
+  [[ -n "$version" ]] || version="0.0.1"
+
+  node - "$version" "$REPO_ROOT/public/index.html" <<'NODE'
+const fs = require('fs');
+
+const version = String(process.argv[2] || '').trim() || '0.0.1';
+const file = process.argv[3];
+if (!file || !fs.existsSync(file)) process.exit(0);
+
+const raw = fs.readFileSync(file, 'utf8');
+const next = raw.replace(
+  /(<script\s+src="js\/remote-control-dock\.js)\?v=[^"]*("><\/script>)/,
+  `$1?v=${version}$2`
+);
+
+if (next !== raw) {
+  fs.writeFileSync(file, next, 'utf8');
+}
+NODE
+
+  log "Synced public asset version stamp: $version"
+}
+
 print_packaging_iron_law_scope() {
   log "Packaging iron-law scope (must verify on each package/release):"
   log "  1) OpenClaw: bootstrap/openclaw/workspaces/* + bootstrap/openclaw/openclaw-agents/*/agent/*"
@@ -109,6 +135,7 @@ main() {
   ensure_version_file
   set_version_if_provided
   sync_docs_version_stamp
+  sync_public_asset_version_stamp
   (cd "$REPO_ROOT" && bash scripts/build-bootstrap-package.sh)
   enforce_no_room_runtime_tracking
   sync_local_version_file

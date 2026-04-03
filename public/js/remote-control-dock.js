@@ -2691,12 +2691,8 @@
   }
 
   async function tryAutoOpenRemoteRoute() {
-    if (window.self === window.top) {
-      // 顶层直接访问公网 /web/... 时，不自动切换成底部任务栏子窗口模式。
-      clearRemoteRouteFromUrl();
-      return;
-    }
-    if (!state.allowEmbedRemoteRouteAutoOpen) return;
+    const topLevelWindow = window.self === window.top;
+    if (!topLevelWindow && !state.allowEmbedRemoteRouteAutoOpen) return;
     const routePath = normalizeRoutePath(state.pendingRemoteRoute || '');
     const mode = toSafeString(state.pendingRemoteMode || '').toLowerCase();
     if (!routePath || routePath === '/') return;
