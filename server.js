@@ -508,8 +508,51 @@ function appendExecOutputGuardInstruction(text) {
   return `${base}\n\n${OPENCLAW_EXEC_OUTPUT_GUARD}`;
 }
 
+function normalizeGatewaySessionKey(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return '';
+  return raw.replace(/\s+/g, ' ');
+}
+
+function resolveGatewaySessionKeyForSocket(agentId, ws) {
+  const safeAgentId = String(agentId || 'main').trim() || 'main';
+  const roomId = typeof ws?._roomId === 'string' ? ws._roomId.trim() : '';
+  if (roomId) {
+    return `agent:${safeAgentId}:channel:${roomId}`;
+  }
+  return `agent:${safeAgentId}:main`;
+}
+
+function buildGatewayOutboundMessages(agentId, userMessage, options = {}) {
+  if (Array.isArray(options.messages) && options.messages.length > 0) {
+    return options.messages;
+  }
+  const sessionKey = normalizeGatewaySessionKey(options.sessionKey);
+  if (sessionKey) {
+    // 与 OpenClaw 原生会话记忆对齐：有 sessionKey 时仅发送当前用户输入。
+    return [{ role: 'user', content: userMessage }];
+  }
+  return buildMessages(agentId, userMessage);
+}
+
 // 使用 Gateway HTTP SSE 流式方式发送请求到 OpenClaw
-async function sendToOpenClawHTTP(agentId, userMessage, ws) {
+async function sendToOpenClawHTTP(agentId, userMessage, ws, options = {}) {
+  const laneBypass = !!(options && options.__laneBypass);
+  const providedSessionKey = normalizeGatewaySessionKey(options.sessionKey);
+  const gatewaySessionKey = providedSessionKey || resolveGatewaySessionKeyForSocket(agentId, ws);
+  if (!laneBypass && gatewaySessionKey) {
+    return await runInOpenClawSessionLane(
+      gatewaySessionKey,
+      async () => {
+        return await sendToOpenClawHTTP(agentId, userMessage, ws, {
+          ...(options || {}),
+          sessionKey: gatewaySessionKey,
+          __laneBypass: true
+        });
+      }
+    );
+  }
+
   const requestId = `${agentId}-${Date.now()}`;
   const state = getRoundTableState(ws._roomId);
   const disableRoundtableFailureRecovery = ROUNDTABLE_DISABLE_FAILURE_RECOVERY && !!(ws && ws._roomId);
@@ -521,7 +564,6 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
     state.interruptedAgents.delete(agentId);
   }
 
-  const messages = buildMessages(agentId, userMessage);
   const controller = new AbortController();
   registerOpenClawRequest(requestId, controller, {
     agentId,
@@ -546,21 +588,35 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
     const runtime = getRuntimeSettings();
     const gatewayUrl = runtime.openclawHttpUrl || 'http://127.0.0.1:18789/v1/chat/completions';
     const gatewayToken = runtime.openclawGatewayToken || '';
-    const model = runtime.openclawModel || 'kimi-coding/k2p5';
+    const model = options.model || runtime.openclawModel || 'kimi-coding/k2p5';
+    const gatewayAgentId = typeof options.gatewayAgentId === 'string' && options.gatewayAgentId.trim()
+      ? options.gatewayAgentId.trim()
+      : String(agentId || 'main').trim() || 'main';
     const headers = {
       'Content-Type': 'application/json'
     };
     if (gatewayToken) {
       headers.Authorization = `Bearer ${gatewayToken}`;
     }
+    if (gatewayAgentId) {
+      headers['x-openclaw-agent-id'] = gatewayAgentId;
+    }
+    if (gatewaySessionKey) {
+      headers['x-openclaw-session-key'] = gatewaySessionKey;
+    }
+    const outboundMessages = buildGatewayOutboundMessages(agentId, userMessage, {
+      ...(options || {}),
+      sessionKey: gatewaySessionKey
+    });
 
     const response = await fetch(gatewayUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify({
         model,
-        messages: messages,
-        stream: true
+        messages: outboundMessages,
+        stream: true,
+        ...(gatewaySessionKey ? { user: gatewaySessionKey } : {})
       }),
       signal: controller.signal
     });
@@ -671,7 +727,7 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
       if (retryCount < 2) {
         ws._retryCount = retryCount + 1;
         console.warn(`[${agentId}] ⚠️ LLM 返回空内容，第 ${ws._retryCount} 次重试...`);
-        return sendToOpenClawHTTP(agentId, userMessage, ws);
+        return sendToOpenClawHTTP(agentId, userMessage, ws, options);
       }
       console.error(`[${agentId}] ❌ LLM 连续返回空内容，转为 error`);
       ws._retryCount = 0;
@@ -737,7 +793,7 @@ async function sendToOpenClawHTTP(agentId, userMessage, ws) {
     if (retryCount < 2) {
       ws._retryCount = retryCount + 1;
       console.warn(`[${agentId}] ⚠️ HTTP 请求失败，第 ${ws._retryCount} 次重试: ${errMsg}`);
-      return sendToOpenClawHTTP(agentId, userMessage, ws);
+      return sendToOpenClawHTTP(agentId, userMessage, ws, options);
     }
     ws._retryCount = 0;
     ws.send(JSON.stringify({ type: 'error', message: errMsg }));
@@ -753,8 +809,8 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
   const onExecution = typeof handlers.onExecution === 'function' ? handlers.onExecution : () => {};
 
   const laneBypass = !!(options && options.__laneBypass);
-  const laneSessionKey = !laneBypass && typeof options.sessionKey === 'string'
-    ? options.sessionKey.trim()
+  const laneSessionKey = !laneBypass
+    ? normalizeGatewaySessionKey(options.sessionKey)
     : '';
   if (laneSessionKey) {
     return await runInOpenClawSessionLane(
@@ -808,13 +864,18 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
     if (typeof options.gatewayAgentId === 'string' && options.gatewayAgentId.trim()) {
       headers['x-openclaw-agent-id'] = options.gatewayAgentId.trim();
     }
-    if (typeof options.sessionKey === 'string' && options.sessionKey.trim()) {
-      headers['x-openclaw-session-key'] = options.sessionKey.trim();
+    const normalizedSessionKey = normalizeGatewaySessionKey(options.sessionKey);
+    if (normalizedSessionKey) {
+      headers['x-openclaw-session-key'] = normalizedSessionKey;
     }
 
-    const outboundMessages = Array.isArray(options.messages) && options.messages.length > 0
-      ? options.messages
-      : buildMessages(agentId, userMessage);
+    const outboundMessages = buildGatewayOutboundMessages(agentId, userMessage, {
+      ...(options || {}),
+      sessionKey: normalizedSessionKey
+    });
+    const stableUser = typeof options.user === 'string' && options.user.trim()
+      ? options.user.trim()
+      : normalizedSessionKey;
 
     const response = await fetch(gatewayUrl, {
       method: 'POST',
@@ -823,6 +884,7 @@ async function streamOpenClawHTTP(agentId, userMessage, handlers = {}, options =
         model: options.model || defaultModel,
         messages: outboundMessages,
         stream: true,
+        ...(stableUser ? { user: stableUser } : {}),
         ...(options.reasoningEnabled ? { reasoning: { enabled: true } } : {})
       }),
       signal: controller.signal
@@ -1567,7 +1629,7 @@ if (!fs.existsSync(MEMORY_DIR)) {
 
 const memory = {};
 const MAX_MEMORY = 20;  // 本地持久化保留最近20条
-const CONTEXT_MEMORY_TURNS = 5; // 每次请求仅携带最近5轮历史（user+assistant）
+const CONTEXT_MEMORY_TURNS = 5; // 仅在“无 sessionKey 的兼容路径”下使用
 const AGENTTOOLS_HISTORY_DIR = path.join(MEMORY_DIR, 'agenttools-history');
 const AGENTTOOLS_HISTORY_PAGE_SIZE = 20;
 const AGENTTOOLS_HISTORY_MAX_PAGES = 20;
@@ -12335,7 +12397,7 @@ function handleUserInput(input, targetAgent, channelId = null) {
   return result;
 }
 
-// 构建 messages（仅携带最近 CONTEXT_MEMORY_TURNS 轮历史，控制上下文体积）
+// 构建 messages（兼容兜底：仅在无 sessionKey 的请求路径下使用）
 function buildMessages(agentId, userMessage) {
   const agent = getRuntimeAgentById(agentId);
   const messages = [];
@@ -17452,7 +17514,6 @@ wss.on('connection', (ws, req) => {
       // 正常的聊天消息
       if (data.type === 'chat' && data.message) {
         const userMessage = data.message;
-        const messages = buildMessages(agentId, userMessage);
 
         // 调试：打印 systemPrompt 前缀确认身份
         const agent = getRuntimeAgentById(agentId);
