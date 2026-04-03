@@ -1,6 +1,6 @@
 # Meco Studio 安装 / 升级 / API Key 一体文档（AI 可读）
 
-> 文档版本：`0.0.13`
+> 文档版本：`0.0.14`
 
 ## 一行安装（Install）
 
@@ -163,7 +163,7 @@ MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
 MECO_RUN_PERMISSION_PREFLIGHT=1 \
 MECO_UPGRADE_OPENCLAW=0 \
-MECO_MIN_OPENCLAW_VERSION="2026.3.31" \
+MECO_MIN_OPENCLAW_VERSION="2026.4.2" \
 MECO_OPENCLAW_MODEL="kimi-coding/k2p5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
 MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
@@ -208,7 +208,7 @@ Windows PowerShell（等价变量）：
 ```powershell
 $env:MECO_INSTALL_DIR = "$env:USERPROFILE\\meco-studio"
 $env:MECO_OPENCLAW_MODEL = "kimi-coding/k2p5"
-$env:MECO_MIN_OPENCLAW_VERSION = "2026.3.31" # optional
+$env:MECO_MIN_OPENCLAW_VERSION = "2026.4.2" # optional
 $env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
 $env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
 $env:MECO_DOUBAO_O2O_APP_ID = "<your-doubao-o2o-appid>"

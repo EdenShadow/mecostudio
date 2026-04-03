@@ -265,7 +265,7 @@ function Resolve-RequiredOpenclawVersion {
     catch {}
   }
 
-  return '2026.3.31'
+  return '2026.4.2'
 }
 
 function Get-InstalledOpenclawVersion {

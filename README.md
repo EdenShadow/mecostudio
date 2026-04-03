@@ -1,6 +1,6 @@
 # Meco Studio 🚀
 
-> 文档版本：`0.0.13`
+> 文档版本：`0.0.14`
 
 ## ⚡ 一行安装 / 升级
 
@@ -171,7 +171,7 @@ MECO_START_AFTER_INSTALL=1 \
 MECO_RESET_RUNTIME_STATE=1 \
 MECO_RUN_PERMISSION_PREFLIGHT=1 \
 MECO_UPGRADE_OPENCLAW=0 \
-MECO_MIN_OPENCLAW_VERSION="2026.3.31" \
+MECO_MIN_OPENCLAW_VERSION="2026.4.2" \
 MECO_OPENCLAW_MODEL="kimi-coding/k2p5" \
 MECO_OPENCLAW_MODEL_API_KEY="sk-xxxxx" \
 MECO_KIMI_CODING_API_KEY="sk-xxxxx" \
@@ -211,7 +211,7 @@ Windows PowerShell（等价变量）：
 ```powershell
 $env:MECO_INSTALL_DIR = "$env:USERPROFILE\\meco-studio"
 $env:MECO_OPENCLAW_MODEL = "kimi-coding/k2p5"
-$env:MECO_MIN_OPENCLAW_VERSION = "2026.3.31" # optional
+$env:MECO_MIN_OPENCLAW_VERSION = "2026.4.2" # optional
 $env:MECO_KIMI_CODING_API_KEY = "<your-kimi-coding-key>"
 $env:MECO_MINIMAX_API_KEY = "<your-minimax-key>"
 $env:MECO_DOUBAO_O2O_APP_ID = "<your-doubao-o2o-appid>"
@@ -268,7 +268,7 @@ curl -fsSL https://raw.githubusercontent.com/EdenShadow/mecostudio/main/scripts/
 说明：
 
 - `MECO_OPENCLAW_MODEL`：安装时写入 OpenClaw 默认模型（推荐 `kimi-coding/k2p5`）
-- `MECO_MIN_OPENCLAW_VERSION`：可选，设置 OpenClaw 最低要求版本；仅当当前版本低于该值时才自动升级（默认读取仓库 `OPENCLAW_MIN_VERSION`，无该文件时回退 `2026.3.31`）
+- `MECO_MIN_OPENCLAW_VERSION`：可选，设置 OpenClaw 最低要求版本；仅当当前版本低于该值时才自动升级（默认读取仓库 `OPENCLAW_MIN_VERSION`，无该文件时回退 `2026.4.2`）
 - `MECO_OPENCLAW_MODEL_API_KEY`：兼容保留，未设置时自动回退到 `MECO_KIMI_CODING_API_KEY`
 - `MECO_KIMI_CODING_API_KEY`：用于 Kimi CLI 激活，并通过 `kimi-code-api-key` 自动配置 OpenClaw 认证
 - `MECO_MINIMAX_API_KEY` / `MECO_TIKHUB_API_KEY` / `MECO_MEOWLOAD_API_KEY`：开箱即用所需关键能力

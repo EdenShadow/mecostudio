@@ -254,7 +254,7 @@ NODE
 }
 
 resolve_required_openclaw_version() {
-  local fallback_version="2026.3.31"
+  local fallback_version="2026.4.2"
   local explicit lower normalized from_file version_file
 
   explicit="$(printf '%s' "${MECO_MIN_OPENCLAW_VERSION:-}" | tr -d '\r')"
